@@ -2,8 +2,9 @@
 """Create an iOS Distribution certificate and App Store profiles.
 
 Uses the App Store Connect REST API (ES256 JWT, audience appstoreconnect-v1).
-Does not print private keys, API tokens, or certificate passwords, and does not
-revoke certificates.
+Does not print private keys, API tokens, or certificate passwords. The only
+certificate it ever revokes is the one it created itself in the same run (the
+id recorded in the run's signing manifest), and only in the cleanup step.
 """
 
 import base64
@@ -405,6 +406,8 @@ def prepare(argv):
     certificate_id, certificate_der = create_certificate(token, csr_text)
     certificate_out.write_bytes(certificate_der)
     os.chmod(certificate_out, 0o600)
+    # Record the id at once so cleanup can revoke it even if a later step fails.
+    write_manifest(manifest_path, certificate_id, certificate_out, [])
     print("Created a new iOS Distribution certificate. Existing certificates were not revoked.", flush=True)
     installed = []
     try:
@@ -438,11 +441,13 @@ def prepare(argv):
 
 
 def delete_profiles():
+    """Delete the profiles listed in the run manifest. Returns True if all went well."""
     manifest_path = Path(os.environ["SIGNING_MANIFEST"])
     if not manifest_path.is_file():
-        return
+        return True
     manifest = json.loads(manifest_path.read_text())
     token = jwt_from_env()
+    ok = True
     for profile in manifest.get("profiles", []):
         profile_id = profile.get("id")
         if profile_id:
@@ -450,12 +455,61 @@ def delete_profiles():
             if status not in (204, 404):
                 text = body.strip() or f"HTTP {status}"
                 sys.stderr.write(text + "\n")
-                sys.stderr.write(
-                    "Could not delete an App Store profile. Nothing was revoked.\n"
-                )
+                sys.stderr.write("Could not delete an App Store profile created by this run.\n")
+                ok = False
         path = profile.get("path")
         if path:
             Path(path).unlink(missing_ok=True)
+    return ok
+
+
+def revoke_own_certificate(token, certificate_id, certificate_path):
+    """Revoke (DELETE) the certificate this run created. Never touches any other id.
+
+    When the local certificate file is still there, the certificate the API
+    returns for that id must be byte-identical to it. Otherwise nothing is
+    revoked.
+    """
+    if not certificate_id:
+        return True
+    quoted = urllib.parse.quote(certificate_id)
+    if certificate_path and Path(certificate_path).is_file():
+        status, body = api(token, "GET", "/v1/certificates/" + quoted)
+        if status == 404:
+            return True
+        try:
+            content = json.loads(body)["data"]["attributes"]["certificateContent"]
+            same = base64.b64decode(content) == Path(certificate_path).read_bytes()
+        except Exception:
+            same = False
+        if status != 200 or not same:
+            sys.stderr.write(
+                "The certificate with the recorded id does not match the one this run created. "
+                "Not revoking it.\n"
+            )
+            return False
+    status, body = api(token, "DELETE", "/v1/certificates/" + quoted)
+    if status in (204, 404):
+        print("Revoked the distribution certificate created by this run.", flush=True)
+        return True
+    sys.stderr.write((body.strip() or f"HTTP {status}") + "\n")
+    sys.stderr.write("Could not revoke the distribution certificate created by this run.\n")
+    return False
+
+
+def cleanup():
+    """Always-run cleanup: delete this run's profiles, then revoke this run's certificate."""
+    manifest_path = Path(os.environ["SIGNING_MANIFEST"])
+    if not manifest_path.is_file():
+        return
+    manifest = json.loads(manifest_path.read_text())
+    profiles_ok = delete_profiles()
+    token = jwt_from_env()
+    certificate_ok = revoke_own_certificate(
+        token, manifest.get("certificateId"), manifest.get("certificatePath")
+    )
+    if not (profiles_ok and certificate_ok):
+        raise SystemExit(1)
 
 
 def self_test():
@@ -464,6 +518,7 @@ def self_test():
     pbxproj_roundtrip()
     export_roundtrip()
     forbidden_roundtrip()
+    cleanup_roundtrip()
     print("asc signing ok")
 
 
@@ -623,9 +678,70 @@ def forbidden_roundtrip():
         raise SystemExit("certificate limit was not reported clearly")
 
 
+def cleanup_roundtrip():
+    """Cleanup deletes the profiles and then only the recorded certificate id."""
+    calls = []
+    real_api, real_jwt = globals()["api"], globals()["jwt_from_env"]
+    with tempfile.TemporaryDirectory() as tmp:
+        cert = Path(tmp) / "c.cer"
+        cert.write_bytes(b"der-bytes")
+        profile_file = Path(tmp) / "p.mobileprovision"
+        profile_file.write_bytes(b"x")
+        manifest = Path(tmp) / "m.json"
+        write_manifest(
+            manifest,
+            "CERT1",
+            cert,
+            [{"id": "PROF1", "name": "n", "bundleId": "b", "path": str(profile_file)}],
+        )
+
+        def fake_api(token, method, path, payload=None):
+            calls.append((method, path))
+            if method == "GET":
+                return 200, json.dumps(
+                    {"data": {"attributes": {"certificateContent": base64.b64encode(b"der-bytes").decode()}}}
+                )
+            return 204, ""
+
+        globals()["api"] = fake_api
+        globals()["jwt_from_env"] = lambda: "token"
+        os.environ["SIGNING_MANIFEST"] = str(manifest)
+        try:
+            cleanup()
+            if calls != [
+                ("DELETE", "/v1/profiles/PROF1"),
+                ("GET", "/v1/certificates/CERT1"),
+                ("DELETE", "/v1/certificates/CERT1"),
+            ]:
+                raise SystemExit("cleanup made unexpected API calls: " + repr(calls))
+            if profile_file.exists():
+                raise SystemExit("cleanup left the profile file behind")
+            # A certificate that does not match the local file is never revoked.
+            calls.clear()
+            cert.write_bytes(b"other")
+            held = sys.stderr
+            sys.stderr = io.StringIO()
+            try:
+                cleanup()
+            except SystemExit:
+                pass
+            else:
+                raise SystemExit("cleanup accepted a mismatched certificate")
+            finally:
+                sys.stderr = held
+            if ("DELETE", "/v1/certificates/CERT1") in calls:
+                raise SystemExit("cleanup revoked a certificate it could not verify")
+        finally:
+            globals()["api"], globals()["jwt_from_env"] = real_api, real_jwt
+            os.environ.pop("SIGNING_MANIFEST", None)
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         self_test()
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "cleanup":
+        cleanup()
         return
     if len(sys.argv) > 1 and sys.argv[1] == "delete-profiles":
         delete_profiles()
@@ -655,7 +771,7 @@ def main():
             raise SystemExit("Missing signing arguments.")
         prepare(values)
         return
-    raise SystemExit("Usage: asc_signing.py --self-test | prepare | delete-profiles")
+    raise SystemExit("Usage: asc_signing.py --self-test | prepare | cleanup | delete-profiles")
 
 
 if __name__ == "__main__":

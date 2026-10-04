@@ -34,7 +34,7 @@ Public branch `cursor/watch-remote-55d3`. Nothing here was merged. TestFlight wa
 
 - Git history before the scrub commit still contains the old host placeholder, username, and team id. Rewriting that history needs a force-push. The current tree does not contain them. Left for you to decide.
 - Build 26 from `a77039c` is the TestFlight build that uploaded. The workflow run was cancelled afterwards because screenshots and the archive shared a 40-minute job. Upload now has its own job. Manual runs take a short screenshot set. The limit is 60 minutes. Pull requests still take the full screenshot set and do not upload.
-- The next manual run creates another Apple Distribution certificate and does not revoke the ones already there. Apple allows a small number of active distribution certificates.
+- Each upload run creates its own Apple Distribution certificate and revokes that certificate when the run ends, so certificates do not pile up. Certificates it did not create are never touched.
 - A Smart Stack complication is still not in the app. It would be a third bundle id and would need its own App Store profile. The archive only provisions the iPhone app and the watch app. Adding the widget before that App ID exists would fail the next upload.
 - The upload that failed was rejected because the watch app was in `PlugIns/`. This branch embeds it under `Watch/`. That layout is checked in CI on the simulator app. The archive check runs only when you start the TestFlight workflow.
 - CI screenshots are the design check available from this environment. There is no local iOS Simulator here.

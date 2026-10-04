@@ -1,12 +1,30 @@
 #!/usr/bin/env bash
 # Archive with manual distribution signing and upload to TestFlight.
 # The App Store Connect API key creates a new iOS Distribution certificate
-# and App Store profiles. Existing certificates are never revoked.
+# and App Store profiles. Existing certificates are never touched. On exit, success
+# or failure, it deletes the profiles it created and revokes only the distribution
+# certificate it created in this run, so certificates never pile up.
 # Does not print secret values. Deletes the API key, keychain, and profiles on exit.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# TestFlight already holds builds up to 26 from the previous repository, so the
+# build number is the run number plus this offset. A re-run of the same run
+# appends .attempt so App Store Connect does not reject a repeated upload.
+BUILD_NUMBER_OFFSET=100
+compute_build_number() {
+  local run_number="$1" attempt="${2:-1}" number
+  if [[ ! "${run_number}" =~ ^[0-9]+$ ]]; then
+    run_number=1
+  fi
+  number=$((run_number + BUILD_NUMBER_OFFSET))
+  if [[ "${attempt}" != "1" ]]; then
+    number="${number}.${attempt}"
+  fi
+  printf '%s' "${number}"
+}
 
 # Writes AuthKey_<id>.p8 from ASC_KEY_P8. Accepts base64 (whitespace ignored)
 # or PEM text that begins with -----BEGIN PRIVATE KEY-----. Error text never
@@ -91,6 +109,11 @@ PY
   rm -rf "${tmp}"
   trap - EXIT
   check_encryption
+  [[ "$(compute_build_number 1 1)" == "101" ]] || { echo "self-test failed: build number for run 1" >&2; exit 1; }
+  [[ "$(compute_build_number 27 1)" == "127" ]] || { echo "self-test failed: build number for run 27" >&2; exit 1; }
+  [[ "$(compute_build_number 5 3)" == "105.3" ]] || { echo "self-test failed: build number for a re-run" >&2; exit 1; }
+  [[ "$(compute_build_number "" 1)" == "101" ]] || { echo "self-test failed: build number without a run" >&2; exit 1; }
+  echo "build number ok: run 1 -> 101, run 5 attempt 3 -> 105.3"
   python3 "${SCRIPT_DIR}/asc_signing.py" --self-test
   python3 "${SCRIPT_DIR}/patch-watch-embed.py" --self-test
   exit 0
@@ -113,12 +136,7 @@ if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
   exit 1
 fi
 TEAM="${DEVELOPMENT_TEAM}"
-# Each workflow run gets a new number. A re-run of the same run uses attempt
-# so App Store Connect does not reject a repeated upload.
-BUILD_NUMBER="${GITHUB_RUN_NUMBER:-1}"
-if [[ "${GITHUB_RUN_ATTEMPT:-1}" != "1" ]]; then
-  BUILD_NUMBER="${BUILD_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-fi
+BUILD_NUMBER="$(compute_build_number "${GITHUB_RUN_NUMBER:-1}" "${GITHUB_RUN_ATTEMPT:-1}")"
 echo "Archive build number ${BUILD_NUMBER} for com.lojo.WatchRemote and com.lojo.WatchRemote.watchkitapp."
 WORKDIR="$(mktemp -d)"
 KEYCHAIN="${WORKDIR}/signing.keychain-db"
@@ -133,7 +151,9 @@ cleanup() {
     security list-keychains -d user -s login.keychain-db >/dev/null 2>&1 || true
   fi
   if [[ -f "${MANIFEST}" && -f "${KEY_PATH}" ]]; then
-    SIGNING_MANIFEST="${MANIFEST}" python3 "${SCRIPT_DIR}/asc_signing.py" delete-profiles || true
+    # Deletes this run's profiles, then revokes only the certificate this run created.
+    SIGNING_MANIFEST="${MANIFEST}" python3 "${SCRIPT_DIR}/asc_signing.py" cleanup || \
+      echo "Warning: could not fully clean up App Store Connect signing assets for this run." >&2
   fi
   rm -rf "${WORKDIR}"
   exit "${status}"

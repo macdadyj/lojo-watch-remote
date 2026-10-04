@@ -111,6 +111,11 @@ jobs:
   # Upload does not wait for screenshots. A slow screenshot pass must not cancel a finished upload.
   testflight:
     if: github.event_name != 'pull_request'
+    # No `needs:` on purpose, so a manual or main run never waits for screenshots.
+    # Runs queue one at a time: each one creates and revokes its own distribution certificate.
+    concurrency:
+      group: testflight-${{ github.repository }}
+      cancel-in-progress: false
     runs-on: macos-26
     timeout-minutes: 60
     steps:
