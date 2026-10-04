@@ -1,0 +1,23 @@
+#!/bin/bash
+# Starts `grok agent serve` on the computer's loopback for Watch Remote.
+# The secret is read from a mode-0600 file into the environment. It is not an argument.
+set -euo pipefail
+
+secret_file="${GROK_AGENT_SECRET_FILE:-${HOME}/.config/watch-remote/agent-secret}"
+if [[ ! -f "${secret_file}" ]]; then
+  echo "Missing ${secret_file}. See docs/HOST-SETUP.md." >&2
+  exit 1
+fi
+GROK_AGENT_SECRET="$(tr -d '[:space:]' < "${secret_file}")"
+export GROK_AGENT_SECRET
+if [[ -z "${GROK_AGENT_SECRET}" ]]; then
+  echo "Agent secret file is empty." >&2
+  exit 1
+fi
+
+bin="${GROK_BIN:-${HOME}/.grok/bin/grok}"
+if [[ ! -x "${bin}" ]]; then
+  bin="grok"
+fi
+
+exec "${bin}" agent serve --bind 127.0.0.1:2419

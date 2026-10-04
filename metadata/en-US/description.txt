@@ -1,0 +1,14 @@
+Watch Remote for Grok lets you follow a Grok task on Apple Watch and answer when it needs a decision.
+
+The Watch talks only to the iPhone. The iPhone holds the connection to a computer you control, over the private overlay. Your Grok login stays on that computer. The app does not send tasks to a public server.
+
+What you can do
+• See running, idle, and failed tasks
+• Allow or refuse an action, with a tap and a haptic
+• Stop a task
+• Dictate a new task from the Watch
+• Pair the iPhone with a key that stays in the Keychain
+
+Demo mode shows sample tasks on the iPhone and sends nothing. SSH is the path that reaches your computer. If the agent server is not running, the phone can still start a task, and it will tell you that approvals are unavailable.
+
+The Watch cannot reach the computer on its own. Open the iPhone app to connect.

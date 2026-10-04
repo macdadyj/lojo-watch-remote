@@ -1,0 +1,352 @@
+import Foundation
+
+public enum ConnectionMode: String, Codable, Equatable, Sendable, CaseIterable {
+    case ssh
+    case relay
+    case demo
+
+    public var title: String {
+        switch self {
+        case .ssh: return "SSH"
+        case .relay: return "Relay"
+        case .demo: return "Demo"
+        }
+    }
+}
+
+public enum LinkState: String, Codable, Equatable, Sendable {
+    case demo
+    case connected
+    case connecting
+    case offline
+    case needsPairing
+    case phoneAway
+
+    public var title: String {
+        switch self {
+        case .demo: return "Demo"
+        case .connected: return "Connected"
+        case .connecting: return "Connecting"
+        case .offline: return "Not connected"
+        case .needsPairing: return "Needs pairing"
+        case .phoneAway: return "iPhone app closed"
+        }
+    }
+}
+
+public enum SessionStatus: String, Codable, Equatable, Sendable {
+    case running
+    case needsApproval
+    case idle
+    case stopped
+    case failed
+    case unknown
+
+    public var title: String {
+        switch self {
+        case .running: return "Running"
+        case .needsApproval: return "Needs approval"
+        case .idle: return "Idle"
+        case .stopped: return "Stopped"
+        case .failed: return "Failed"
+        case .unknown: return "Unknown"
+        }
+    }
+}
+
+public struct PermissionRequest: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var sessionID: String
+    /// JSON-RPC id, kept as text so a numeric id is not confused with a string id.
+    public var rpcID: String
+    public var rpcIDIsNumber: Bool
+    public var title: String
+    public var detail: String
+    public var allowOptionID: String?
+    public var denyOptionID: String?
+
+    public init(
+        id: String,
+        sessionID: String,
+        rpcID: String,
+        rpcIDIsNumber: Bool,
+        title: String,
+        detail: String,
+        allowOptionID: String?,
+        denyOptionID: String?
+    ) {
+        self.id = id
+        self.sessionID = sessionID
+        self.rpcID = rpcID
+        self.rpcIDIsNumber = rpcIDIsNumber
+        self.title = title
+        self.detail = detail
+        self.allowOptionID = allowOptionID
+        self.denyOptionID = denyOptionID
+    }
+}
+
+public struct GrokSession: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var title: String
+    public var summary: String
+    public var status: SessionStatus
+    public var updatedAt: Date?
+    public var cwd: String?
+    public var permission: PermissionRequest?
+
+    public init(
+        id: String,
+        title: String,
+        summary: String,
+        status: SessionStatus,
+        updatedAt: Date? = nil,
+        cwd: String? = nil,
+        permission: PermissionRequest? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.summary = summary
+        self.status = status
+        self.updatedAt = updatedAt
+        self.cwd = cwd
+        self.permission = permission
+    }
+}
+
+public struct PhoneSnapshot: Codable, Equatable, Sendable {
+    public var mode: ConnectionMode
+    public var link: LinkState
+    public var sessions: [GrokSession]
+    public var banner: String?
+    public var approvalsAvailable: Bool
+    public var hostLabel: String
+
+    public init(
+        mode: ConnectionMode,
+        link: LinkState,
+        sessions: [GrokSession],
+        banner: String?,
+        approvalsAvailable: Bool,
+        hostLabel: String
+    ) {
+        self.mode = mode
+        self.link = link
+        self.sessions = sessions
+        self.banner = banner
+        self.approvalsAvailable = approvalsAvailable
+        self.hostLabel = hostLabel
+    }
+
+    /// WatchConnectivity application context is small. Keep the payload short.
+    public func trimmed(limit: Int = 12, summaryLimit: Int = 160) -> PhoneSnapshot {
+        var copy = self
+        copy.sessions = Array(sessions.prefix(limit)).map { session in
+            var item = session
+            item.summary = Self.clip(session.summary, limit: summaryLimit)
+            if var permission = item.permission {
+                permission.detail = Self.clip(permission.detail, limit: summaryLimit)
+                item.permission = permission
+            }
+            return item
+        }
+        if let banner {
+            copy.banner = Self.clip(banner, limit: 180)
+        }
+        return copy
+    }
+
+    public static func clip(_ text: String, limit: Int) -> String {
+        let collapsed = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard collapsed.count > limit else { return collapsed }
+        return String(collapsed.prefix(limit - 1)) + "…"
+    }
+}
+
+public struct PhoneCommand: Codable, Equatable, Sendable {
+    public enum Kind: String, Codable, Sendable {
+        case refresh
+        case start
+        case approve
+        case deny
+        case stop
+    }
+
+    public var kind: Kind
+    public var prompt: String?
+    public var sessionID: String?
+    public var permissionID: String?
+    public var cwd: String?
+
+    public init(
+        kind: Kind,
+        prompt: String? = nil,
+        sessionID: String? = nil,
+        permissionID: String? = nil,
+        cwd: String? = nil
+    ) {
+        self.kind = kind
+        self.prompt = prompt
+        self.sessionID = sessionID
+        self.permissionID = permissionID
+        self.cwd = cwd
+    }
+}
+
+public enum LinkCodec {
+    public static func encodeSnapshot(_ snapshot: PhoneSnapshot) -> String? {
+        let data = try? JSONEncoder().encode(snapshot.trimmed())
+        return data.flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    public static func decodeSnapshot(_ text: String) -> PhoneSnapshot? {
+        guard let data = text.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(PhoneSnapshot.self, from: data)
+    }
+
+    public static func encodeCommand(_ command: PhoneCommand) -> String? {
+        let data = try? JSONEncoder().encode(command)
+        return data.flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    public static func decodeCommand(_ text: String) -> PhoneCommand? {
+        guard let data = text.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(PhoneCommand.self, from: data)
+    }
+}
+
+public enum DemoCatalog {
+    public static let runningID = "0199aaaa-0000-7000-8000-000000000001"
+    public static let approvalID = "0199aaaa-0000-7000-8000-000000000002"
+    public static let idleID = "0199aaaa-0000-7000-8000-000000000003"
+
+    public static func sessions() -> [GrokSession] {
+        [
+            GrokSession(
+                id: runningID,
+                title: "Read the build logs",
+                summary: "Looking through the latest test output.",
+                status: .running
+            ),
+            GrokSession(
+                id: approvalID,
+                title: "Update the parser",
+                summary: "Wants to edit SessionsListParser before continuing.",
+                status: .needsApproval,
+                permission: PermissionRequest(
+                    id: "perm-demo",
+                    sessionID: approvalID,
+                    rpcID: "7",
+                    rpcIDIsNumber: true,
+                    title: "Edit SessionsListParser.swift",
+                    detail: "Apply the streaming-json row parser.",
+                    allowOptionID: "allow-once",
+                    denyOptionID: "reject-once"
+                )
+            ),
+            GrokSession(
+                id: idleID,
+                title: "Note the overlay route",
+                summary: "The computer is reachable only on the private overlay.",
+                status: .idle
+            ),
+        ]
+    }
+
+    public static func snapshot() -> PhoneSnapshot {
+        PhoneSnapshot(
+            mode: .demo,
+            link: .demo,
+            sessions: sessions(),
+            banner: nil,
+            approvalsAvailable: true,
+            hostLabel: "example-host"
+        )
+    }
+
+    /// Screenshot fixtures. Names that are not fixtures return nil.
+    public static func preview(named screen: String) -> PhoneSnapshot? {
+        switch screen {
+        case "empty":
+            return PhoneSnapshot(
+                mode: .demo,
+                link: .demo,
+                sessions: [],
+                banner: nil,
+                approvalsAvailable: true,
+                hostLabel: "example-host"
+            )
+        case "loading":
+            return PhoneSnapshot(
+                mode: .ssh,
+                link: .connecting,
+                sessions: [],
+                banner: nil,
+                approvalsAvailable: false,
+                hostLabel: "example-host"
+            )
+        case "offline":
+            return PhoneSnapshot(
+                mode: .ssh,
+                link: .offline,
+                sessions: [],
+                banner: "The computer is not connected.",
+                approvalsAvailable: false,
+                hostLabel: "example-host"
+            )
+        case "error":
+            return PhoneSnapshot(
+                mode: .ssh,
+                link: .offline,
+                sessions: [
+                    GrokSession(
+                        id: "0199aaaa-0000-7000-8000-000000000004",
+                        title: "Read the build logs",
+                        summary: "The agent server did not answer.",
+                        status: .failed
+                    ),
+                ],
+                banner: "The agent server did not answer.",
+                approvalsAvailable: false,
+                hostLabel: "example-host"
+            )
+        case "pairing":
+            return PhoneSnapshot(
+                mode: .ssh,
+                link: .needsPairing,
+                sessions: [],
+                banner: "Generate a key on the iPhone, then authorize it on the computer.",
+                approvalsAvailable: false,
+                hostLabel: "example-host"
+            )
+        case "long":
+            return PhoneSnapshot(
+                mode: .demo,
+                link: .demo,
+                sessions: [
+                    GrokSession(
+                        id: approvalID,
+                        title: "Rewrite the session list parser so long titles stay readable",
+                        summary: "The streaming-json row parser should keep the full permission detail visible when the type size is large and the title wraps.",
+                        status: .needsApproval,
+                        permission: PermissionRequest(
+                            id: "perm-long",
+                            sessionID: approvalID,
+                            rpcID: "7",
+                            rpcIDIsNumber: true,
+                            title: "Edit the parser that turns streaming-json rows into session cards",
+                            detail: "Apply the change in the working tree, then show the diff before anything is written.",
+                            allowOptionID: "allow-once",
+                            denyOptionID: "reject-once"
+                        )
+                    ),
+                ],
+                banner: nil,
+                approvalsAvailable: true,
+                hostLabel: "example-host"
+            )
+        default:
+            return nil
+        }
+    }
+}

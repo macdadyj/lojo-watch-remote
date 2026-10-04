@@ -1,0 +1,5 @@
+// Optional local overrides. Copy Config/Local.xcconfig.example to
+// Config/Local.xcconfig (gitignored). Settings there replace the placeholders
+// in project.yml. This file does not assign defaults: a later "=" would
+// override the local file, and this Xcode rejects "?=".
+#include? "Local.xcconfig"

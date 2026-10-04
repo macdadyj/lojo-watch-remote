@@ -1,0 +1,12 @@
+[Unit]
+Description=Grok agent server for Watch Remote
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/watch-remote-agent
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

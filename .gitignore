@@ -1,0 +1,13 @@
+.DS_Store
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcodeproj/
+*.xcworkspace/
+private_keys/
+*.p8
+Config/Local.xcconfig
+__pycache__/
+*.pyc
+.venv/

@@ -1,0 +1,10 @@
+// Copy to Config/Local.xcconfig. That copy is gitignored.
+// These replace the placeholders in project.yml. Do not commit the copy.
+WATCHREMOTE_HOST_LABEL = example-host
+WATCHREMOTE_HOST_ADDRESS = 100.64.0.2
+WATCHREMOTE_HOST_USER = user
+WATCHREMOTE_HOST_PORT = 22
+
+// Optional for a local device build. The TestFlight archive uses the
+// DEVELOPMENT_TEAM GitHub secret and does not read a team id from git.
+// DEVELOPMENT_TEAM = YOURTEAMID

@@ -1,0 +1,17 @@
+[Unit]
+Description=Optional Watch Remote HTTP relay
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/watch-remote
+Environment=PYTHONPATH=%h/watch-remote/relay
+Environment=WATCHREMOTE_RELAY_PORT=2479
+Environment=WATCHREMOTE_RELAY_ADAPTER=acp
+EnvironmentFile=%h/.config/watch-remote/relay.env
+ExecStart=/usr/bin/python3 -m watchremote_relay
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

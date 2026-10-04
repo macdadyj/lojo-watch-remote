@@ -1,0 +1,186 @@
+name: iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.6.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [[ -d /Applications/Xcode_26.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Relay unit tests
+        run: PYTHONPATH=relay python3 relay/tests/test_relay.py
+
+      - name: Archive script self-test
+        run: scripts/archive-upload.sh --self-test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml', 'Core/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Unit tests
+        id: test
+        run: |
+          set -euo pipefail
+          UDID="$(python3 - <<'PY'
+          import json, subprocess
+          raw = subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"], text=True)
+          data = json.loads(raw)
+          chosen = ""
+          for runtime, devices in data.get("devices", {}).items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  if device.get("name", "").startswith("iPhone") and device.get("isAvailable", True):
+                      chosen = device["udid"]
+          if not chosen:
+              raise SystemExit("No available iPhone simulator")
+          print(chosen)
+          PY
+          )"
+          echo "udid=${UDID}" >> "$GITHUB_OUTPUT"
+          xcodebuild test \
+            -project WatchRemote.xcodeproj \
+            -scheme WatchRemote \
+            -destination "platform=iOS Simulator,id=${UDID}" \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            DEVELOPMENT_TEAM=""
+
+      - name: Build the simulator apps
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project WatchRemote.xcodeproj \
+            -scheme WatchRemote \
+            -destination "platform=iOS Simulator,id=${{ steps.test.outputs.udid }}" \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            DEVELOPMENT_TEAM=""
+
+      - name: Simulator screenshots
+        env:
+          PHONE_UDID: ${{ steps.test.outputs.udid }}
+          # Pull requests keep the full set. Manual and main runs take the short set.
+          WATCHREMOTE_SCREENSHOTS: ${{ github.event_name == 'pull_request' && 'full' || 'dispatch' }}
+        run: scripts/capture-screenshots.sh
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: build/screenshots
+          if-no-files-found: error
+
+  # Upload does not wait for screenshots. A slow screenshot pass must not cancel a finished upload.
+  testflight:
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.6.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [[ -d /Applications/Xcode_26.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Relay unit tests
+        run: PYTHONPATH=relay python3 relay/tests/test_relay.py
+
+      - name: Archive script self-test
+        run: scripts/archive-upload.sh --self-test
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml', 'Core/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Unit tests
+        run: |
+          set -euo pipefail
+          UDID="$(python3 - <<'PY'
+          import json, subprocess
+          raw = subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"], text=True)
+          data = json.loads(raw)
+          chosen = ""
+          for runtime, devices in data.get("devices", {}).items():
+              if "iOS" not in runtime:
+                  continue
+              for device in devices:
+                  if device.get("name", "").startswith("iPhone") and device.get("isAvailable", True):
+                      chosen = device["udid"]
+          if not chosen:
+              raise SystemExit("No available iPhone simulator")
+          print(chosen)
+          PY
+          )"
+          xcodebuild test \
+            -project WatchRemote.xcodeproj \
+            -scheme WatchRemote \
+            -destination "platform=iOS Simulator,id=${UDID}" \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            DEVELOPMENT_TEAM=""
+
+      - name: Archive and upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+        run: scripts/archive-upload.sh

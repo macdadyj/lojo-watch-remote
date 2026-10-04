@@ -1,0 +1,1 @@
+First TestFlight build. Demo mode, SSH over the private overlay, and Allow, Deny, and Stop from Apple Watch. The watch app is embedded under Watch/.
