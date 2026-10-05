@@ -121,7 +121,11 @@ final class WatchRemoteCoreTests: XCTestCase {
         }
         XCTAssertEqual(event, .text("Done"))
         let (_, loadJSON) = codec.loadSession(sessionID: "abc", cwd: "/work")
-        XCTAssertTrue(loadJSON.contains("session/load"))
+        let loadObject = try? JSONSerialization.jsonObject(with: Data(loadJSON.utf8)) as? [String: Any]
+        let loadParams = loadObject?["params"] as? [String: Any]
+        XCTAssertEqual(loadObject?["method"] as? String, "session/load")
+        XCTAssertEqual(loadParams?["sessionId"] as? String, "abc")
+        XCTAssertEqual(loadParams?["cwd"] as? String, "/work")
         XCTAssertFalse(loadJSON.contains("bash"))
         XCTAssertFalse(loadJSON.contains("server-key"))
         let nested = #"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn","usage":{"input_tokens":3,"output_tokens":4}}}"#
