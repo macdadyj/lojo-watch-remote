@@ -429,6 +429,23 @@ def emit_qr(text: str) -> None:
     print(render_qr(text))
 
 
+def _ssh_keygen_ok(public_line: str) -> bool:
+    """True when ssh-keygen -lf accepts this public key line."""
+    temporary = Path("/tmp") / f"watch-remote-pubkey-{os.getpid()}.pub"
+    try:
+        temporary.write_text(public_line.rstrip() + "\n", encoding="utf-8")
+        temporary.chmod(0o600)
+        result = subprocess.run(
+            ["ssh-keygen", "-lf", str(temporary)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        temporary.unlink(missing_ok=True)
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
 def parse_public_key(text: str) -> str:
     if "PRIVATE KEY" in text or "-----BEGIN" in text:
         raise PairingError("Pass the public key, not a private key.")
@@ -438,6 +455,30 @@ def parse_public_key(text: str) -> str:
     key_type, blob, comment = match.group(1), match.group(2), match.group(3)
     if comment is None:
         comment = "watch-remote@iphone"
+    # KEY_RE's blob class is [A-Za-z0-9+/=] and stops at '-'. Screenshot OCR often
+    # turns '+' into '-', which truncates the blob and leaves the rest as junk.
+    # When that happens, rebuild the token and try '-' -> '+' repair.
+    # Only when the char immediately after the matched blob is '-', KEY_RE truncated
+    # an OpenSSH base64 token (OCR often renders '+' as '-').
+    after = text[match.end(2) : match.end(2) + 1]
+    if after == "-":
+        repaired = text.replace("\r", " ").strip()
+        idx = repaired.find(key_type)
+        if idx >= 0:
+            rest = repaired[idx + len(key_type) :].strip()
+            parts = rest.split()
+            if parts:
+                candidate = parts[0].replace("-", "+")
+                trial_comment = parts[1] if len(parts) >= 2 else comment
+                trial = f"{key_type} {candidate} {trial_comment}"
+                if _ssh_keygen_ok(trial):
+                    blob = candidate
+                    comment = trial_comment
+                else:
+                    raise PairingError(
+                        "Public key looks truncated (possible '-' OCR of '+'). "
+                        "Re-copy the full ssh-ed25519 line and try again."
+                    )
     return f"{key_type} {blob} {comment}"
 
 
