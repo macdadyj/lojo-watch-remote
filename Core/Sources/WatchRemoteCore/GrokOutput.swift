@@ -60,6 +60,10 @@ public enum GrokOutput {
             if let result = object["result"] as? [String: Any] {
                 if let line = usageLine(result), !line.isEmpty { return line }
                 if let usage = result["usage"], let line = usageLine(usage), !line.isEmpty { return line }
+                if let nested = result["result"] as? [String: Any] {
+                    if let line = usageLine(nested), !line.isEmpty { return line }
+                    if let usage = nested["usage"], let line = usageLine(usage), !line.isEmpty { return line }
+                }
             }
         }
         return nil

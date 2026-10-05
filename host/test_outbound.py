@@ -27,6 +27,28 @@ TOKEN = "roomtokenvalue0001"
 
 
 class HandleTests(unittest.TestCase):
+    def test_session_rows_unwrap_grok_extension_result(self) -> None:
+        rows = outbound.sessions_from({
+            "result": {
+                "sessions": [{
+                    "sessionId": "abc",
+                    "title": "Logs",
+                    "summary": "Reading",
+                    "status": "running",
+                }],
+            },
+        })
+        self.assertEqual(rows, [{
+            "id": "abc",
+            "title": "Logs",
+            "summary": "Reading",
+            "status": "running",
+        }])
+        flat = outbound.sessions_from({
+            "sessions": [{"sessionId": "def", "title": "Door", "status": "idle"}],
+        })
+        self.assertEqual(flat[0]["id"], "def")
+
     def test_list_start_approve_stop_and_ping(self) -> None:
         agent = outbound.MemoryAgent()
         agent.rows = [{

@@ -27,10 +27,11 @@ class ACPAdapter:
 
     def list_sessions(self) -> list[dict]:
         try:
-            result = self._call("x.ai/session/list", {})
+            result = self._call("_x.ai/session/list", {})
         except OSError:
             with self._lock:
                 return list(self.sessions.values())
+        result = _extension_body(result)
         rows = result.get("sessions") if isinstance(result, dict) else result
         if not isinstance(rows, list):
             with self._lock:
@@ -290,6 +291,19 @@ def pop_server_frame(buffer: bytes) -> tuple[str | None, bytes]:
         return None, buffer
     payload = buffer[offset:offset + length]
     return payload.decode(errors="replace"), buffer[offset + length:]
+
+
+def _extension_body(result: object) -> object:
+    """Grok nests `{sessions: [...]}` one level under `result` on extension methods."""
+    current = result
+    for _ in range(2):
+        if isinstance(current, dict) and isinstance(current.get("sessions"), list):
+            return current
+        if isinstance(current, dict) and isinstance(current.get("result"), (dict, list)):
+            current = current["result"]
+            continue
+        break
+    return current
 
 
 def handshake_request(secret: str, host: str, port: int, key: str) -> str:

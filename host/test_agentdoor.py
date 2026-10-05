@@ -24,6 +24,60 @@ SECRET = "example-secret"
 
 
 class AgentDoorTests(unittest.TestCase):
+    def test_bare_list_method_is_rewritten_before_grok_sees_it(self) -> None:
+        raw = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "x.ai/session/list",
+            "params": {},
+        }).encode()
+        rewritten = agentdoor._rewrite_outbound(1, raw)
+        self.assertIsNotNone(rewritten)
+        obj = json.loads(rewritten or b"{}")
+        self.assertEqual(obj["method"], "_x.ai/session/list")
+        self.assertEqual(obj["id"], 2)
+        already = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "_x.ai/session/list",
+            "params": {},
+        }).encode()
+        self.assertIsNone(agentdoor._rewrite_outbound(1, already))
+        cwd = json.dumps({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "session/new",
+            "params": {"cwd": "~/src", "mcpServers": []},
+        }).encode()
+        resolved = json.loads(agentdoor._rewrite_outbound(1, cwd) or b"{}")
+        self.assertEqual(resolved["params"]["cwd"], agentdoor.resolve_cwd("~/src"))
+        self.assertEqual(resolved["method"], "session/new")
+
+    def test_headless_door_answers_both_list_spellings(self) -> None:
+        for method in ("x.ai/session/list", "_x.ai/session/list"):
+            left, right = socket.socketpair()
+            left.settimeout(2)
+            try:
+                agentdoor._handle(right, "grok", {}, {}, {
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": method,
+                    "params": {},
+                })
+                frame = left.recv(4096)
+            finally:
+                left.close()
+                right.close()
+            parsed = agentdoor._parse(frame)
+            self.assertIsNotNone(parsed, method)
+            assert parsed is not None
+            opcode, payload, _size = parsed
+            self.assertEqual(opcode, 1)
+            body = json.loads(payload)
+            self.assertEqual(body["id"], 4)
+            self.assertEqual(body["result"]["sessions"], [])
+            self.assertNotIn("Method not found", payload.decode())
+
     def test_cwd_resolution_stays_on_the_computer(self) -> None:
         home = Path("/home/user")
         self.assertEqual(agentdoor.resolve_cwd("", home), "/home/user")
