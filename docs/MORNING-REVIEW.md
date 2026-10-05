@@ -8,12 +8,12 @@ Public branch `cursor/watch-remote-55d3`. Nothing here was merged. TestFlight wa
 - The public tree uses placeholders (`user`, `100.64.0.2`, port `22`, label `example-host`). The team id is not in git. Real values are entered on Computer, or in gitignored `Config/Local.xcconfig`.
 - Overlay checks reject leading-zero IPv4 text so a socket cannot treat it as octal. SSH dials the canonical dotted form.
 - A dropped SSH channel is not reused. Allow and Deny update the row only after the approval is written. Watch commands are queued when the iPhone is not reachable. Returning to the iPhone app reconnects SSH.
-- If `grok agent serve` is down, the phone falls back to headless `grok -p` with `--permission-mode dontAsk` and says approvals are unavailable. Demo mode sends nothing.
+- If `grok agent serve` is down, the computer’s agent door runs headless `grok -p` with `--permission-mode dontAsk` and says approvals are unavailable. The phone does not execute a command over SSH. Demo mode sends nothing.
 - Watch Allow, Deny, and Stop play haptics. A new approval plays a notification haptic. The iPhone Allow and Deny buttons do the same.
 - Buttons sit in the scroll view, with the system navigation bar left visible. Empty, connecting, offline, pairing, error, and long-text screens are launch fixtures for screenshots.
 - The iPhone display name is **Watch Remote for Grok**. The Watch home-screen name stays **Watch Remote** so it fits the icon. Store text is in `metadata/en-US/`.
 - Watch light mode is a light page with dark text. The compose screen shows the whole task, then Start.
-- Allow and Deny wait until the SSH flush succeeds before the card changes. If the agent channel drops, the next task uses headless mode.
+- Allow and Deny wait until the approval is written on the agent channel before the card changes. If that channel drops, the next task waits until the agent door is answering again.
 - A live Smart Stack complication is not in this build. It needs an App Group entitlement, and that entitlement needs the Apple team at signing time.
 - Design, security, and reliability reviews signed off on this tree. They did not ask for a history rewrite as a code change.
 
@@ -26,7 +26,7 @@ Public branch `cursor/watch-remote-55d3`. Nothing here was merged. TestFlight wa
 5. Generate a key. Copy the authorize command and run it on the computer. The private key should not appear.
 6. Trust the host key on first connect, then connect again and confirm it does not ask.
 7. With `grok agent serve` on `127.0.0.1:2419`, start a task from the Watch and Allow it. You should feel a haptic.
-8. Stop the agent server, start another task, and confirm the Watch says tasks cannot ask for approval.
+8. Stop the agent server, start another task, and confirm the phone says the agent server is not answering. A task does not run a shell on the computer.
 9. Switch away from the iPhone app and back. The SSH session should reconnect.
 10. Force-quit the iPhone app. The Watch should say the iPhone app is closed, and a Start tap should keep the prompt.
 

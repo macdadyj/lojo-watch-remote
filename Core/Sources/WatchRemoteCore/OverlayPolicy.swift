@@ -75,7 +75,8 @@ public enum ShellQuoting {
     }
 }
 
-/// Remote commands run through the login shell. The agent secret is never placed on this command line.
+/// Argv shape for headless `grok -p` on the computer. The phone does not send these over SSH.
+/// The agent door on 127.0.0.1:2419 spawns them. The agent secret is never an argument.
 public enum GrokCommands {
     public static func sessionsList(cwd: String? = nil) -> String {
         remoteShell(script: sessionsListScript(cwd: cwd))

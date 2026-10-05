@@ -6,7 +6,7 @@ import WatchRemoteCore
 enum DirectKeychain {
     static let service = "com.lojo.WatchRemote.direct"
     private static let account = "pairing"
-    private static let counters = "counters"
+    private static let countersAccount = "counters"
 
     static func save(_ pairing: DirectPairing) {
         guard let text = pairing.jsonText(), let data = text.data(using: .utf8) else { return }
@@ -22,16 +22,16 @@ enum DirectKeychain {
 
     static func delete() {
         SecItemDelete(base(account: account) as CFDictionary)
-        SecItemDelete(base(account: counters) as CFDictionary)
+        SecItemDelete(base(account: countersAccount) as CFDictionary)
     }
 
     static func saveCounters(send: UInt64, recv: UInt64) {
         let text = #"{"recv":\#(recv),"send":\#(send)}"#
-        write(Data(text.utf8), account: counters)
+        write(Data(text.utf8), account: countersAccount)
     }
 
     static func counters() -> (send: UInt64, recv: UInt64) {
-        guard let data = read(account: counters),
+        guard let data = read(account: countersAccount),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (0, 0) }
         let send = (object["send"] as? NSNumber)?.uint64Value ?? 0
         let recv = (object["recv"] as? NSNumber)?.uint64Value ?? 0

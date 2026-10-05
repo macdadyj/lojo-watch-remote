@@ -28,7 +28,10 @@ URL_PREFIX = "watchremote://pair?d="
 OVERLAY_NETWORK = (100 << 24) | (64 << 16)
 OVERLAY_PREFIX = 10
 AGENT_PORT = "127.0.0.1:2419"
-AUTHORIZE_OPTIONS = f'restrict,port-forwarding,permitopen="{AGENT_PORT}"'
+# restrict drops PTY, agent forwarding, and user rc. port-forwarding turns the
+# forward back on, and permitopen keeps it on the agent port. command and no-pty
+# refuse ssh host '<cmd>' so this key can only open that forward.
+AUTHORIZE_OPTIONS = f'restrict,port-forwarding,permitopen="{AGENT_PORT}",command="/bin/false",no-pty'
 KEY_RE = re.compile(
     r"(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|"
     r"sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)"
@@ -436,6 +439,23 @@ def parse_public_key(text: str) -> str:
     if comment is None:
         comment = "watch-remote@iphone"
     return f"{key_type} {blob} {comment}"
+
+
+def exec_is_refused(line: str) -> bool:
+    """True when this authorized_keys line cannot run a command supplied by the client."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    options = stripped.split(None, 1)[0]
+    parts = options.split(",")
+    required = (
+        "restrict",
+        "port-forwarding",
+        'permitopen="127.0.0.1:2419"',
+        'command="/bin/false"',
+        "no-pty",
+    )
+    return all(part in parts for part in required)
 
 
 def authorize_key(text: str, path: Path) -> str:

@@ -21,7 +21,9 @@ This repository does not deploy a relay and does not create any cloud resources.
    node relay/outbound/server.mjs
    ```
 
-   It listens on `127.0.0.1:8787` until you set `WATCHREMOTE_OUTBOUND_BIND` and `WATCHREMOTE_OUTBOUND_PORT`. Put TLS in front of it (Caddy, nginx, or any other proxy), or set `WATCHREMOTE_OUTBOUND_TLS_CERT` and `WATCHREMOTE_OUTBOUND_TLS_KEY` to a certificate for that hostname. Do not log WebSocket bodies or the pairing token. `GET /health` returns `{"ok":true}` and nothing else.
+   It listens on `127.0.0.1:8787` until you set `WATCHREMOTE_OUTBOUND_BIND` and `WATCHREMOTE_OUTBOUND_PORT`. Put TLS in front of it (Caddy, nginx, or any other proxy), or set `WATCHREMOTE_OUTBOUND_TLS_CERT` and `WATCHREMOTE_OUTBOUND_TLS_KEY` to a certificate for that hostname. Do not log WebSocket bodies, the pairing token, or `X-Forwarded-For`. `GET /health` returns `{"ok":true}` and nothing else.
+
+   If the proxy runs on the same machine, every socket looks like `127.0.0.1`. Turn on trust-proxy, below, or one client can use up the rate limit for everyone.
 
    A container build is in [relay/outbound/README.md](../relay/outbound/README.md). The image has no URL baked in.
 
@@ -64,8 +66,22 @@ Demo mode never opens the relay. A pairing QR without a relay URL never opens it
 | Auth | first text frame is the token; it is not logged |
 | After auth | binary frames only, forwarded as-is |
 | Rate limits | new sockets, bad tokens, and frames per connection |
+| Client address | the socket peer, unless trust-proxy is on |
 | Disk | nothing is stored; a restart drops every room |
 
-Details and the environment variables are in [relay/outbound/README.md](../relay/outbound/README.md).
+## Trust proxy
+
+`WATCHREMOTE_OUTBOUND_TRUST_PROXY` is off by default. Leave it off when clients connect straight to this process. A client must not be able to pick its own rate-limit address by sending `X-Forwarded-For`.
+
+Turn it on only when a reverse proxy you run is the thing that opens the socket. `on` (or `1` / `true`) trusts `127.0.0.1` and `::1`, which is the usual case for Caddy or nginx on the same host. To trust different proxies, set the variable to those addresses, separated by commas. Only that list is trusted. A peer that is not on the list is rated by its socket address, and its `X-Forwarded-For` header is ignored.
+
+When the peer is trusted, the client address is the right-most `X-Forwarded-For` entry that is not itself on the trusted list. Entries further left are ignored, so a client cannot hide behind an address it wrote itself. The proxy has to append the address it actually accepted. That address is used for new-socket limits and for bad-token lockouts. It is not written to the log.
+
+```bash
+export WATCHREMOTE_OUTBOUND_TRUST_PROXY=on
+node relay/outbound/server.mjs
+```
+
+Details and the other environment variables are in [relay/outbound/README.md](../relay/outbound/README.md).
 
 The older HTTP relay in [relay-api.md](relay-api.md) is a different program. It runs on the computer and is reached over the overlay by the iPhone. Leave it off unless you want that path. The outbound relay is the one the Watch uses when the iPhone is away.

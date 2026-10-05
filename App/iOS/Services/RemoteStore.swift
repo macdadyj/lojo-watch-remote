@@ -226,7 +226,7 @@ final class RemoteStore: ObservableObject {
             onAgentLost: { [weak self] in
                 guard let self, self.mode == .ssh else { return }
                 self.approvalsAvailable = false
-                self.statusLine = self.live?.statusLine ?? "SSH connected. Command mode is on, so tasks cannot ask for approval."
+                self.statusLine = self.live?.statusLine ?? "SSH connected. The agent server is not answering."
                 self.publish()
             }
         )

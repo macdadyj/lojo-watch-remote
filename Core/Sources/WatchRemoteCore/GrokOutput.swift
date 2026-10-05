@@ -41,6 +41,15 @@ public enum GrokOutput {
         return cleaned.split(whereSeparator: \.isNewline).compactMap(parseSessionsRow)
     }
 
+    public static func stopReason(in text: String) -> String {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = object["result"] as? [String: Any],
+              let reason = result["stopReason"] as? String,
+              !reason.isEmpty else { return "end_turn" }
+        return reason
+    }
+
     public static func parseUsage(_ text: String) -> String? {
         let cleaned = stripANSI(text).trimmingCharacters(in: .whitespacesAndNewlines)
         guard let data = cleaned.data(using: .utf8),
@@ -48,6 +57,10 @@ public enum GrokOutput {
         if let line = usageLine(object), !line.isEmpty { return line }
         if let object = object as? [String: Any] {
             if let session = object["session"], let line = usageLine(session), !line.isEmpty { return line }
+            if let result = object["result"] as? [String: Any] {
+                if let line = usageLine(result), !line.isEmpty { return line }
+                if let usage = result["usage"], let line = usageLine(usage), !line.isEmpty { return line }
+            }
         }
         return nil
     }

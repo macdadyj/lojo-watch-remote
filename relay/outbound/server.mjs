@@ -4,7 +4,7 @@
  * The host agent and the Watch each open a WebSocket. The first text frame
  * is the room token. Every later frame is binary ciphertext and is forwarded
  * to the other peer. This process does not decrypt, and it does not log
- * tokens or frame bodies.
+ * tokens, frame bodies, or client addresses.
  *
  * Nothing here is deployed. Run it only where you choose to host it.
  */
@@ -12,6 +12,7 @@ import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import net from "node:net";
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const MAX_FRAME = 256 * 1024;
@@ -22,6 +23,9 @@ export function createRelay(options = {}) {
   const upgradesPerMinute = numberOption(options.upgradesPerMinute, process.env.WATCHREMOTE_OUTBOUND_UPGRADES, 30);
   const maxConnections = numberOption(options.maxConnections, process.env.WATCHREMOTE_OUTBOUND_MAX, 200);
   const authFailuresPerMinute = numberOption(options.authFailuresPerMinute, process.env.WATCHREMOTE_OUTBOUND_AUTH_FAILURES, 8);
+  const trustedProxies = trustedProxySet(
+    options.trustProxy !== undefined ? options.trustProxy : process.env.WATCHREMOTE_OUTBOUND_TRUST_PROXY
+  );
   const log = options.log ?? defaultLog;
   const rooms = new Map();
   const limits = new Map();
@@ -73,7 +77,7 @@ export function createRelay(options = {}) {
   });
 
   server.on("upgrade", (req, socket, head) => {
-    const ip = req.socket.remoteAddress || "unknown";
+    const ip = clientAddress(req.socket.remoteAddress, req.headers["x-forwarded-for"], trustedProxies);
     const path = (req.url || "").split("?")[0];
     if (path !== "/v1/room") {
       refuse(socket, 404);
@@ -346,6 +350,116 @@ function numberOption(value, env, fallback) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const parsed = Number(env);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const DEFAULT_PROXY_IPS = ["127.0.0.1", "::1"];
+
+/**
+ * `WATCHREMOTE_OUTBOUND_TRUST_PROXY` is off unless set.
+ * `on` trusts 127.0.0.1 and ::1. A comma-separated list trusts those addresses instead.
+ * An untrusted peer never supplies the client address.
+ */
+export function trustedProxySet(value) {
+  if (value === undefined || value === null || value === false) return null;
+  if (value === true) return setFromList(DEFAULT_PROXY_IPS);
+  if (Array.isArray(value)) return setFromList(value);
+  const text = String(value).trim();
+  const lower = text.toLowerCase();
+  if (lower === "" || lower === "0" || lower === "false" || lower === "off" || lower === "no") return null;
+  if (lower === "1" || lower === "true" || lower === "on" || lower === "yes") return setFromList(DEFAULT_PROXY_IPS);
+  return setFromList(text.split(","));
+}
+
+function setFromList(values) {
+  const trusted = new Set();
+  for (const value of values) {
+    const ip = canonicalIP(String(value));
+    if (ip) trusted.add(ip);
+  }
+  return trusted;
+}
+
+/**
+ * Right-most untrusted X-Forwarded-For entry, after the socket peer is checked.
+ * The header is ignored unless that peer is a trusted proxy.
+ */
+export function clientAddress(peer, forwardedFor, trusted) {
+  const socketIP = canonicalIP(peer) || "unknown";
+  if (!trusted || !trusted.has(socketIP)) return socketIP;
+  const hops = forwardedHops(forwardedFor);
+  for (let i = hops.length - 1; i >= 0; i -= 1) {
+    if (!trusted.has(hops[i])) return hops[i];
+  }
+  return socketIP;
+}
+
+function forwardedHops(header) {
+  let text = "";
+  if (typeof header === "string") text = header;
+  else if (Array.isArray(header)) text = header.filter((item) => typeof item === "string").join(",");
+  if (text.length > 2048) text = text.slice(-2048);
+  const parts = text.split(",");
+  const hops = [];
+  const start = Math.max(0, parts.length - 32);
+  for (let i = start; i < parts.length; i += 1) {
+    const ip = canonicalIP(parts[i]);
+    if (ip) hops.push(ip);
+  }
+  return hops;
+}
+
+export function canonicalIP(value) {
+  if (typeof value !== "string") return null;
+  let text = value.trim();
+  if (!text || text.length > 128) return null;
+  if (text.startsWith("[")) {
+    const end = text.indexOf("]");
+    if (end > 1) text = text.slice(1, end);
+  }
+  const zone = text.indexOf("%");
+  if (zone >= 0) text = text.slice(0, zone);
+  if (net.isIP(text) === 0) {
+    const colon = text.lastIndexOf(":");
+    if (colon > 0 && text.indexOf(":") === colon) {
+      const host = text.slice(0, colon);
+      if (net.isIP(host) === 4) text = host;
+    }
+  }
+  const kind = net.isIP(text);
+  if (kind === 4) return text;
+  if (kind !== 6) return null;
+  const lower = text.toLowerCase();
+  const mapped = lower.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped && net.isIP(mapped[1]) === 4) return mapped[1];
+  return expandIPv6(lower);
+}
+
+function expandIPv6(text) {
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const left = halves[0] === "" ? [] : halves[0].split(":");
+  const right = halves.length === 2 ? (halves[1] === "" ? [] : halves[1].split(":")) : [];
+  const missing = 8 - left.length - right.length;
+  if (missing < 0) return null;
+  if (halves.length === 2 && missing === 0) return null;
+  const groups = [];
+  const take = (part) => {
+    if (!/^[0-9a-f]{1,4}$/.test(part)) return null;
+    return part.padStart(4, "0");
+  };
+  for (const part of left) {
+    const padded = take(part);
+    if (!padded) return null;
+    groups.push(padded);
+  }
+  for (let i = 0; i < missing; i += 1) groups.push("0000");
+  for (const part of right) {
+    const padded = take(part);
+    if (!padded) return null;
+    groups.push(padded);
+  }
+  if (groups.length !== 8) return null;
+  return groups.join(":");
 }
 
 function listen(server, bind, port) {

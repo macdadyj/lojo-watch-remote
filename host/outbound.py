@@ -13,7 +13,7 @@ import select
 import sys
 import time
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -151,8 +151,12 @@ class ACPAgent:
         self.push_n = 0
 
     def open(self) -> None:
-        path = "/ws?server-key=" + quote(self.secret, safe="")
-        self.conn = miniws.connect(f"ws://{self.host}:{self.port}{path}", timeout=4)
+        # The secret is a header so a proxy access log cannot record it from the URL.
+        self.conn = miniws.connect(
+            f"ws://{self.host}:{self.port}/ws",
+            timeout=4,
+            headers={"Authorization": "Bearer " + self.secret},
+        )
         self.request("initialize", {
             "protocolVersion": 1,
             "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},

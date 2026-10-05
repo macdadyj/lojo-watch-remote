@@ -82,12 +82,12 @@ public struct PairingPayload: Equatable, Sendable {
         return try encoder.encode(self)
     }
 
-    public func token() throws -> String {
+    public func encodedToken() throws -> String {
         try Base64URL.encode(jsonData())
     }
 
     public func urlString() throws -> String {
-        try Self.urlPrefix + token()
+        try Self.urlPrefix + encodedToken()
     }
 
     public static func decode(_ text: String) throws -> PairingPayload {

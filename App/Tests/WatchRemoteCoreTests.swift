@@ -120,6 +120,20 @@ final class WatchRemoteCoreTests: XCTestCase {
             return XCTFail("expected update")
         }
         XCTAssertEqual(event, .text("Done"))
+        let (_, loadJSON) = codec.loadSession(sessionID: "abc", cwd: "/work")
+        let loadObject = try? JSONSerialization.jsonObject(with: Data(loadJSON.utf8)) as? [String: Any]
+        let loadParams = loadObject?["params"] as? [String: Any]
+        XCTAssertEqual(loadObject?["method"] as? String, "session/load")
+        XCTAssertEqual(loadParams?["sessionId"] as? String, "abc")
+        XCTAssertEqual(loadParams?["cwd"] as? String, "/work")
+        XCTAssertFalse(loadJSON.contains("bash"))
+        XCTAssertFalse(loadJSON.contains("server-key"))
+        let nested = #"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn","usage":{"input_tokens":3,"output_tokens":4}}}"#
+        XCTAssertEqual(GrokOutput.parseUsage(nested), "3 in · 4 out")
+        let plain = #"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#
+        XCTAssertTrue(ACPCodec.approvalsAvailable(inResultJSON: plain))
+        let headless = #"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"_meta":{"approvals":false}}}"#
+        XCTAssertFalse(ACPCodec.approvalsAvailable(inResultJSON: headless))
     }
 
     func testWebSocketFramesAndUpgrade() {
@@ -140,6 +154,11 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(encoded[0], UInt8(ascii: "H") ^ 9)
         XCTAssertEqual(encoded[1], UInt8(ascii: "i") ^ 8)
         XCTAssertEqual(WebSocketFramer.percentEncode("a b"), "a%20b")
+        let upgrade = String(decoding: WebSocketFramer.upgradeRequest(host: "127.0.0.1:2419", path: "/ws", webSocketKey: "abc", authorization: "example-secret"), as: UTF8.self)
+        XCTAssertTrue(upgrade.contains("GET /ws HTTP/1.1"))
+        XCTAssertTrue(upgrade.contains("Authorization: Bearer example-secret"))
+        XCTAssertFalse(upgrade.contains("server-key"))
+        XCTAssertFalse(upgrade.contains("?"))
     }
 
     func testKnownHostsAndAuthorizeCommand() {
@@ -194,14 +213,14 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertTrue(decoded.summary.contains("Agent secret included."))
         XCTAssertTrue(decoded.summary.contains(fingerprint))
         let golden = "eyJhZGRyZXNzIjoiMTAwLjY0LjAuMiIsImZpbmdlcnByaW50IjoiU0hBMjU2OkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEiLCJsYWJlbCI6ImV4YW1wbGUtaG9zdCIsInBvcnQiOjIyLCJzZWNyZXQiOiJleGFtcGxlLXNlY3JldCIsInVzZXIiOiJ1c2VyIiwidiI6MX0"
-        XCTAssertEqual(try payload.token(), golden)
+        XCTAssertEqual(try payload.encodedToken(), golden)
         XCTAssertEqual(try PairingPayload.decode(golden).secret, "example-secret")
 
         let bare = try PairingPayload(label: " example-host ", address: "100.64.0.1", user: "user", port: 22)
         XCTAssertNil(bare.secret)
         XCTAssertNil(bare.fingerprint)
         XCTAssertEqual(
-            try bare.token(),
+            try bare.encodedToken(),
             "eyJhZGRyZXNzIjoiMTAwLjY0LjAuMSIsImxhYmVsIjoiZXhhbXBsZS1ob3N0IiwicG9ydCI6MjIsInVzZXIiOiJ1c2VyIiwidiI6MX0"
         )
         let json = #"{"v":1,"user":"user","port":22,"address":"100.127.255.254","label":"example-host"}"#
@@ -338,7 +357,8 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertThrowsError(try RelayBox.open(frame: second, key: key, expecting: .watchToHost, replay: &restored))
         let third = try RelayBox.seal(plaintext: Data("third".utf8), key: key, direction: .watchToHost, counter: 3)
         XCTAssertEqual(try RelayBox.open(frame: third, key: key, expecting: .watchToHost, replay: &restored), Data("third".utf8))
-        XCTAssertThrowsError(try RelayBox.open(frame: third, key: key, expecting: .hostToWatch, replay: &RelayReplay())) { error in
+        var wrongDirection = RelayReplay()
+        XCTAssertThrowsError(try RelayBox.open(frame: third, key: key, expecting: .hostToWatch, replay: &wrongDirection)) { error in
             XCTAssertEqual(error as? RelayBoxError, .wrongDirection)
         }
         var fresh = RelayReplay()
