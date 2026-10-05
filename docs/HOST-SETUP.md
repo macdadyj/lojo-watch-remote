@@ -21,7 +21,7 @@ On the computer, install the scripts (python3 is required; `qrencode` is optiona
 install -d -m 755 ~/.local/bin
 install -m 755 /path/to/watch-remote/host/watch-remote-pair ~/.local/bin/watch-remote-pair
 install -m 755 /path/to/watch-remote/host/watch-remote-authorize ~/.local/bin/watch-remote-authorize
-install -m 644 /path/to/watch-remote/host/pairing.py /path/to/watch-remote/host/qrcodegen.py ~/.local/bin/
+install -m 644 /path/to/watch-remote/host/pairing.py /path/to/watch-remote/host/enroll.py /path/to/watch-remote/host/qrcodegen.py ~/.local/bin/
 ```
 
 `watch-remote-pair` reads the overlay address (the first address in `100.64.0.0/10`, or `~/.config/watch-remote/address`, or `--address`), the SSH user, the sshd port, the SSH host key fingerprint, and the agent secret from `~/.config/watch-remote/agent-secret`. It prints a QR and the `watchremote://pair?d=…` text. The QR is drawn with `qrencode` when that program is installed, and with the built-in generator otherwise (`host/qrcodegen.py`, MIT, Project Nayuki).
@@ -30,9 +30,11 @@ install -m 644 /path/to/watch-remote/host/pairing.py /path/to/watch-remote/host/
 watch-remote-pair --address 100.64.0.2
 ```
 
-The QR contains the agent secret when that file exists. Scan it once with the iPhone’s **Computer** screen. Do not share it, copy it into chat, or take a screenshot. The phone fills the label, address, user, and port, stores the secret in the Keychain, and pins the host key fingerprint when the code includes one. It still shows that fingerprint for you to confirm, and the first SSH connection asks again before the key is trusted. A later key that does not match the pin is refused.
+The QR contains the agent secret when that file exists, and a one-time pairing ticket. Scan it once with the iPhone’s **Computer** screen. Do not share it, copy it into chat, or take a screenshot. Leave `watch-remote-pair` running. The phone asks “Is this your computer?”, creates a key if needed, and posts the public key to the overlay address on port `2478`. That listener checks the ticket, adds the key to `~/.ssh/authorized_keys` with the restricted forward, and exits. The ticket works once and expires after 10 minutes. The listener does not log the ticket or the key. It refuses any address outside `100.64.0.0/10`.
 
-Then generate a key on the iPhone if you have not. The app shows the public key as a QR and as text. On the computer, as that SSH user:
+The phone stores the agent secret in the Keychain and pins the host key fingerprint when the code includes one. The first SSH connection asks again before the key is trusted. A later key that does not match the pin is refused. When the phone says **Connected**, the Watch is ready.
+
+If the window expires, use **Advanced** on the iPhone and run the authorize command by hand:
 
 ```bash
 watch-remote-authorize 'ssh-ed25519 AAAA… watch-remote@iphone'
@@ -69,7 +71,7 @@ Match User user
 sshd -t
 ```
 
-Authorize the iPhone key with `watch-remote-authorize`, shown above. Confirm the fingerprint the phone displays:
+`watch-remote-pair` authorizes the iPhone key while it is open. `watch-remote-authorize` is the fallback. Confirm the fingerprint the phone displays:
 
 ```bash
 ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub

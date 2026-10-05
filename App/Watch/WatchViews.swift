@@ -88,7 +88,8 @@ struct WatchListView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .padding(.top, 10)
+                .lojoCard(padding: 12)
+                .padding(.top, 8)
                 if let banner = model.banner ?? model.snapshot.banner {
                     Text(banner)
                         .font(.caption2)
@@ -113,7 +114,7 @@ struct WatchListView: View {
                 NavigationLink {
                     WatchComposeView()
                 } label: {
-                    Text("New task")
+                    Label("New task", systemImage: "plus")
                 }
                 .buttonStyle(PrimaryButtonStyle(compact: true))
                 .accessibilityLabel("New task")

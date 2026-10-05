@@ -6,14 +6,20 @@ from __future__ import annotations
 import base64
 import json
 import os
+import socket
 import stat
 import sys
 import tempfile
+import threading
+import time
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import enroll  # noqa: E402
 import pairing  # noqa: E402
 import qrcodegen  # noqa: E402
 
@@ -158,6 +164,66 @@ class PairingTests(unittest.TestCase):
             self.assertEqual(loaded["relay"], relay)
             self.assertEqual(loaded["token"], token)
             self.assertEqual(loaded["key"], b"\x11" * 32)
+
+    def test_enroll_ticket_is_single_use_and_not_in_the_summary(self) -> None:
+        ticket = "roomtokenvalue0001"
+        payload = pairing.build_payload(
+            "example-host",
+            "100.64.0.2",
+            "user",
+            22,
+            ticket=ticket,
+            enroll=2478,
+        )
+        summary = "\n".join(pairing.summary_lines(payload))
+        self.assertIn("This iPhone can authorize itself.", summary)
+        self.assertNotIn(ticket, summary)
+        public = "ssh-ed25519 AAAAB3NzaC1lZDI1NTE5AAAAIExamplePublicKeyPlaceholderOnly watch-remote@iphone"
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        with tempfile.TemporaryDirectory() as directory:
+            keys = Path(directory) / "authorized_keys"
+            result: dict[str, str] = {}
+
+            def run() -> None:
+                result["value"] = enroll.serve_enroll("127.0.0.1", port, ticket, keys, timeout=5)
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            bad = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/enroll",
+                data=public.encode("utf-8"),
+                headers={"Authorization": "Bearer not-the-ticket"},
+                method="POST",
+            )
+            refused = False
+            deadline = time.time() + 3
+            while time.time() < deadline and not refused:
+                try:
+                    urllib.request.urlopen(bad, timeout=1)
+                except urllib.error.HTTPError as error:
+                    self.assertEqual(error.code, 401)
+                    refused = True
+                except urllib.error.URLError:
+                    time.sleep(0.05)
+            self.assertTrue(refused)
+            good = urllib.request.Request(
+                f"http://127.0.0.1:{port}/v1/enroll",
+                data=public.encode("utf-8"),
+                headers={"Authorization": f"Bearer {ticket}"},
+                method="POST",
+            )
+            with urllib.request.urlopen(good, timeout=2) as response:
+                self.assertEqual(response.status, 200)
+                self.assertIn(b'"ok":true', response.read())
+            body = keys.read_text(encoding="utf-8")
+            self.assertIn('permitopen="127.0.0.1:2419"', body)
+            self.assertEqual(body.count("ExamplePublicKeyPlaceholderOnly"), 1)
+            self.assertNotIn(ticket, body)
+            worker.join(timeout=3)
+            self.assertEqual(result.get("value"), "enrolled")
 
 
 if __name__ == "__main__":

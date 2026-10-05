@@ -36,6 +36,13 @@ struct ComputerView: View {
                 PairingImportView()
                     .presentationDetents([.large])
             }
+            .fullScreenCover(isPresented: Binding(
+                get: { store.pairingMoment != .none },
+                set: { if !$0 { store.dismissMoment() } }
+            )) {
+                PairingMomentView()
+                    .environmentObject(store)
+            }
             .confirmationDialog("Remove this computer?", isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) { store.removeActiveComputer() }
                 Button("Cancel", role: .cancel) {}
@@ -86,32 +93,35 @@ struct ComputerView: View {
 
     private var firstComputer: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Button("Scan QR code") { store.beginScan() }
-                .buttonStyle(PrimaryButtonStyle(prominent: true))
-                .accessibilityHint("Opens the camera to scan the pairing code from the computer")
+            Button {
+                store.beginScan()
+            } label: {
+                Label("Scan QR code", systemImage: "qrcode.viewfinder")
+            }
+            .buttonStyle(PrimaryButtonStyle(prominent: true))
+            .accessibilityHint("Opens the camera to scan the pairing code from the computer")
             Text("Pair your first computer")
                 .font(.title2.weight(.bold))
+            Text("One scan finishes the setup. Leave watch-remote-pair running on the computer until the phone says Connected.")
+                .font(.body)
+                .foregroundStyle(LojoTheme.secondaryText)
             step(1, "On your computer, run this") {
                 Text("watch-remote-pair")
                     .font(.body.monospaced().weight(.semibold))
                     .textSelection(.enabled)
-                Text("That prints a QR code. If you host the direct relay, add --relay-url and your wss address. There is no built-in relay address.")
+                Text("Leave that window open. It authorizes this iPhone. Add --relay-url only if you host a direct relay. There is no built-in relay address.")
                     .font(.subheadline)
                     .foregroundStyle(LojoTheme.secondaryText)
             }
-            step(2, "Scan that QR code") {
+            step(2, "Scan the QR") {
                 Text("Use the Scan QR code button at the top of this screen.")
                     .font(.subheadline)
                     .foregroundStyle(LojoTheme.secondaryText)
             }
-            step(3, "Confirm the fingerprint") {
-                fingerprintBody
-            }
-            step(4, "Copy the authorize command") {
-                authorizeBody
-            }
-            step(5, "Test the connection") {
-                testBody
+            step(3, "Confirm the computer") {
+                Text("The phone asks if it is your computer, then connects. The Watch is ready when you see Connected.")
+                    .font(.subheadline)
+                    .foregroundStyle(LojoTheme.secondaryText)
             }
         }
     }
@@ -226,9 +236,10 @@ struct ComputerView: View {
     private var advancedSection: some View {
         DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Name, address, user, and port. Paste a code here if the camera is unavailable.")
+                Text("Name, address, user, and port. Paste a code here if the camera is unavailable. If the pairing window expires, copy the authorize command and run it on the computer.")
                     .font(.footnote)
                     .foregroundStyle(LojoTheme.secondaryText)
+                authorizeBody
                 Button("Scan QR code") { store.beginScan() }
                     .buttonStyle(QuietButtonStyle())
                 Button("Paste pairing code") { store.showPairing = true }

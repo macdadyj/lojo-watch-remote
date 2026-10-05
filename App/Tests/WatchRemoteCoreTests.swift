@@ -290,6 +290,28 @@ final class WatchRemoteCoreTests: XCTestCase {
         }
         XCTAssertEqual(DemoCatalog.preview(named: "direct")?.link, .connected)
         XCTAssertEqual(DemoCatalog.preview(named: "watch-unpaired")?.link, .needsPairing)
+        let ticket = "roomtokenvalue0001"
+        let enrolled = try PairingPayload(
+            label: "example-host",
+            address: "100.64.0.2",
+            user: "user",
+            port: 22,
+            ticket: ticket,
+            enrollPort: 2478
+        )
+        XCTAssertTrue(enrolled.canEnroll)
+        XCTAssertTrue(enrolled.summary.contains("This iPhone can authorize itself."))
+        XCTAssertFalse(enrolled.summary.contains(ticket))
+        XCTAssertEqual(try PairingPayload.decode(try enrolled.urlString()).ticket, ticket)
+        XCTAssertThrowsError(try PairingPayload(
+            label: "example-host",
+            address: "100.64.0.2",
+            user: "user",
+            port: 22,
+            ticket: "short"
+        )) { error in
+            XCTAssertEqual(error as? PairingError, .invalidTicket)
+        }
     }
 
     func testRelaySealRoundTripAndReplay() throws {

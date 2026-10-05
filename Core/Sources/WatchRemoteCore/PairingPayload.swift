@@ -18,6 +18,12 @@ public struct PairingPayload: Equatable, Sendable {
     public var token: String?
     /// 32-byte end-to-end key, unpadded base64url. Nil when this pairing is SSH only.
     public var e2eKey: String?
+    /// One-time ticket for the pairing channel. Nil on older codes.
+    public var ticket: String?
+    /// Port of the short-lived pairing channel. Nil when `ticket` is nil.
+    public var enrollPort: Int?
+
+    public static let defaultEnrollPort = 2478
 
     public init(
         label: String,
@@ -28,7 +34,9 @@ public struct PairingPayload: Equatable, Sendable {
         fingerprint: String? = nil,
         relayURL: String? = nil,
         token: String? = nil,
-        e2eKey: String? = nil
+        e2eKey: String? = nil,
+        ticket: String? = nil,
+        enrollPort: Int? = nil
     ) throws {
         let payload = try Self.make(
             version: Self.version,
@@ -40,7 +48,9 @@ public struct PairingPayload: Equatable, Sendable {
             fingerprint: fingerprint,
             relayURL: relayURL,
             token: token,
-            e2eKey: e2eKey
+            e2eKey: e2eKey,
+            ticket: ticket,
+            enrollPort: enrollPort
         )
         self = payload
     }
@@ -48,6 +58,8 @@ public struct PairingPayload: Equatable, Sendable {
     public var hasDirectRelay: Bool {
         relayURL != nil && token != nil && e2eKey != nil
     }
+
+    public var canEnroll: Bool { ticket != nil }
 
     /// Label, address, user, port, and whether a secret, fingerprint, or direct relay is present.
     /// Never the secret, the room token, or the end-to-end key.
@@ -58,6 +70,9 @@ public struct PairingPayload: Equatable, Sendable {
         }
         lines.append(secret == nil ? "No agent secret in this code." : "Agent secret included.")
         lines.append(hasDirectRelay ? "Direct connection included." : "No direct connection in this code.")
+        if canEnroll {
+            lines.append("This iPhone can authorize itself.")
+        }
         return lines.joined(separator: "\n")
     }
 
@@ -114,7 +129,9 @@ public struct PairingPayload: Equatable, Sendable {
             fingerprint: raw.fingerprint,
             relayURL: raw.relay,
             token: raw.token,
-            e2eKey: raw.e2e
+            e2eKey: raw.e2e,
+            ticket: raw.ticket,
+            enrollPort: raw.enroll
         )
     }
 
@@ -140,7 +157,9 @@ public struct PairingPayload: Equatable, Sendable {
         fingerprint: String?,
         relayURL: String? = nil,
         token: String? = nil,
-        e2eKey: String? = nil
+        e2eKey: String? = nil,
+        ticket: String? = nil,
+        enrollPort: Int? = nil
     ) throws -> PairingPayload {
         guard version == Self.version else { throw PairingError.unsupportedVersion(version) }
         let name = label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -169,6 +188,7 @@ public struct PairingPayload: Equatable, Sendable {
             resolvedFingerprint = nil
         }
         let direct = try normalizedDirect(relayURL: relayURL, token: token, e2eKey: e2eKey)
+        let enroll = try normalizedEnroll(ticket: ticket, port: enrollPort)
         return PairingPayload(
             version: version,
             label: resolvedLabel,
@@ -179,7 +199,9 @@ public struct PairingPayload: Equatable, Sendable {
             fingerprint: resolvedFingerprint,
             relayURL: direct?.url,
             token: direct?.token,
-            e2eKey: direct?.key
+            e2eKey: direct?.key,
+            ticket: enroll?.ticket,
+            enrollPort: enroll?.port
         )
     }
 
@@ -193,7 +215,9 @@ public struct PairingPayload: Equatable, Sendable {
         fingerprint: String?,
         relayURL: String?,
         token: String?,
-        e2eKey: String?
+        e2eKey: String?,
+        ticket: String?,
+        enrollPort: Int?
     ) {
         self.version = version
         self.label = label
@@ -205,6 +229,17 @@ public struct PairingPayload: Equatable, Sendable {
         self.relayURL = relayURL
         self.token = token
         self.e2eKey = e2eKey
+        self.ticket = ticket
+        self.enrollPort = enrollPort
+    }
+
+    private static func normalizedEnroll(ticket: String?, port: Int?) throws -> (ticket: String, port: Int)? {
+        let trimmed = ticket?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty && port == nil { return nil }
+        guard let room = RelayMaterial.normalizeToken(trimmed) else { throw PairingError.invalidTicket }
+        let resolved = port ?? defaultEnrollPort
+        guard (1...65535).contains(resolved) else { throw PairingError.invalidPort }
+        return (room, resolved)
     }
 
     private static func normalizedDirect(relayURL: String?, token: String?, e2eKey: String?) throws -> (url: String, token: String, key: String)? {
@@ -276,6 +311,8 @@ extension PairingPayload: Codable {
         case relayURL = "relay"
         case token
         case e2eKey = "e2e"
+        case ticket
+        case enrollPort = "enroll"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -290,6 +327,8 @@ extension PairingPayload: Codable {
         try container.encodeIfPresent(relayURL, forKey: .relayURL)
         try container.encodeIfPresent(token, forKey: .token)
         try container.encodeIfPresent(e2eKey, forKey: .e2eKey)
+        try container.encodeIfPresent(ticket, forKey: .ticket)
+        try container.encodeIfPresent(enrollPort, forKey: .enrollPort)
     }
 
     public init(from decoder: Decoder) throws {
@@ -304,7 +343,9 @@ extension PairingPayload: Codable {
             fingerprint: raw.fingerprint,
             relayURL: raw.relay,
             token: raw.token,
-            e2eKey: raw.e2e
+            e2eKey: raw.e2e,
+            ticket: raw.ticket,
+            enrollPort: raw.enroll
         )
     }
 }
@@ -320,6 +361,8 @@ private struct RawPayload: Decodable {
     var relay: String?
     var token: String?
     var e2e: String?
+    var ticket: String?
+    var enroll: Int?
 }
 
 public enum PairingError: Error, Equatable {
@@ -335,6 +378,7 @@ public enum PairingError: Error, Equatable {
     case invalidRelay
     case invalidToken
     case invalidE2EKey
+    case invalidTicket
     case tooLarge
 }
 
@@ -365,6 +409,8 @@ extension PairingError: LocalizedError {
             return "The direct relay token in the pairing code is not usable."
         case .invalidE2EKey:
             return "The direct connection key in the pairing code is not usable."
+        case .invalidTicket:
+            return "The one-time pairing ticket in the pairing code is not usable."
         case .tooLarge:
             return "That pairing code is too large."
         }

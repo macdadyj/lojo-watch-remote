@@ -131,6 +131,7 @@ if [[ "${WATCHREMOTE_SCREENSHOTS:-full}" == "dispatch" ]]; then
   shoot "${PHONE_UDID}" com.lojo.WatchRemote session dark iphone-session-dark.png
   shoot "${PHONE_UDID}" com.lojo.WatchRemote unpaired dark iphone-unpaired-dark.png
   shoot "${PHONE_UDID}" com.lojo.WatchRemote connected dark iphone-connected-dark.png
+  shoot "${PHONE_UDID}" com.lojo.WatchRemote ask dark iphone-ask-dark.png
   shoot "${PHONE_UDID}" com.lojo.WatchRemote compose dark iphone-compose-dark.png
   shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp compose dark watch-compose.png
   shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp mic dark watch-mic.png
@@ -147,6 +148,7 @@ shoot "${PHONE_UDID}" com.lojo.WatchRemote session dark iphone-session-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote hosts dark iphone-hosts-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote unpaired dark iphone-unpaired-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote connected dark iphone-connected-dark.png
+shoot "${PHONE_UDID}" com.lojo.WatchRemote ask dark iphone-ask-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote pair dark iphone-pair-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote compose dark iphone-compose-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote settings dark iphone-settings-dark.png
