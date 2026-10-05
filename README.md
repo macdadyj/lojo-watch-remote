@@ -34,7 +34,7 @@ Watch Remote is a client for your own computer. The iPhone stores the SSH key an
 
 **Sessions** lists recent tasks, with status as a shape and a word. **Computer**, when nothing is paired, shows **Pair your first computer**: run `watch-remote-pair`, scan the QR from the button at the top, and confirm the computer. The computer authorizes the iPhone while that window stays open. The banner says Not paired, Waiting for authorization, or Connected. Name, address, user, port, remove, paste, and the manual authorize command sit under **Advanced**. **Settings** chooses SSH, Relay, or Demo, the working directory, and the agent secret for the active computer.
 
-Approvals (Allow, Deny, Stop) go through `grok agent serve` inside the SSH tunnel. If that server is not running, the phone runs headless `grok -p … --output-format streaming-json` and cannot approve a tool. Interactive TUIs already open on the computer stay untouched.
+Approvals (Allow, Deny, Stop) go through the agent server inside the SSH tunnel. The phone key can only forward to `127.0.0.1:2419`. It cannot run a command. If `grok agent serve` is down, the computer runs headless `grok -p` itself and tasks cannot ask for approval. Interactive TUIs already open on the computer stay untouched.
 
 The design follows LOJO Networks: system fonts, grouped backgrounds, 18pt cards, a 0.06 hairline, and the teal `#0F8C94` / indigo `#262E78` gradient on icon tiles and primary buttons.
 

@@ -8,7 +8,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from watchremote_relay.adapters.acp import client_frame, pop_server_frame
+from watchremote_relay.adapters.acp import client_frame, handshake_request, pop_server_frame
 from watchremote_relay.adapters.cli import CLIAdapter
 from watchremote_relay.adapters.mock import MockAdapter
 from watchremote_relay.server import TokenStore, bind_address, build_adapter, configured_bind, main, make_handler
@@ -97,6 +97,15 @@ class RelayTests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_agent_secret_is_a_header_not_a_query(self) -> None:
+        request = handshake_request("example-secret", "127.0.0.1", 2419, "abc")
+        self.assertIn("GET /ws HTTP/1.1\r\n", request)
+        self.assertIn("Authorization: Bearer example-secret\r\n", request)
+        self.assertNotIn("server-key", request)
+        self.assertNotIn("?", request.split("\r\n", 1)[0])
+        with self.assertRaises(RuntimeError):
+            handshake_request("bad\nsecret", "127.0.0.1", 2419, "abc")
 
     def _state_path(self):
         directory = tempfile.mkdtemp()

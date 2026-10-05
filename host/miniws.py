@@ -73,7 +73,7 @@ class WSConn:
             self.buffer += chunk
 
 
-def connect(url: str, timeout: float = 10) -> WSConn:
+def connect(url: str, timeout: float = 10, headers: dict[str, str] | None = None) -> WSConn:
     parts = urlsplit(url.strip())
     scheme = (parts.scheme or "").lower()
     host = parts.hostname or ""
@@ -93,11 +93,13 @@ def connect(url: str, timeout: float = 10) -> WSConn:
         raise SocketError("The relay URL has to be wss.")
     key = base64.b64encode(os.urandom(16)).decode("ascii")
     host_header = host if port in {80, 443} else f"{host}:{port}"
+    extra = _header_block(headers)
     request = (
         f"GET {path} HTTP/1.1\r\n"
         f"Host: {host_header}\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
+        f"{extra}"
         f"Sec-WebSocket-Key: {key}\r\n"
         "Sec-WebSocket-Version: 13\r\n\r\n"
     )
@@ -118,6 +120,19 @@ def connect(url: str, timeout: float = 10) -> WSConn:
     conn.buffer = leftover
     sock.settimeout(timeout)
     return conn
+
+
+def _header_block(headers: dict[str, str] | None) -> str:
+    if not headers:
+        return ""
+    lines: list[str] = []
+    for name, value in headers.items():
+        if not name or any(ord(char) < 0x21 or ord(char) > 0x7E for char in name):
+            raise SocketError("A header name is not usable.")
+        if any(ord(char) < 0x20 or ord(char) > 0x7E for char in value):
+            raise SocketError("A header value is not usable.")
+        lines.append(f"{name}: {value}")
+    return "\r\n".join(lines) + "\r\n"
 
 
 def _parse(buffer: bytes) -> tuple[int, bytes, int] | None:

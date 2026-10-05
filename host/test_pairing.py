@@ -87,7 +87,12 @@ class PairingTests(unittest.TestCase):
             message = pairing.authorize_key(public, path)
             self.assertIn("127.0.0.1:2419", message)
             text = path.read_text(encoding="utf-8")
-            self.assertIn('restrict,port-forwarding,permitopen="127.0.0.1:2419"', text)
+            self.assertIn('permitopen="127.0.0.1:2419"', text)
+            self.assertIn('command="/bin/false"', text)
+            self.assertIn("no-pty", text)
+            self.assertTrue(pairing.exec_is_refused(text))
+            self.assertFalse(pairing.exec_is_refused('restrict,port-forwarding,permitopen="127.0.0.1:2419" ' + public))
+            self.assertNotIn("bash", text)
             self.assertIn(public, text)
             self.assertNotIn("PRIVATE", text)
             mode = stat.S_IMODE(path.stat().st_mode)
@@ -99,7 +104,8 @@ class PairingTests(unittest.TestCase):
             path.write_text(public + "\n", encoding="utf-8")
             pairing.authorize_key(f"watch-remote-authorize '{public}'", path)
             replaced = path.read_text(encoding="utf-8").strip()
-            self.assertTrue(replaced.startswith('restrict,port-forwarding,permitopen="127.0.0.1:2419" '))
+            self.assertTrue(replaced.startswith('restrict,port-forwarding,permitopen="127.0.0.1:2419",command="/bin/false",no-pty '))
+            self.assertTrue(pairing.exec_is_refused(replaced))
             self.assertEqual(replaced.count("AAAAB3NzaC1lZDI1NTE5AAAAIExamplePublicKeyPlaceholderOnly"), 1)
         with self.assertRaises(pairing.PairingError):
             pairing.parse_public_key("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n")
@@ -186,12 +192,17 @@ class PairingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             keys = Path(directory) / "authorized_keys"
             result: dict[str, str] = {}
+            ready = threading.Event()
 
             def run() -> None:
-                result["value"] = enroll.serve_enroll("127.0.0.1", port, ticket, keys, timeout=5)
+                try:
+                    result["value"] = enroll.serve_enroll("127.0.0.1", port, ticket, keys, timeout=30, ready=ready)
+                except Exception as exc:  # noqa: BLE001 — the assertion below reports it
+                    result["error"] = f"{type(exc).__name__}: {exc}"
 
             worker = threading.Thread(target=run, daemon=True)
             worker.start()
+            self.assertTrue(ready.wait(15), "listener did not become ready")
             bad = urllib.request.Request(
                 f"http://127.0.0.1:{port}/v1/enroll",
                 data=public.encode("utf-8"),
@@ -199,31 +210,111 @@ class PairingTests(unittest.TestCase):
                 method="POST",
             )
             refused = False
-            deadline = time.time() + 3
-            while time.time() < deadline and not refused:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and not refused:
                 try:
-                    urllib.request.urlopen(bad, timeout=1)
+                    urllib.request.urlopen(bad, timeout=10)
                 except urllib.error.HTTPError as error:
                     self.assertEqual(error.code, 401)
                     refused = True
-                except urllib.error.URLError:
+                except (urllib.error.URLError, TimeoutError, OSError):
                     time.sleep(0.05)
-            self.assertTrue(refused)
+            self.assertTrue(refused, "bad-ticket 401 was not received")
             good = urllib.request.Request(
                 f"http://127.0.0.1:{port}/v1/enroll",
                 data=public.encode("utf-8"),
                 headers={"Authorization": f"Bearer {ticket}"},
                 method="POST",
             )
-            with urllib.request.urlopen(good, timeout=2) as response:
+            with urllib.request.urlopen(good, timeout=10) as response:
                 self.assertEqual(response.status, 200)
                 self.assertIn(b'"ok":true', response.read())
             body = keys.read_text(encoding="utf-8")
             self.assertIn('permitopen="127.0.0.1:2419"', body)
+            self.assertIn('command="/bin/false"', body)
+            self.assertIn("no-pty", body)
+            self.assertTrue(pairing.exec_is_refused(body))
             self.assertEqual(body.count("ExamplePublicKeyPlaceholderOnly"), 1)
             self.assertNotIn(ticket, body)
-            worker.join(timeout=3)
+            worker.join(timeout=15)
+            self.assertNotIn("error", result)
             self.assertEqual(result.get("value"), "enrolled")
+
+    def test_non_ascii_bearer_counts_toward_the_failure_limit(self) -> None:
+        ticket = "roomtokenvalue0001"
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        with tempfile.TemporaryDirectory() as directory:
+            keys = Path(directory) / "authorized_keys"
+            result: dict[str, str] = {}
+            ready = threading.Event()
+
+            def run() -> None:
+                try:
+                    result["value"] = enroll.serve_enroll("127.0.0.1", port, ticket, keys, timeout=20, ready=ready)
+                except Exception as exc:  # noqa: BLE001 — the assertion below reports it
+                    result["error"] = f"{type(exc).__name__}: {exc}"
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            self.assertTrue(ready.wait(15), "listener did not become ready")
+            for _ in range(enroll.MAX_FAILURES):
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/v1/enroll",
+                    data=b"ssh-ed25519 AAAA",
+                    headers={"Authorization": "Bearer caf\u00e9"},
+                    method="POST",
+                )
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    urllib.request.urlopen(request, timeout=10)
+                self.assertEqual(caught.exception.code, 401)
+            worker.join(timeout=15)
+            self.assertFalse(worker.is_alive())
+            self.assertNotIn("error", result)
+            self.assertEqual(result.get("value"), "refused")
+            self.assertFalse(keys.exists())
+
+    def test_stalled_enroll_client_cannot_hold_the_listener(self) -> None:
+        self.assertEqual(enroll.SOCKET_TIMEOUT, 10)
+        ticket = "roomtokenvalue0001"
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        with tempfile.TemporaryDirectory() as directory:
+            keys = Path(directory) / "authorized_keys"
+            result: dict[str, str] = {}
+            ready = threading.Event()
+
+            def run() -> None:
+                result["value"] = enroll.serve_enroll(
+                    "127.0.0.1",
+                    port,
+                    ticket,
+                    keys,
+                    timeout=8,
+                    ready=ready,
+                    socket_timeout=1,
+                )
+
+            worker = threading.Thread(target=run, daemon=True)
+            worker.start()
+            self.assertTrue(ready.wait(15), "listener did not become ready")
+            stalled = socket.create_connection(("127.0.0.1", port), timeout=5)
+            stalled.sendall(b"POST /v1/enroll HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 50\r\n\r\n")
+            started = time.monotonic()
+            stalled.settimeout(5)
+            try:
+                stalled.recv(64)
+            except OSError:
+                pass
+            self.assertLess(time.monotonic() - started, 4)
+            stalled.close()
+            worker.join(timeout=12)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(result.get("value"), "expired")
 
 
 if __name__ == "__main__":

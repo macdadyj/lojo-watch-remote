@@ -216,7 +216,7 @@ struct SessionDetailView: View {
                         .accessibilityHint("Stops this task on the computer")
                 }
                 if !store.approvalsAvailable && store.mode == .ssh {
-                    Text("Command mode cannot ask before a tool runs. Start the agent server on the computer to approve from the watch.")
+                    Text("Approvals need the agent server on this computer. Tasks run there and cannot ask first until it is answering.")
                         .font(.footnote)
                         .foregroundStyle(LojoTheme.secondaryText)
                 }

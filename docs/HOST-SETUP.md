@@ -21,7 +21,7 @@ On the computer, install the scripts (python3 is required; `qrencode` is optiona
 install -d -m 755 ~/.local/bin
 install -m 755 /path/to/watch-remote/host/watch-remote-pair ~/.local/bin/watch-remote-pair
 install -m 755 /path/to/watch-remote/host/watch-remote-authorize ~/.local/bin/watch-remote-authorize
-install -m 644 /path/to/watch-remote/host/pairing.py /path/to/watch-remote/host/enroll.py /path/to/watch-remote/host/qrcodegen.py ~/.local/bin/
+install -m 644 /path/to/watch-remote/host/pairing.py /path/to/watch-remote/host/enroll.py /path/to/watch-remote/host/agentdoor.py /path/to/watch-remote/host/qrcodegen.py ~/.local/bin/
 ```
 
 `watch-remote-pair` reads the overlay address (the first address in `100.64.0.0/10`, or `~/.config/watch-remote/address`, or `--address`), the SSH user, the sshd port, the SSH host key fingerprint, and the agent secret from `~/.config/watch-remote/agent-secret`. It prints a QR and the `watchremote://pair?d=…` text. The QR is drawn with `qrencode` when that program is installed, and with the built-in generator otherwise (`host/qrcodegen.py`, MIT, Project Nayuki).
@@ -43,10 +43,10 @@ watch-remote-authorize 'ssh-ed25519 AAAA… watch-remote@iphone'
 That appends one line to `~/.ssh/authorized_keys`:
 
 ```text
-restrict,port-forwarding,permitopen="127.0.0.1:2419" ssh-ed25519 AAAA… watch-remote@iphone
+restrict,port-forwarding,permitopen="127.0.0.1:2419",command="/bin/false",no-pty ssh-ed25519 AAAA… watch-remote@iphone
 ```
 
-Running it again does not add a second line. It does not print or store a private key. `restrict` turns off forwarding, a PTY, and `~/.ssh/rc`. `port-forwarding` turns local and remote forwarding back on, and `permitopen` limits the local forward to the agent server. Shell exec still works, which is how the phone runs `grok` when the agent server is down.
+Running it again does not add a second line. It does not print or store a private key. `restrict` turns off forwarding, a PTY, and `~/.ssh/rc`. `port-forwarding` turns local and remote forwarding back on, and `permitopen` limits the local forward to the agent server. `command="/bin/false"` and `no-pty` refuse `ssh host '<cmd>'`. OpenSSH still allows the direct-tcpip channel to `127.0.0.1:2419`. The phone key cannot run a shell.
 
 You can save more than one computer. **Add computer**, **Scan pairing QR**, and **Paste pairing code** are on the iPhone. Rename with the name field and **Save computer**. **Remove this computer** drops that entry, its Keychain secret, and its saved host key. The Watch lists the computers when there are two or more.
 
@@ -96,7 +96,7 @@ systemctl --user enable --now watch-remote-agent.service
 loginctl enable-linger "$USER"
 ```
 
-`watch-remote-pair` reads this file into the QR. If you type the computer in by hand instead, paste the same secret into the iPhone’s Settings for that computer. It is stored in the Keychain. The phone sends it only as the WebSocket query inside the SSH tunnel (`/ws?server-key=…`).
+`watch-remote-pair` reads this file into the QR. If you type the computer in by hand instead, paste the same secret into the iPhone’s Settings for that computer. It is stored in the Keychain. The phone sends it only as `Authorization: Bearer` on the WebSocket inside the SSH tunnel (`GET /ws`). It is not a query parameter, so a proxy access log cannot record it from the URL.
 
 Check that nothing is published on the overlay:
 
@@ -108,19 +108,11 @@ You want `127.0.0.1:2419`, not an overlay address and not `0.0.0.0:2419`.
 
 ## What the phone runs
 
-When the agent server answers, the phone speaks ACP: `initialize`, `session/new`, `session/prompt`, `session/cancel`, and `x.ai/session/list`. Permission requests are answered on that same connection. `yoloMode` and `autoMode` are sent as false.
+The phone only opens a direct-tcpip channel to `127.0.0.1:2419` and speaks ACP: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `x.ai/session/list`, and `x.ai/session/usage`. Permission requests are answered on that same connection. `yoloMode` and `autoMode` are sent as false. Working-directory text, including `~`, is resolved by the agent door on the computer. The phone does not run a shell.
 
-If the agent server is down, or the secret is not saved, the phone falls back to one-shot commands over SSH exec:
+`watch-remote-agent` is that door. It listens on `127.0.0.1:2419`, checks `Authorization: Bearer`, and proxies to `grok agent serve` on `127.0.0.1:2420`. The phone key cannot forward to `2420`. If grok is not answering, the door itself runs headless `grok -p … --output-format streaming-json --no-auto-update --permission-mode dontAsk` and reports that approvals are unavailable. `--permission-mode dontAsk` is there so a missing TTY cannot hang and cannot auto-approve. Stopping a task cancels that process on the computer. The secret is not an argument and is not in the child environment.
 
-```bash
-grok -p '<prompt>' --cwd '<dir>' --output-format streaming-json --no-auto-update --permission-mode dontAsk
-grok sessions list
-grok usage <session-id>
-```
-
-`--permission-mode dontAsk` is there so a missing TTY cannot hang and cannot auto-approve. This fallback cannot approve or deny a tool. Kill the exec channel to stop it. `grok sessions list` prints a human table for the current directory (the phone `cd`s first). If you have a sample of that table and the columns differ from what the phone parses, the parser in `GrokOutput` is the place to tighten.
-
-Interactive `grok` TUIs already running on the computer are not remote-controllable. The Watch starts sessions through the agent server, or through the headless command above.
+Interactive `grok` TUIs already running on the computer are not remote-controllable. The Watch starts sessions through this agent channel.
 
 Your Grok login stays in `~/.grok` on the computer. The phone never reads it.
 

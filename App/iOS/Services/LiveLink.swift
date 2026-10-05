@@ -82,8 +82,12 @@ final class ACPPipe: @unchecked Sendable {
         var keyBytes = [UInt8](repeating: 0, count: 16)
         _ = SecRandomCopyBytes(kSecRandomDefault, keyBytes.count, &keyBytes)
         let key = Data(keyBytes).base64EncodedString()
-        let path = "/ws?server-key=\(WebSocketFramer.percentEncode(secret))"
-        guard await writer.write(WebSocketFramer.upgradeRequest(host: "127.0.0.1:\(OverlayPolicy.agentPort)", path: path, webSocketKey: key)) else {
+        guard await writer.write(WebSocketFramer.upgradeRequest(
+            host: "127.0.0.1:\(OverlayPolicy.agentPort)",
+            path: "/ws",
+            webSocketKey: key,
+            authorization: secret
+        )) else {
             pipe.fail(SSHClientError.disconnected("The agent connection closed."))
             throw SSHClientError.disconnected("The agent connection closed.")
         }
@@ -99,8 +103,18 @@ final class ACPPipe: @unchecked Sendable {
         writer.close()
     }
 
-    func initialize() async throws {
-        try await roundTrip(timeout: true) { $0.initialize() }
+    func initialize() async throws -> Bool {
+        let raw = try await roundTrip(timeout: true) { $0.initialize() }
+        return ACPCodec.approvalsAvailable(inResultJSON: raw)
+    }
+
+    func loadSession(sessionID: String, cwd: String) async throws {
+        _ = try await roundTrip(timeout: true) { $0.loadSession(sessionID: sessionID, cwd: cwd) }
+    }
+
+    func sessionUsage(sessionID: String) async throws -> String? {
+        let raw = try await roundTrip(timeout: true) { $0.sessionUsage(sessionID: sessionID) }
+        return GrokOutput.parseUsage(raw)
     }
 
     func listSessions() async throws -> [GrokSession] {
@@ -307,7 +321,6 @@ final class LiveLink {
     var statusLine = "Not connected"
     private var ssh: SSHConnection?
     private var pipe: ACPPipe?
-    private var execs: [String: ExecChannel] = [:]
     private var acpReady = false
     private var closing = false
     private let onEvent: (ACPInbound) -> Void
@@ -342,8 +355,6 @@ final class LiveLink {
         pipe = nil
         ssh?.close()
         ssh = nil
-        execs.values.forEach { $0.close() }
-        execs.removeAll()
         acpReady = false
         approvalsAvailable = false
         statusLine = "Not connected"
@@ -354,15 +365,13 @@ final class LiveLink {
         guard !closing, ssh != nil || pipe != nil else { return }
         pipe = nil
         ssh = nil
-        execs.values.forEach { $0.close() }
-        execs.removeAll()
         acpReady = false
         approvalsAvailable = false
         statusLine = "Not connected"
         onDropped()
     }
 
-    /// The SSH session is still up, but the agent channel is not. The next task uses headless mode.
+    /// The SSH session is still up, but the agent channel is not. Tasks stay on that channel.
     private func noteAgentClosed() {
         guard pipe != nil || acpReady || approvalsAvailable else { return }
         pipe?.retire()
@@ -370,7 +379,7 @@ final class LiveLink {
         acpReady = false
         approvalsAvailable = false
         if ssh?.isActive == true {
-            statusLine = "SSH connected. Command mode is on, so tasks cannot ask for approval."
+            statusLine = "SSH connected. The agent server is not answering."
         } else {
             statusLine = "Not connected"
         }
@@ -416,64 +425,70 @@ final class LiveLink {
             }, onDead: { [weak self] in
                 Task { @MainActor in self?.noteAgentClosed() }
             })
-            try await opened.initialize()
+            let approvals = try await opened.initialize()
             pipe = opened
             acpReady = true
-            approvalsAvailable = true
-            statusLine = "SSH connected. Approvals go through the agent server."
+            approvalsAvailable = approvals
+            statusLine = approvals
+                ? "SSH connected. Approvals go through the agent server."
+                : "SSH connected. Tasks run on the computer and cannot ask for approval."
         } catch {
             pipe = nil
             acpReady = false
             approvalsAvailable = false
-            statusLine = "SSH connected. Command mode is on, so tasks cannot ask for approval."
+            statusLine = "SSH connected. The agent server is not answering."
         }
     }
 
     func list(cwd: String?) async throws -> [GrokSession] {
-        let resolved = try await resolveCwd(cwd)
-        if agentIsReady, let pipe {
-            do {
-                let listed = try await pipe.listSessions()
-                if !listed.isEmpty { return listed }
-            } catch {
-                if pipe.isUsable == false { noteAgentClosed() }
-            }
+        let pipe = try requirePipe()
+        do {
+            return try await pipe.listSessions()
+        } catch {
+            if pipe.isUsable == false { noteAgentClosed() }
+            throw error
         }
-        let output = try await collect(GrokCommands.sessionsList(cwd: resolved))
-        return GrokOutput.parseSessionsList(output)
     }
 
     func start(localID: String, prompt: String, cwd: String?) async throws -> String {
-        let resolved = try await resolveCwd(cwd)
-        if agentIsReady, let pipe {
+        let pipe = try requirePipe()
+        let directory = agentCwd(cwd)
+        let sessionID: String
+        do {
+            sessionID = try await pipe.newSession(cwd: directory)
+        } catch {
+            if pipe.isUsable == false { noteAgentClosed() }
+            throw error
+        }
+        Task { @MainActor in
             do {
-                let sessionID = try await pipe.newSession(cwd: resolved)
-                Task { @MainActor in
-                    do {
-                        _ = try await pipe.prompt(sessionID: sessionID, text: prompt)
-                        self.onCLI(sessionID, .end(sessionID: sessionID, stopReason: "end_turn", usage: nil))
-                    } catch {
-                        if !pipe.isUsable { self.noteAgentClosed() }
-                        self.onCLI(sessionID, .error(error.localizedDescription))
-                    }
-                }
-                return sessionID
+                let raw = try await pipe.prompt(sessionID: sessionID, text: prompt)
+                self.onCLI(sessionID, .end(sessionID: sessionID, stopReason: GrokOutput.stopReason(in: raw), usage: GrokOutput.parseUsage(raw)))
             } catch {
-                if !pipe.isUsable { noteAgentClosed() }
+                if !pipe.isUsable { self.noteAgentClosed() }
+                self.onCLI(sessionID, .error(error.localizedDescription))
             }
         }
-        let command = GrokCommands.headless(prompt: prompt, cwd: resolved, resume: nil)
-        Task { @MainActor in
-            await self.streamCLI(localID: localID, command: command)
-        }
-        return localID
+        return sessionID
     }
 
     func resumePrompt(sessionID: String, prompt: String, cwd: String?) async throws {
-        let resolved = try await resolveCwd(cwd)
-        let command = GrokCommands.headless(prompt: prompt, cwd: resolved, resume: sessionID)
+        let pipe = try requirePipe()
+        let directory = agentCwd(cwd)
+        do {
+            try await pipe.loadSession(sessionID: sessionID, cwd: directory)
+        } catch {
+            if pipe.isUsable == false { noteAgentClosed() }
+            throw error
+        }
         Task { @MainActor in
-            await self.streamCLI(localID: sessionID, command: command)
+            do {
+                let raw = try await pipe.prompt(sessionID: sessionID, text: prompt)
+                self.onCLI(sessionID, .end(sessionID: sessionID, stopReason: GrokOutput.stopReason(in: raw), usage: GrokOutput.parseUsage(raw)))
+            } catch {
+                if !pipe.isUsable { self.noteAgentClosed() }
+                self.onCLI(sessionID, .error(error.localizedDescription))
+            }
         }
     }
 
@@ -488,84 +503,23 @@ final class LiveLink {
     }
 
     func stop(sessionID: String) {
-        if agentIsReady {
-            pipe?.cancel(sessionID: sessionID)
-        }
-        execs[sessionID]?.close()
-        execs[sessionID] = nil
+        pipe?.cancel(sessionID: sessionID)
     }
 
     func usage(sessionID: String) async -> String? {
-        guard let output = try? await collect(GrokCommands.usage(sessionID: sessionID)) else { return nil }
-        return GrokOutput.parseUsage(output)
+        guard agentIsReady, let pipe else { return nil }
+        return try? await pipe.sessionUsage(sessionID: sessionID)
     }
 
-    private func streamCLI(localID: String, command: String) async {
-        guard let ssh else { return }
-        let lines = LineBuffer()
-        do {
-            let code = try await ssh.execStream(command, onChunk: { chunk in
-                guard case .stdout(let data) = chunk else { return }
-                let ready = lines.append(data)
-                for line in ready {
-                    if let event = GrokOutput.parseStreamingLine(line) {
-                        Task { @MainActor in self.onCLI(localID, event) }
-                    }
-                }
-            }, onReady: { channel in
-                Task { @MainActor in self.execs[localID] = channel }
-            })
-            if code != 0 {
-                onCLI(localID, .error("The task ended with status \(code)."))
-            }
-        } catch {
-            onCLI(localID, .error(error.localizedDescription))
+    private func requirePipe() throws -> ACPPipe {
+        guard agentIsReady, let pipe else {
+            throw SSHClientError.disconnected("The agent server on this computer is not answering.")
         }
-        execs[localID] = nil
+        return pipe
     }
 
-    private func resolveCwd(_ cwd: String?) async throws -> String {
-        let trimmed = cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmed.hasPrefix("/") { return trimmed }
-        if trimmed.hasPrefix("~") {
-            let home = try await collect("printf %s \"$HOME\"").trimmingCharacters(in: .whitespacesAndNewlines)
-            return home + trimmed.dropFirst()
-        }
-        let pwd = try await collect("pwd").trimmingCharacters(in: .whitespacesAndNewlines)
-        return pwd.isEmpty ? "/" : pwd
-    }
-
-    private func collect(_ command: String) async throws -> String {
-        guard let ssh else { throw SSHClientError.disconnected("SSH is not connected.") }
-        var stdout = Data()
-        var stderr = Data()
-        let code = try await ssh.exec(command) { chunk in
-            switch chunk {
-            case .stdout(let data): stdout.append(data)
-            case .stderr(let data): stderr.append(data)
-            }
-        }
-        if code != 0, stdout.isEmpty {
-            let message = String(decoding: stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            throw SSHClientError.disconnected(message.isEmpty ? "Command failed (\(code))." : message)
-        }
-        return String(decoding: stdout, as: UTF8.self)
-    }
-}
-
-final class LineBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var pending = ""
-
-    func append(_ data: Data) -> [String] {
-        lock.lock()
-        defer { lock.unlock() }
-        pending += String(decoding: data, as: UTF8.self)
-        var lines: [String] = []
-        while let range = pending.range(of: "\n") {
-            lines.append(String(pending[..<range.lowerBound]))
-            pending.removeSubrange(..<range.upperBound)
-        }
-        return lines
+    /// The computer resolves `~` and an empty directory. The phone does not run a shell to find them.
+    private func agentCwd(_ cwd: String?) -> String {
+        cwd?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 }

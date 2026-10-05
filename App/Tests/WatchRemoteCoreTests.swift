@@ -120,6 +120,16 @@ final class WatchRemoteCoreTests: XCTestCase {
             return XCTFail("expected update")
         }
         XCTAssertEqual(event, .text("Done"))
+        let (_, loadJSON) = codec.loadSession(sessionID: "abc", cwd: "/work")
+        XCTAssertTrue(loadJSON.contains("session/load"))
+        XCTAssertFalse(loadJSON.contains("bash"))
+        XCTAssertFalse(loadJSON.contains("server-key"))
+        let nested = #"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn","usage":{"input_tokens":3,"output_tokens":4}}}"#
+        XCTAssertEqual(GrokOutput.parseUsage(nested), "3 in · 4 out")
+        let plain = #"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#
+        XCTAssertTrue(ACPCodec.approvalsAvailable(inResultJSON: plain))
+        let headless = #"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"_meta":{"approvals":false}}}"#
+        XCTAssertFalse(ACPCodec.approvalsAvailable(inResultJSON: headless))
     }
 
     func testWebSocketFramesAndUpgrade() {
@@ -140,6 +150,11 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(encoded[0], UInt8(ascii: "H") ^ 9)
         XCTAssertEqual(encoded[1], UInt8(ascii: "i") ^ 8)
         XCTAssertEqual(WebSocketFramer.percentEncode("a b"), "a%20b")
+        let upgrade = String(decoding: WebSocketFramer.upgradeRequest(host: "127.0.0.1:2419", path: "/ws", webSocketKey: "abc", authorization: "example-secret"), as: UTF8.self)
+        XCTAssertTrue(upgrade.contains("GET /ws HTTP/1.1"))
+        XCTAssertTrue(upgrade.contains("Authorization: Bearer example-secret"))
+        XCTAssertFalse(upgrade.contains("server-key"))
+        XCTAssertFalse(upgrade.contains("?"))
     }
 
     func testKnownHostsAndAuthorizeCommand() {
@@ -194,14 +209,14 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertTrue(decoded.summary.contains("Agent secret included."))
         XCTAssertTrue(decoded.summary.contains(fingerprint))
         let golden = "eyJhZGRyZXNzIjoiMTAwLjY0LjAuMiIsImZpbmdlcnByaW50IjoiU0hBMjU2OkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEiLCJsYWJlbCI6ImV4YW1wbGUtaG9zdCIsInBvcnQiOjIyLCJzZWNyZXQiOiJleGFtcGxlLXNlY3JldCIsInVzZXIiOiJ1c2VyIiwidiI6MX0"
-        XCTAssertEqual(try payload.token(), golden)
+        XCTAssertEqual(try payload.encodedToken(), golden)
         XCTAssertEqual(try PairingPayload.decode(golden).secret, "example-secret")
 
         let bare = try PairingPayload(label: " example-host ", address: "100.64.0.1", user: "user", port: 22)
         XCTAssertNil(bare.secret)
         XCTAssertNil(bare.fingerprint)
         XCTAssertEqual(
-            try bare.token(),
+            try bare.encodedToken(),
             "eyJhZGRyZXNzIjoiMTAwLjY0LjAuMSIsImxhYmVsIjoiZXhhbXBsZS1ob3N0IiwicG9ydCI6MjIsInVzZXIiOiJ1c2VyIiwidiI6MX0"
         )
         let json = #"{"v":1,"user":"user","port":22,"address":"100.127.255.254","label":"example-host"}"#

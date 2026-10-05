@@ -41,6 +41,7 @@ jobs:
         run: |
           python3 host/test_relaybox.py
           python3 host/test_outbound.py
+          python3 host/test_agentdoor.py
           node --test relay/outbound/test.mjs
           scripts/privacy-scan.sh
 
@@ -152,6 +153,7 @@ jobs:
         run: |
           python3 host/test_relaybox.py
           python3 host/test_outbound.py
+          python3 host/test_agentdoor.py
           node --test relay/outbound/test.mjs
           scripts/privacy-scan.sh
 
