@@ -67,6 +67,7 @@ enum KeyStoreError: Error, LocalizedError, CustomStringConvertible {
     case status(OSStatus)
     case missing
     case secureEnclaveUnavailable
+    case unusablePublicKey
 
     var errorDescription: String? { description }
 
@@ -75,6 +76,7 @@ enum KeyStoreError: Error, LocalizedError, CustomStringConvertible {
         case .status(let status): return "Keychain error \(status)"
         case .missing: return "That secret is not in the Keychain"
         case .secureEnclaveUnavailable: return "Secure Enclave is not available on this device"
+        case .unusablePublicKey: return "The public key could not be encoded."
         }
     }
 }
@@ -87,7 +89,13 @@ final class KeyStore: ObservableObject {
     init(directory: URL) {
         self.directory = directory
         let url = directory.appendingPathComponent("phone-key.json")
-        if let data = try? Data(contentsOf: url), let saved = try? JSONDecoder().decode(PhoneKey.self, from: data) {
+        if let data = try? Data(contentsOf: url), var saved = try? JSONDecoder().decode(PhoneKey.self, from: data) {
+            if let fixed = OpenSSHPublicKey.canonical(saved.publicKey), fixed != saved.publicKey {
+                saved.publicKey = fixed
+                if let encoded = try? JSONEncoder().encode(saved) {
+                    try? encoded.write(to: url, options: [.atomic, .completeFileProtection])
+                }
+            }
             key = saved
         }
     }
@@ -96,8 +104,10 @@ final class KeyStore: ObservableObject {
 
     func generateEd25519() throws {
         let raw = Curve25519.Signing.PrivateKey()
-        let ssh = NIOSSHPrivateKey(ed25519Key: raw)
-        try store(kind: .ed25519, secret: raw.rawRepresentation, ssh: ssh, label: "Watch Remote")
+        guard let line = OpenSSHPublicKey.ed25519(rawPublicKey: raw.publicKey.rawRepresentation) else {
+            throw KeyStoreError.unusablePublicKey
+        }
+        try store(kind: .ed25519, secret: raw.rawRepresentation, publicKeyLine: line, label: "Watch Remote")
     }
 
     func generateSecureEnclave() throws {
@@ -110,7 +120,8 @@ final class KeyStore: ObservableObject {
         }
         let enclave = try SecureEnclave.P256.Signing.PrivateKey(accessControl: access)
         let ssh = NIOSSHPrivateKey(secureEnclaveP256Key: enclave)
-        try store(kind: .secureEnclaveP256, secret: enclave.dataRepresentation, ssh: ssh, label: "Watch Remote")
+        let formatted = String(openSSHPublicKey: ssh.publicKey) + " " + OpenSSHPublicKey.comment
+        try store(kind: .secureEnclaveP256, secret: enclave.dataRepresentation, publicKeyLine: formatted, label: "Watch Remote")
     }
 
     func privateKey() throws -> NIOSSHPrivateKey {
@@ -138,13 +149,14 @@ final class KeyStore: ObservableObject {
         KeychainStore.delete(service: KeychainStore.secretService, account: account)
     }
 
-    private func store(kind: PhoneKey.Kind, secret: Data, ssh: NIOSSHPrivateKey, label: String) throws {
+    private func store(kind: PhoneKey.Kind, secret: Data, publicKeyLine: String, label: String) throws {
+        guard let line = OpenSSHPublicKey.canonical(publicKeyLine) else { throw KeyStoreError.unusablePublicKey }
         let id = UUID().uuidString
         let record = PhoneKey(
             id: id,
             label: label,
             kind: kind,
-            publicKey: String(openSSHPublicKey: ssh.publicKey) + " watch-remote@iphone",
+            publicKey: line,
             created: Date()
         )
         try KeychainStore.write(secret, service: KeychainStore.keyService, account: id)

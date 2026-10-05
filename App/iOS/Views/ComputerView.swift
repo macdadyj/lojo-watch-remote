@@ -190,9 +190,7 @@ struct ComputerView: View {
                 .font(.subheadline)
                 .foregroundStyle(LojoTheme.secondaryText)
             if let key = store.keys.key {
-                Text(AuthorizeCommand.text(publicKey: key.publicKey))
-                    .font(.caption.monospaced())
-                    .textSelection(.enabled)
+                UnbrokenMonospace(text: AuthorizeCommand.text(publicKey: key.publicKey))
             }
             if let copyNote {
                 Text(copyNote)
@@ -362,9 +360,7 @@ struct KeyView: View {
                         Text(key.fingerprint)
                             .font(.footnote.monospaced())
                             .textSelection(.enabled)
-                        Text(key.publicKey)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
+                        UnbrokenMonospace(text: OpenSSHPublicKey.canonical(key.publicKey) ?? key.publicKey)
                     }
                     .lojoCard()
                     if let image = QRCode.image(key.publicKey) {
@@ -377,16 +373,14 @@ struct KeyView: View {
                             .accessibilityLabel("QR code of the public key")
                     }
                     Button("Copy public key") {
-                        UIPasteboard.general.string = key.publicKey
+                        UIPasteboard.general.string = OpenSSHPublicKey.canonical(key.publicKey) ?? key.publicKey
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     Button("Copy authorize command") {
                         UIPasteboard.general.string = AuthorizeCommand.text(publicKey: key.publicKey)
                     }
                     .buttonStyle(QuietButtonStyle())
-                    Text(AuthorizeCommand.text(publicKey: key.publicKey))
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
+                    UnbrokenMonospace(text: AuthorizeCommand.text(publicKey: key.publicKey))
                     Text("On the computer, as \(store.host.username), run that command once. It adds this public key and does not print the private key.")
                         .font(.footnote)
                         .foregroundStyle(LojoTheme.secondaryText)
@@ -499,5 +493,20 @@ struct TrustView: View {
             return "This fingerprint matches the pairing code. Confirm it before connecting."
         }
         return "Check this fingerprint against the computer before trusting it."
+    }
+}
+
+/// One line, scrolled sideways. A wrapped label hyphenates the blob and the selection copies that hyphen.
+private struct UnbrokenMonospace: View {
+    var text: String
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Text(text)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
     }
 }

@@ -73,8 +73,10 @@ public struct KnownHosts: Equatable, Sendable {
 
 public enum AuthorizeCommand {
     /// Run on the computer. `watch-remote-authorize` writes the restricted `authorized_keys` line.
+    /// The key is one standard-base64 line. Wrap hyphens and URL-safe characters are repaired first.
     public static func text(publicKey: String) -> String {
-        let key = ShellQuoting.singleQuote(publicKey.trimmingCharacters(in: .whitespacesAndNewlines))
+        let line = OpenSSHPublicKey.canonical(publicKey) ?? publicKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = ShellQuoting.singleQuote(line)
         return "watch-remote-authorize \(key)"
     }
 }

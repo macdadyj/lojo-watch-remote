@@ -176,6 +176,45 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(command, "watch-remote-authorize 'ssh-ed25519 AAAA watch-remote@iphone'")
         XCTAssertFalse(command.contains("PRIVATE"))
         XCTAssertFalse(command.contains("authorized_keys"))
+        let raw = Data([
+            0x03, 0xa1, 0x07, 0xbf, 0xf3, 0xce, 0x10, 0xbe, 0x1d, 0x70, 0xdd, 0x18, 0xe7, 0x4b, 0xc0, 0x99,
+            0x67, 0xe4, 0xd6, 0x30, 0x9b, 0xa5, 0x0d, 0x5f, 0x1d, 0xdc, 0x86, 0x64, 0x12, 0x55, 0x31, 0xb8,
+        ])
+        let line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4 watch-remote@iphone"
+        XCTAssertEqual(OpenSSHPublicKey.ed25519(rawPublicKey: raw), line)
+        let blob = line.split(separator: " ")[1]
+        XCTAssertFalse(blob.contains("-"))
+        XCTAssertFalse(blob.contains("_"))
+        XCTAssertTrue(blob.contains("+"))
+        XCTAssertTrue(blob.contains("/"))
+        XCTAssertFalse(line.hasSuffix("/"))
+        let authorize = AuthorizeCommand.text(publicKey: line)
+        XCTAssertEqual(authorize, "watch-remote-authorize '\(line)'")
+        XCTAssertFalse(authorize.contains("\n"))
+        let urlSafe = line.replacingOccurrences(
+            of: "AAAAC3NzaC1lZDI1NTE5AAAAIAOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4",
+            with: "AAAAC3NzaC1lZDI1NTE5AAAAIAOhB7_zzhC-HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4"
+        )
+        let wrapped = line.replacingOccurrences(of: "HXDdGOdLw", with: "HXDd-\nGOdLw")
+        let partial = line.replacingOccurrences(of: "zzhC+", with: "zzhC-")
+        let inserted = line.replacingOccurrences(of: "HXDdGOd", with: "HXDd-GOd")
+        XCTAssertEqual(OpenSSHPublicKey.canonical(urlSafe), line)
+        XCTAssertEqual(OpenSSHPublicKey.canonical(wrapped), line)
+        XCTAssertEqual(OpenSSHPublicKey.canonical(partial), line)
+        XCTAssertNotEqual(OpenSSHPublicKey.canonical(inserted), line)
+        XCTAssertEqual(AuthorizeCommand.text(publicKey: partial), authorize)
+        let enroll = EnrollHTTP.request(host: "100.64.0.2", port: 2478, ticket: "roomtokenvalue0001", publicKey: line)
+        let enrollText = String(data: enroll ?? Data(), encoding: .utf8) ?? ""
+        XCTAssertTrue(enrollText.hasPrefix("POST /v1/enroll HTTP/1.1\r\n"))
+        XCTAssertTrue(enrollText.contains("Authorization: Bearer roomtokenvalue0001\r\n"))
+        XCTAssertTrue(enrollText.contains("\r\n\r\n\(line)"))
+        XCTAssertFalse(enrollText.contains("http://"))
+        XCTAssertNil(EnrollHTTP.request(host: "100.64.0.2", port: 2478, ticket: "bad\nticket", publicKey: line))
+        let ok = Data("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{\"ok\":true}\n".utf8)
+        XCTAssertEqual(EnrollHTTP.response(from: ok)?.status, 200)
+        XCTAssertTrue(EnrollHTTP.response(from: ok)?.body.contains("\"ok\":true") ?? false)
+        let refused = Data("HTTP/1.1 401 Unauthorized\r\nContent-Length: 8\r\n\r\nRefused\n".utf8)
+        XCTAssertEqual(EnrollHTTP.response(from: refused)?.status, 401)
         XCTAssertEqual(SSHFingerprint.sha256Base64(of: Data()), "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU")
     }
 
