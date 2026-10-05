@@ -287,9 +287,6 @@ extension PairingError: LocalizedError {
             return "The agent secret in the pairing code is not usable."
         case .tooLarge:
             return "That pairing code is too large."
-        default:
-            let unknown: Never = self
-            return unknown
         }
     }
 }
