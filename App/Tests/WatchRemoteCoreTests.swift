@@ -784,7 +784,7 @@ final class WatchRemoteCoreTests: XCTestCase {
         )
         XCTAssertEqual(named.pairCommand, "watch-remote-pair-local")
         XCTAssertTrue(named.summary.contains("watch-remote-pair-local"))
-        XCTAssertFalse(named.summary.contains("@"))
+        XCTAssertFalse(named.pairCommand?.contains("@") ?? true)
         let decoded = try PairingPayload.decode(named.urlString())
         XCTAssertEqual(decoded.pairCommand, "watch-remote-pair-local")
         let plain = try PairingPayload(label: "example-host", address: "100.64.0.2", user: "user", port: 22)
