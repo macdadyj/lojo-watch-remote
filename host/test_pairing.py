@@ -192,6 +192,8 @@ class PairingTests(unittest.TestCase):
 
             worker = threading.Thread(target=run, daemon=True)
             worker.start()
+            # macOS runners can send urllib through a system proxy. That never reaches this listener.
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             bad = urllib.request.Request(
                 f"http://127.0.0.1:{port}/v1/enroll",
                 data=public.encode("utf-8"),
@@ -202,7 +204,7 @@ class PairingTests(unittest.TestCase):
             deadline = time.time() + 3
             while time.time() < deadline and not refused:
                 try:
-                    urllib.request.urlopen(bad, timeout=1)
+                    opener.open(bad, timeout=1)
                 except urllib.error.HTTPError as error:
                     self.assertEqual(error.code, 401)
                     refused = True
@@ -215,7 +217,7 @@ class PairingTests(unittest.TestCase):
                 headers={"Authorization": f"Bearer {ticket}"},
                 method="POST",
             )
-            with urllib.request.urlopen(good, timeout=2) as response:
+            with opener.open(good, timeout=2) as response:
                 self.assertEqual(response.status, 200)
                 self.assertIn(b'"ok":true', response.read())
             body = keys.read_text(encoding="utf-8")
