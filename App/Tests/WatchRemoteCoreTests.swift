@@ -647,7 +647,7 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertTrue(spoken?.text.hasSuffix("…") ?? false)
     }
 
-    func testHandsFreeSilenceSendsWithoutDoneAndSpokenApprovalsStayTwoStep() {
+    func testHandsFreeSilenceSendsWithoutDoneAndSpokenApprovalsStayTwoStep() throws {
         var detector = VoiceEndpointDetector(configuration: VoiceEndpointDetector.Configuration(
             threshold: 0.02,
             onset: 0.1,
@@ -688,7 +688,8 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(capture.append([1, 2], hearingSpeech: false), [])
         XCTAssertEqual(capture.append([3, 4, 5, 6], hearingSpeech: true), [[1, 2, 3, 4]])
         XCTAssertEqual(capture.finish(), [5, 6])
-        XCTAssertTrue(VoiceCaptureBuffer(prerollFrames: 4, chunkFrames: 4).append([9], hearingSpeech: false).isEmpty)
+        var silent = VoiceCaptureBuffer(prerollFrames: 4, chunkFrames: 4)
+        XCTAssertTrue(silent.append([9], hearingSpeech: false).isEmpty)
 
         let samples: [Int16] = [0, 16_384, -16_384]
         let packet = VoicePacket.audio(id: "utterance", sequence: 2, samples: samples, isLast: true)
