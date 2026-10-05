@@ -27,6 +27,8 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Watch Remote turns what you say on Apple Watch into a task or an approval.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Watch Remote reaches your computer on your private network.</string>
 	<key>NSCameraUsageDescription</key>

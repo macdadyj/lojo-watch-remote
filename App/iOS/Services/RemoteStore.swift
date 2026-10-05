@@ -1181,11 +1181,20 @@ final class PhoneBridge: NSObject, WCSessionDelegate {
         deliver(message)
     }
 
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        deliver(message)
+        replyHandler([:])
+    }
+
     func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
         deliver(userInfo)
     }
 
     private func deliver(_ message: [String: Any]) {
+        if let voice = message["voice"] as? String {
+            WatchSpeechRelay.shared.accept(voice)
+            return
+        }
         guard let payload = message["command"] as? String, let command = LinkCodec.decodeCommand(payload) else { return }
         Task { @MainActor in self.onCommand?(command) }
     }

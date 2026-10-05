@@ -29,7 +29,18 @@ final class WatchModel: ObservableObject {
     @Published var voiceNoteSessionID: String?
     @Published var voiceModeActive = false
     @Published var voiceLine = ""
+    @Published var voiceStatus = ""
+    @Published var voiceLog: [String] = []
     var heldVoiceTask: String?
+    let capture = WatchVoiceCapture()
+    var prepareID: String?
+    var expectID: String?
+    var speakingReply = false
+    var dictationPresented = false
+    var appIsActive = false
+    var hasLiveSnapshot = false
+    var declinedVoicePermissionID: String?
+    var spokenPermissionIDs = Set<String>()
     private let bridge = WatchBridge()
     private let direct = DirectSession()
     private var pendingPrompt: String?
@@ -62,6 +73,7 @@ final class WatchModel: ObservableObject {
             if let snapshot {
                 let previous = Set(self.snapshot.sessions.compactMap(\.permission?.id))
                 let arrived = Set(snapshot.sessions.compactMap(\.permission?.id)).subtracting(previous)
+                self.hasLiveSnapshot = true
                 self.snapshot = snapshot
                 if !arrived.isEmpty { WatchFeedback.notification() }
             }
@@ -72,6 +84,32 @@ final class WatchModel: ObservableObject {
         }
         VoiceHandoff.handler = { [weak self] prompt in
             self?.submitSpokenTask(prompt)
+        }
+        VoiceInbox.handler = { [weak self] text in
+            self?.receiveVoice(text)
+        }
+        capture.onPacket = { packet in
+            WatchVoiceLink.send(packet)
+        }
+        capture.onBegan = { [weak self] id in
+            self?.expectID = id
+            self?.voiceStatus = "Hearing you"
+        }
+        capture.onEnded = { [weak self] id in
+            self?.voiceStatus = "Sending"
+            self?.scheduleTranscriptTimeout(id)
+        }
+        capture.onEmpty = { [weak self] in
+            self?.voiceStatus = "Listening"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                self?.armListener()
+            }
+        }
+        capture.onPhase = { [weak self] text in
+            self?.voiceStatus = text
+        }
+        capture.onFailed = { [weak self] in
+            self?.fallBackToDictation(VoiceSpeechCopy.micUnavailable)
         }
         if forcedScreen == nil, let pending = VoiceHandoff.takePending() {
             submitSpokenTask(pending)
@@ -294,6 +332,20 @@ final class WatchBridge: NSObject, WCSessionDelegate {
         let snapshot = decode(applicationContext)
         let direct = applicationContext["direct"] as? String
         Task { @MainActor in self.onUpdate?(snapshot, session.isReachable, direct) }
+    }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
+        deliverVoice(message)
+    }
+
+    func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
+        deliverVoice(message)
+        replyHandler([:])
+    }
+
+    private func deliverVoice(_ message: [String: Any]) {
+        guard let voice = message["voice"] as? String else { return }
+        Task { @MainActor in VoiceInbox.handler?(voice) }
     }
 
     private func decode(_ context: [String: Any]) -> PhoneSnapshot? {

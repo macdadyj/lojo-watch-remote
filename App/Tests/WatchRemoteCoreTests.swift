@@ -646,4 +646,111 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(spoken?.text.count ?? 0, 280)
         XCTAssertTrue(spoken?.text.hasSuffix("…") ?? false)
     }
+
+    func testHandsFreeSilenceSendsWithoutDoneAndSpokenApprovalsStayTwoStep() {
+        var detector = VoiceEndpointDetector(configuration: VoiceEndpointDetector.Configuration(
+            threshold: 0.02,
+            onset: 0.1,
+            silence: 0.5,
+            minimumSpeech: 0.2,
+            maximumSpeech: 1
+        ))
+        XCTAssertNil(detector.observe(rms: 0, at: 0.4))
+        XCTAssertNil(detector.observe(rms: 0.01, at: 0.45))
+        XCTAssertNil(detector.observe(rms: 0.2, at: 0.5))
+        let began = try XCTUnwrap(detector.observe(rms: 0.2, at: 0.6))
+        XCTAssertEqual(began, .began)
+        XCTAssertFalse(VoiceHandsFreePolicy.shouldSend(after: began))
+        XCTAssertNil(detector.observe(rms: 0.2, at: 0.9))
+        XCTAssertNil(detector.observe(rms: 0, at: 1.2))
+        let ended = try XCTUnwrap(detector.observe(rms: 0, at: 1.4))
+        XCTAssertEqual(ended, .ended(.silence))
+        XCTAssertTrue(VoiceHandsFreePolicy.shouldSend(after: ended))
+
+        var limited = VoiceEndpointDetector(configuration: VoiceEndpointDetector.Configuration(
+            threshold: 0.02,
+            onset: 0,
+            silence: 10,
+            minimumSpeech: 0,
+            maximumSpeech: 1
+        ))
+        XCTAssertEqual(limited.observe(rms: 0.2, at: 0), .began)
+        XCTAssertEqual(limited.observe(rms: 0.2, at: 1), .ended(.maximum))
+        XCTAssertEqual(limited.phase, .idle)
+        XCTAssertNil(limited.observe(rms: 0, at: 1.2))
+
+        XCTAssertEqual(VoiceEndpointDetector.Configuration.handsFree.silence, 0.65)
+        XCTAssertNil(VoiceTranscriptGate.commandText("stop", isFinal: false))
+        XCTAssertNil(VoiceTranscriptGate.commandText("   ", isFinal: true))
+        XCTAssertEqual(VoiceTranscriptGate.commandText("  stop the task  ", isFinal: true), "stop the task")
+
+        var capture = VoiceCaptureBuffer(prerollFrames: 4, chunkFrames: 4)
+        XCTAssertEqual(capture.append([1, 2], hearingSpeech: false), [])
+        XCTAssertEqual(capture.append([3, 4, 5, 6], hearingSpeech: true), [[1, 2, 3, 4]])
+        XCTAssertEqual(capture.finish(), [5, 6])
+        XCTAssertTrue(VoiceCaptureBuffer(prerollFrames: 4, chunkFrames: 4).append([9], hearingSpeech: false).isEmpty)
+
+        let samples: [Int16] = [0, 16_384, -16_384]
+        let packet = VoicePacket.audio(id: "utterance", sequence: 2, samples: samples, isLast: true)
+        let encoded = try XCTUnwrap(VoiceWire.encode(packet))
+        XCTAssertEqual(try XCTUnwrap(VoiceWire.decode(encoded)), packet)
+        XCTAssertEqual(VoicePCM.samples(base64: packet.pcmBase64), samples)
+        XCTAssertNil(VoiceWire.decode("{"))
+        XCTAssertEqual(VoicePCM.rms([]), 0)
+        XCTAssertEqual(VoicePCM.resample([0, 1], from: 16_000, to: 16_000), [0, 1])
+        let quieter = VoicePCM.resample([0, 1], from: 2, to: 4)
+        XCTAssertEqual(quieter.count, 4)
+        XCTAssertEqual(quieter[0], Float(0))
+        XCTAssertEqual(quieter[2], Float(1))
+
+        let sessions = DemoCatalog.sessions()
+        var context = VoiceTurnContext(
+            inConversation: true,
+            hostLabel: "example-host",
+            linkTitle: "Connected",
+            sessions: sessions,
+            computers: [ComputerSummary(id: "computer", label: "example-host")],
+            activeComputerID: ""
+        )
+        let idleYes = VoiceTurnPlanner.effect(for: "yes", context: context)
+        XCTAssertEqual(idleYes.action, .none)
+        XCTAssertNotEqual(idleYes.command, .confirmAllow)
+
+        let allow = VoiceTurnPlanner.effect(for: "allow", context: context)
+        XCTAssertEqual(allow.phase, .awaitingAllowYes)
+        XCTAssertEqual(allow.action, .none)
+        XCTAssertEqual(allow.pendingAllowSessionID, DemoCatalog.approvalID)
+        XCTAssertTrue(allow.spoken.hasSuffix(VoiceAllowScript.confirmCue))
+        XCTAssertTrue(allow.listenAgain)
+        context.pendingAllowSessionID = allow.pendingAllowSessionID
+
+        let denied = VoiceTurnPlanner.effect(for: "deny", context: context)
+        XCTAssertEqual(denied.action, .deny(sessionID: DemoCatalog.approvalID))
+        XCTAssertEqual(denied.spoken, "Denied.")
+        XCTAssertEqual(denied.phase, .idle)
+        XCTAssertNil(denied.pendingAllowSessionID)
+
+        let stopped = VoiceTurnPlanner.effect(for: "stop", context: context)
+        XCTAssertEqual(stopped.action, .stop(sessionID: DemoCatalog.approvalID))
+        XCTAssertTrue(stopped.spoken.hasPrefix("Stopping "))
+        XCTAssertNotEqual(stopped.action, .allow(sessionID: DemoCatalog.approvalID))
+
+        let yes = VoiceTurnPlanner.effect(for: "yes", context: context)
+        XCTAssertEqual(yes.action, .allow(sessionID: DemoCatalog.approvalID))
+        XCTAssertEqual(yes.spoken, "Allowed.")
+        XCTAssertTrue(yes.listenAgain)
+
+        let task = VoiceTurnPlanner.effect(for: "Fix the tests", context: context)
+        XCTAssertEqual(task.action, .startTask("Fix the tests"))
+        XCTAssertTrue(task.listenAgain)
+        XCTAssertEqual(task.phase, .idle)
+
+        let lines = VoiceLoopHarness.lines(sessions: sessions, hostLabel: "example-host", linkTitle: "Connected")
+        XCTAssertTrue(lines[0].contains("Done is not used"))
+        XCTAssertTrue(lines.contains { $0.contains(VoiceAllowScript.confirmCue) })
+        XCTAssertTrue(lines.contains { $0.contains("Allowed.") })
+        XCTAssertTrue(lines.contains { $0.contains("Denied.") })
+        XCTAssertTrue(lines.contains { $0.contains("Stopping") })
+        XCTAssertTrue(lines.contains { $0.contains("0.65s") })
+    }
 }
