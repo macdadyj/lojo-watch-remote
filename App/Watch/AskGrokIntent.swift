@@ -1,6 +1,7 @@
 import AppIntents
 
-/// “Ask Grok to <task>” uses the Grok synonym in the Watch Info.plist.
+/// “Ask Grok” uses the Grok synonym in the Watch Info.plist.
+/// A free-form task cannot be interpolated in an App Shortcut phrase, so Siri asks for it.
 /// The app name token is required so the shortcut is indexed. Grok is that name.
 struct AskGrokIntent: AppIntent {
     static let title: LocalizedStringResource = "Ask Grok"
@@ -29,8 +30,8 @@ struct WatchRemoteShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: AskGrokIntent(),
             phrases: [
-                "Ask \(.applicationName) to \(\.$task)",
-                "Tell \(.applicationName) to \(\.$task)",
+                "Ask \(.applicationName)",
+                "Tell \(.applicationName)",
             ],
             shortTitle: "Ask Grok",
             systemImageName: "mic.fill"

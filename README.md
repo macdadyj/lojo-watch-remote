@@ -44,7 +44,7 @@ The Watch home keeps a microphone button on screen. Tapping it starts a voice co
 
 Say allow. The Watch reads the action back, on screen and out loud, and asks you to say yes. Say yes or confirm to approve. Tap Yes if you prefer. Deny and stop send on the first word. List sessions, status, stop session, and switch computer work in the same conversation.
 
-Siri on the Watch takes “Ask Grok to” plus the task. The task goes through the iPhone when it is nearby, and through the direct relay when it is not.
+Siri on the Watch takes “Ask Grok”, then asks what to do. A free-form task cannot sit inside the shortcut phrase. The task goes through the iPhone when it is nearby, and through the direct relay when it is not.
 
 ## Generate and test
 
