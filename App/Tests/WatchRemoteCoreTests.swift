@@ -663,7 +663,9 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertFalse(VoiceHandsFreePolicy.shouldSend(after: began))
         XCTAssertNil(detector.observe(rms: 0.2, at: 0.9))
         XCTAssertNil(detector.observe(rms: 0, at: 1.2))
-        let ended = try XCTUnwrap(detector.observe(rms: 0, at: 1.5))
+        // 1.4 - 0.9 is just under 0.5 in binary floats, so silence would not fire.
+        // 1.5 - 0.5 hits maximumSpeech. 1.45 is inside the silence window.
+        let ended = try XCTUnwrap(detector.observe(rms: 0, at: 1.45))
         XCTAssertEqual(ended, .ended(.silence))
         XCTAssertTrue(VoiceHandsFreePolicy.shouldSend(after: ended))
 
