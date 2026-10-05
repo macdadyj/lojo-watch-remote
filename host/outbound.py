@@ -164,7 +164,7 @@ class ACPAgent:
         })
 
     def list_sessions(self) -> list[dict]:
-        result = self.request("x.ai/session/list", {})
+        result = self.request("_x.ai/session/list", {})
         self.rows = sessions_from(result.get("result"))
         self._apply_permissions()
         return self.rows
@@ -381,11 +381,19 @@ def option_id(options: list, needle: str) -> str | None:
 
 
 def sessions_from(result: object) -> list[dict]:
+    current = result
+    for _ in range(2):
+        if isinstance(current, dict) and isinstance(current.get("sessions"), list):
+            break
+        if isinstance(current, dict) and isinstance(current.get("result"), (dict, list)):
+            current = current["result"]
+            continue
+        break
     rows: object = []
-    if isinstance(result, dict) and isinstance(result.get("sessions"), list):
-        rows = result["sessions"]
-    elif isinstance(result, list):
-        rows = result
+    if isinstance(current, dict) and isinstance(current.get("sessions"), list):
+        rows = current["sessions"]
+    elif isinstance(current, list):
+        rows = current
     parsed: list[dict] = []
     if not isinstance(rows, list):
         return parsed

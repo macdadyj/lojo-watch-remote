@@ -112,7 +112,7 @@ You want `127.0.0.1:2419`, not an overlay address and not `0.0.0.0:2419`.
 
 ## What the phone runs
 
-The phone only opens a direct-tcpip channel to `127.0.0.1:2419` and speaks ACP: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `x.ai/session/list`, and `x.ai/session/usage`. Permission requests are answered on that same connection. `yoloMode` and `autoMode` are sent as false. Working-directory text, including `~`, is resolved by the agent door on the computer. The phone does not run a shell.
+The phone only opens a direct-tcpip channel to `127.0.0.1:2419` and speaks ACP: `initialize`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `_x.ai/session/list`, and `_x.ai/session/usage`. Grok rejects the same names without the leading underscore with JSON-RPC "Method not found". The agent door rewrites that older spelling when it proxies, and its headless path accepts both. Permission requests are answered on that same connection. `yoloMode` and `autoMode` are sent as false. Working-directory text, including `~`, is resolved by the agent door on the computer. The phone does not run a shell.
 
 `watch-remote-agent` is that door. It listens on `127.0.0.1:2419`, checks `Authorization: Bearer`, and proxies to `grok agent serve` on `127.0.0.1:2420`. The phone key cannot forward to `2420`. If grok is not answering, the door itself runs headless `grok -p … --output-format streaming-json --no-auto-update --permission-mode dontAsk` and reports that approvals are unavailable. `--permission-mode dontAsk` is there so a missing TTY cannot hang and cannot auto-approve. Stopping a task cancels that process on the computer. The secret is not an argument and is not in the child environment.
 

@@ -118,8 +118,20 @@ final class ACPPipe: @unchecked Sendable {
     }
 
     func listSessions() async throws -> [GrokSession] {
-        let raw = try await roundTrip(timeout: true) { $0.listSessions() }
-        return ACPCodec.sessions(inResultJSON: raw)
+        do {
+            let raw = try await roundTrip(timeout: true) { $0.listSessions() }
+            return ACPCodec.sessions(inResultJSON: raw)
+        } catch {
+            // A door that has not been updated still answers the bare method name.
+            guard isUnknownMethod(error) else { throw error }
+            let raw = try await roundTrip(timeout: true) { $0.listSessionsLegacy() }
+            return ACPCodec.sessions(inResultJSON: raw)
+        }
+    }
+
+    private func isUnknownMethod(_ error: Error) -> Bool {
+        let text = error.localizedDescription
+        return text == "Method not found" || text == "That command is not supported."
     }
 
     func newSession(cwd: String) async throws -> String {

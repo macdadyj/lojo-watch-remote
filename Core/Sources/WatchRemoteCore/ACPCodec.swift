@@ -56,7 +56,13 @@ public struct ACPCodec: Sendable {
         ])
     }
 
+    /// Grok registers this extension with a leading underscore. The bare name is rejected with "Method not found".
     public mutating func listSessions() -> (Int, String) {
+        request(method: "_x.ai/session/list", params: [:])
+    }
+
+    /// The agent door's headless path answered this spelling before the underscore was required.
+    public mutating func listSessionsLegacy() -> (Int, String) {
         request(method: "x.ai/session/list", params: [:])
     }
 
@@ -69,7 +75,7 @@ public struct ACPCodec: Sendable {
     }
 
     public mutating func sessionUsage(sessionID: String) -> (Int, String) {
-        request(method: "x.ai/session/usage", params: ["sessionId": sessionID])
+        request(method: "_x.ai/session/usage", params: ["sessionId": sessionID])
     }
 
     /// Missing means the real agent server, which can ask for approval.
@@ -126,15 +132,25 @@ public struct ACPCodec: Sendable {
         guard let data = text.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let result = object["result"] else { return [] }
-        let payload: Any
-        if let result = result as? [String: Any], let sessions = result["sessions"] {
-            payload = ["sessions": sessions]
-        } else {
-            payload = result
-        }
+        let payload = sessionListPayload(result)
         guard let encoded = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: encoded, encoding: .utf8) else { return [] }
         return GrokOutput.parseSessionsList(json)
+    }
+
+    /// Grok wraps some extension results as `{result: {sessions: [...]}}` inside the JSON-RPC result.
+    private static func sessionListPayload(_ result: Any) -> Any {
+        guard let object = result as? [String: Any] else { return result }
+        if let sessions = object["sessions"] {
+            return ["sessions": sessions]
+        }
+        if let nested = object["result"] as? [String: Any] {
+            if let sessions = nested["sessions"] {
+                return ["sessions": sessions]
+            }
+            return nested
+        }
+        return result
     }
 
     private mutating func request(method: String, params: [String: Any]) -> (Int, String) {
