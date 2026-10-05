@@ -9,6 +9,60 @@ struct SavedHost: Codable, Equatable, Identifiable, Sendable {
     var port: Int
     var username: String
     var pinnedFingerprint: String? = nil
+    var paired: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case label
+        case address
+        case port
+        case username
+        case pinnedFingerprint
+        case paired
+    }
+
+    init(id: String, label: String, address: String, port: Int, username: String, pinnedFingerprint: String? = nil, paired: Bool = false) {
+        self.id = id
+        self.label = label
+        self.address = address
+        self.port = port
+        self.username = username
+        self.pinnedFingerprint = pinnedFingerprint
+        self.paired = paired
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        label = try container.decode(String.self, forKey: .label)
+        address = try container.decode(String.self, forKey: .address)
+        port = try container.decode(Int.self, forKey: .port)
+        username = try container.decode(String.self, forKey: .username)
+        pinnedFingerprint = try container.decodeIfPresent(String.self, forKey: .pinnedFingerprint)
+        if let stored = try container.decodeIfPresent(Bool.self, forKey: .paired) {
+            paired = stored
+        } else {
+            // Older builds did not store this flag. A customized host stays paired.
+            // The untouched placeholder is the unpaired first-run computer.
+            let untouched = label == OverlayPolicy.exampleLabel
+                && address == OverlayPolicy.exampleAddress
+                && username == OverlayPolicy.exampleUser
+                && port == OverlayPolicy.examplePort
+                && pinnedFingerprint == nil
+            paired = !untouched
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(label, forKey: .label)
+        try container.encode(address, forKey: .address)
+        try container.encode(port, forKey: .port)
+        try container.encode(username, forKey: .username)
+        try container.encodeIfPresent(pinnedFingerprint, forKey: .pinnedFingerprint)
+        try container.encode(paired, forKey: .paired)
+    }
 
     static var placeholder: SavedHost {
         SavedHost(
@@ -55,6 +109,30 @@ enum AppTab: String, Hashable {
     case sessions, computer, settings
 }
 
+enum ConnectionTest: Equatable {
+    case idle
+    case running
+    case connected
+    case failed(String)
+}
+
+enum PairingBanner: Equatable {
+    case notPaired
+    case waiting
+    case connected
+
+    var title: String {
+        switch self {
+        case .notPaired:
+            return "Not paired"
+        case .waiting:
+            return "Waiting for authorization"
+        case .connected:
+            return "Connected"
+        }
+    }
+}
+
 @MainActor
 final class RemoteStore: ObservableObject {
     @Published var mode: ConnectionMode
@@ -70,6 +148,8 @@ final class RemoteStore: ObservableObject {
     @Published var host: SavedHost
     @Published var computers: [SavedHost]
     @Published var showPairing = false
+    @Published var launchScanner = false
+    @Published var connectionTest: ConnectionTest = .idle
     @Published var pairingNotice: PairingNotice?
     @Published var trustPrompt: TrustPrompt?
     @Published var showCompose = false
@@ -87,6 +167,7 @@ final class RemoteStore: ObservableObject {
     private let support: URL
     private let bridge = PhoneBridge()
     private let relay = RelayClient()
+    private var directContext: String?
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -119,6 +200,7 @@ final class RemoteStore: ObservableObject {
         }
         migrateLegacySecret()
         hasAgentSecret = keys.secret(account: agentAccount(host.id)) != nil
+        directContext = keys.secret(account: directAccount(host.id))
         hasRelayToken = keys.secret(account: "relay-token") != nil
         hasRelayPin = keys.secret(account: "relay-pin") != nil
         live = LiveLink(
@@ -156,16 +238,60 @@ final class RemoteStore: ObservableObject {
             approvalsAvailable: approvalsAvailable,
             hostLabel: host.label,
             computers: computers.map { ComputerSummary(id: $0.id, label: $0.label) },
-            activeComputerID: host.id
+            activeComputerID: host.id,
+            directReady: directContext?.contains("\"clear\":true") == false && directContext != nil
         )
+    }
+
+    var pairingBanner: PairingBanner {
+        if mode != .demo && link == .connected {
+            return .connected
+        }
+        if host.paired {
+            return .waiting
+        }
+        return .notPaired
+    }
+
+    func beginScan() {
+        launchScanner = true
+        showPairing = true
+    }
+
+    func testConnection() async {
+        guard !holdsLaunchFixture else { return }
+        connectionTest = .running
+        if mode == .demo {
+            setMode(.ssh)
+        }
+        guard keys.key != nil else {
+            link = .needsPairing
+            statusLine = "Waiting for authorization"
+            connectionTest = .failed("This iPhone has no key yet. Use Copy authorize command, run it on the computer, then test again.")
+            publish()
+            return
+        }
+        await refresh()
+        if link == .connected {
+            connectionTest = .connected
+            statusLine = "Connected"
+            banner = nil
+        } else {
+            let words = (banner ?? "The computer did not connect.").trimmingCharacters(in: .whitespacesAndNewlines)
+            connectionTest = .failed(words.isEmpty ? "The computer did not connect." : words)
+        }
+        publish()
     }
 
     func selectComputer(id: String) {
         guard let next = computers.first(where: { $0.id == id }), next.id != host.id else { return }
+        let previous = host.id
         host = next
         persistComputers()
         disconnectForHostChange()
         refreshSecretFlag()
+        directContext = keys.secret(account: directAccount(host.id)) ?? clearDirect(computerID: previous, label: next.label)
+        connectionTest = .idle
         publish()
     }
 
@@ -177,17 +303,21 @@ final class RemoteStore: ObservableObject {
             port: OverlayPolicy.examplePort,
             username: OverlayPolicy.exampleUser
         )
+        let previous = host.id
         computers.append(created)
         host = created
         persistComputers()
         disconnectForHostChange()
         refreshSecretFlag()
+        directContext = clearDirect(computerID: previous, label: created.label)
+        connectionTest = .idle
         publish()
     }
 
     func removeActiveComputer() {
         let removed = host
         keys.forgetSecret(account: agentAccount(removed.id))
+        keys.forgetSecret(account: directAccount(removed.id))
         knownHosts.forget(host: removed.address, port: removed.port)
         persistKnownHosts()
         computers.removeAll { $0.id == removed.id }
@@ -199,6 +329,8 @@ final class RemoteStore: ObservableObject {
         persistComputers()
         disconnectForHostChange()
         refreshSecretFlag()
+        directContext = keys.secret(account: directAccount(host.id)) ?? clearDirect(computerID: removed.id, label: removed.label)
+        connectionTest = .idle
         banner = "Removed \(removed.label)."
         publish()
     }
@@ -228,7 +360,8 @@ final class RemoteStore: ObservableObject {
             address: payload.address,
             port: payload.port,
             username: payload.user,
-            pinnedFingerprint: payload.fingerprint ?? existing?.pinnedFingerprint
+            pinnedFingerprint: payload.fingerprint ?? existing?.pinnedFingerprint,
+            paired: true
         )
         if untouched && existing == nil {
             knownHosts.forget(host: computers[0].address, port: computers[0].port)
@@ -257,6 +390,7 @@ final class RemoteStore: ObservableObject {
             }
         }
         refreshSecretFlag()
+        storeDirect(payload, computerID: id, label: saved.label)
         pairingNotice = PairingNotice(label: saved.label, fingerprint: saved.pinnedFingerprint, storedSecret: storedSecret)
         if changed { disconnectForHostChange() }
         banner = storedSecret ? "Paired \(saved.label). The agent secret is in the Keychain." : "Paired \(saved.label)."
@@ -286,7 +420,8 @@ final class RemoteStore: ObservableObject {
             address: canonical,
             port: port,
             username: user,
-            pinnedFingerprint: pin
+            pinnedFingerprint: pin,
+            paired: true
         )
         if computers.contains(where: { $0.id != updated.id && $0.address == canonical && $0.port == port && $0.username == user }) {
             return "That computer is already in the list."
@@ -757,6 +892,10 @@ final class RemoteStore: ObservableObject {
         "agent-secret." + id
     }
 
+    private func directAccount(_ id: String) -> String {
+        "direct-pairing." + id
+    }
+
     private func refreshSecretFlag() {
         hasAgentSecret = keys.secret(account: agentAccount(host.id)) != nil
     }
@@ -791,8 +930,28 @@ final class RemoteStore: ObservableObject {
         statusLine = "Not connected"
     }
 
+    private func clearDirect(computerID: String, label: String) -> String? {
+        DirectPairing(computerID: computerID, label: label, relayURL: "", token: "", key: "", clear: true).jsonText()
+    }
+
+    private func storeDirect(_ payload: PairingPayload, computerID: String, label: String) {
+        guard payload.hasDirectRelay, let relayURL = payload.relayURL, let token = payload.token, let key = payload.e2eKey else {
+            keys.forgetSecret(account: directAccount(computerID))
+            directContext = DirectPairing(computerID: computerID, label: label, relayURL: "", token: "", key: "", clear: true).jsonText()
+            return
+        }
+        let pairing = DirectPairing(computerID: computerID, label: label, relayURL: relayURL, token: token, key: key)
+        guard let text = pairing.jsonText() else { return }
+        do {
+            try keys.saveSecret(text, account: directAccount(computerID))
+            directContext = text
+        } catch {
+            directContext = nil
+        }
+    }
+
     private func publish() {
-        bridge.push(snapshot)
+        bridge.push(snapshot, direct: directContext)
     }
 
     private func applyLaunch() {
@@ -833,8 +992,34 @@ final class RemoteStore: ObservableObject {
         statusLine = "Demo on this iPhone. Nothing is sent."
         banner = nil
         switch screen {
-        case "hosts", "keys":
+        case "hosts", "keys", "unpaired":
             tab = .computer
+            mode = .ssh
+            link = .needsPairing
+            host = .placeholder
+            computers = [.placeholder]
+            statusLine = "Not paired"
+            connectionTest = .idle
+            showPairing = false
+        case "connected":
+            tab = .computer
+            mode = .ssh
+            link = .connected
+            let paired = SavedHost(
+                id: "computer",
+                label: "example-host",
+                address: OverlayPolicy.exampleAddress,
+                port: OverlayPolicy.examplePort,
+                username: OverlayPolicy.exampleUser,
+                paired: true
+            )
+            computers = [paired]
+            host = paired
+            approvalsAvailable = true
+            statusLine = "Connected"
+            banner = nil
+            connectionTest = .connected
+            showPairing = false
         case "pair":
             tab = .computer
             let primary = SavedHost(
@@ -888,11 +1073,15 @@ final class PhoneBridge: NSObject, WCSessionDelegate {
         session.activate()
     }
 
-    func push(_ snapshot: PhoneSnapshot) {
+    func push(_ snapshot: PhoneSnapshot, direct: String?) {
         guard WCSession.isSupported(), let payload = LinkCodec.encodeSnapshot(snapshot) else { return }
         let session = WCSession.default
         guard session.activationState == .activated else { return }
-        try? session.updateApplicationContext(["snapshot": payload])
+        var body = ["snapshot": payload]
+        if let direct, !direct.isEmpty {
+            body["direct"] = direct
+        }
+        try? session.updateApplicationContext(body)
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {

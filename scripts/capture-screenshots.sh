@@ -18,11 +18,12 @@ WATCH="${APP}/Watch/WatchRemoteWatch.app"
 pick_device() {
   local family="$1"
   python3 - "$family" <<'PY'
-import json, subprocess, sys
+import json, re, subprocess, sys
 family = sys.argv[1]
 raw = subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"], text=True)
 data = json.loads(raw)
 best = ""
+best_score = -1
 for runtime, devices in data.get("devices", {}).items():
     if family == "iPhone" and "iOS" not in runtime:
         continue
@@ -36,7 +37,15 @@ for runtime, devices in data.get("devices", {}).items():
             continue
         if not device.get("isAvailable", True):
             continue
-        best = device["udid"] + "\t" + name
+        score = 0
+        if family == "Watch":
+            match = re.search(r"(\d+)\s*mm", name)
+            score = int(match.group(1)) if match else 0
+            if "Ultra" in name:
+                score += 100
+        if score >= best_score:
+            best_score = score
+            best = device["udid"] + "\t" + name
 print(best)
 PY
 }
@@ -120,16 +129,22 @@ shoot() {
 if [[ "${WATCHREMOTE_SCREENSHOTS:-full}" == "dispatch" ]]; then
   shoot "${PHONE_UDID}" com.lojo.WatchRemote sessions dark iphone-sessions-dark.png
   shoot "${PHONE_UDID}" com.lojo.WatchRemote session dark iphone-session-dark.png
+  shoot "${PHONE_UDID}" com.lojo.WatchRemote unpaired dark iphone-unpaired-dark.png
+  shoot "${PHONE_UDID}" com.lojo.WatchRemote connected dark iphone-connected-dark.png
   shoot "${PHONE_UDID}" com.lojo.WatchRemote compose dark iphone-compose-dark.png
   shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp compose dark watch-compose.png
   shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp sessions dark watch-sessions.png
   shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp session dark watch-session.png
+  shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp direct dark watch-direct.png
+  shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp via dark watch-via.png
   exit 0
 fi
 
 shoot "${PHONE_UDID}" com.lojo.WatchRemote sessions dark iphone-sessions-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote session dark iphone-session-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote hosts dark iphone-hosts-dark.png
+shoot "${PHONE_UDID}" com.lojo.WatchRemote unpaired dark iphone-unpaired-dark.png
+shoot "${PHONE_UDID}" com.lojo.WatchRemote connected dark iphone-connected-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote pair dark iphone-pair-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote compose dark iphone-compose-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote settings dark iphone-settings-dark.png
@@ -148,6 +163,9 @@ xcrun simctl ui "${PHONE_UDID}" content_size large || true
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp compose dark watch-compose.png
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp sessions dark watch-sessions.png
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp session dark watch-session.png
+shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp direct dark watch-direct.png
+shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp via dark watch-via.png
+shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp watch-unpaired dark watch-unpaired.png
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp empty dark watch-empty.png
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp offline dark watch-offline.png
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp long dark watch-long.png

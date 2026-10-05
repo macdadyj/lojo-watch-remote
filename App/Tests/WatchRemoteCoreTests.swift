@@ -246,6 +246,90 @@ final class WatchRemoteCoreTests: XCTestCase {
         let command = PhoneCommand(kind: .selectComputer, computerID: "computer-2")
         let encoded = try XCTUnwrap(LinkCodec.encodeCommand(command))
         XCTAssertEqual(LinkCodec.decodeCommand(encoded), command)
+        XCTAssertFalse(decoded.directReady)
+        var ready = decoded
+        ready.directReady = true
+        let again = try XCTUnwrap(LinkCodec.encodeSnapshot(ready))
+        XCTAssertEqual(LinkCodec.decodeSnapshot(again)?.directReady, true)
+    }
+
+    func testDirectPairingRoundTripOmitsSecretsFromTheSummary() throws {
+        let key = Base64URL.encode(Data(repeating: 0x11, count: 32))
+        let token = "roomtokenvalue0001"
+        let relay = "wss://relay.example/v1/room"
+        let payload = try PairingPayload(
+            label: "example-host",
+            address: "100.64.0.2",
+            user: "user",
+            port: 22,
+            secret: "example-secret",
+            relayURL: relay,
+            token: token,
+            e2eKey: key
+        )
+        XCTAssertEqual(payload.relayURL, relay)
+        XCTAssertEqual(payload.token, token)
+        XCTAssertTrue(payload.hasDirectRelay)
+        XCTAssertTrue(payload.summary.contains("Direct connection included."))
+        XCTAssertFalse(payload.summary.contains(token))
+        XCTAssertFalse(payload.summary.contains(key))
+        XCTAssertFalse(payload.summary.contains("example-secret"))
+        XCTAssertFalse(payload.summary.contains(relay))
+        let decoded = try PairingPayload.decode(try payload.urlString())
+        XCTAssertEqual(decoded, payload)
+        XCTAssertThrowsError(try PairingPayload(
+            label: "example-host",
+            address: "100.64.0.2",
+            user: "user",
+            port: 22,
+            relayURL: "ws://relay.example/v1/room",
+            token: token,
+            e2eKey: key
+        )) { error in
+            XCTAssertEqual(error as? PairingError, .invalidRelay)
+        }
+        XCTAssertEqual(DemoCatalog.preview(named: "direct")?.link, .connected)
+        XCTAssertEqual(DemoCatalog.preview(named: "watch-unpaired")?.link, .needsPairing)
+    }
+
+    func testRelaySealRoundTripAndReplay() throws {
+        let key = Data(repeating: 0x11, count: 32)
+        let plain = Data("{\"id\":\"1\",\"op\":\"ping\"}".utf8)
+        let frame = try RelayBox.seal(plaintext: plain, key: key, direction: .watchToHost, counter: 1)
+        XCTAssertEqual(Array(frame.prefix(10)), [1, 1, 0, 0, 0, 0, 0, 0, 0, 1])
+        XCTAssertEqual(
+            frame.dropFirst(10).prefix(22),
+            Data([0x8b, 0xc3, 0x13, 0x05, 0x49, 0x72, 0x25, 0x51, 0x73, 0x25, 0xc9, 0x9e, 0x7a, 0x51, 0xaa, 0x28, 0xab, 0xcd, 0x1e, 0x80, 0x3c, 0x99])
+        )
+        XCTAssertEqual(
+            frame.suffix(16),
+            Data([0xb2, 0xfd, 0xc5, 0x00, 0xf2, 0xc2, 0x0b, 0x7a, 0xcd, 0xa9, 0xb0, 0xc0, 0x74, 0x21, 0x1b, 0x68])
+        )
+        var replay = RelayReplay()
+        XCTAssertEqual(try RelayBox.open(frame: frame, key: key, expecting: .watchToHost, replay: &replay), plain)
+        XCTAssertThrowsError(try RelayBox.open(frame: frame, key: key, expecting: .watchToHost, replay: &replay)) { error in
+            XCTAssertEqual(error as? RelayBoxError, .replayed)
+        }
+        let second = try RelayBox.seal(plaintext: Data("second".utf8), key: key, direction: .watchToHost, counter: 2)
+        XCTAssertEqual(try RelayBox.open(frame: second, key: key, expecting: .watchToHost, replay: &replay), Data("second".utf8))
+        var restored = RelayReplay.restored(highest: replay.highest)
+        XCTAssertThrowsError(try RelayBox.open(frame: second, key: key, expecting: .watchToHost, replay: &restored))
+        let third = try RelayBox.seal(plaintext: Data("third".utf8), key: key, direction: .watchToHost, counter: 3)
+        XCTAssertEqual(try RelayBox.open(frame: third, key: key, expecting: .watchToHost, replay: &restored), Data("third".utf8))
+        XCTAssertThrowsError(try RelayBox.open(frame: third, key: key, expecting: .hostToWatch, replay: &RelayReplay())) { error in
+            XCTAssertEqual(error as? RelayBoxError, .wrongDirection)
+        }
+        var fresh = RelayReplay()
+        var forged = try RelayBox.seal(plaintext: plain, key: key, direction: .watchToHost, counter: 9)
+        forged[forged.index(before: forged.endIndex)] ^= 0x01
+        XCTAssertThrowsError(try RelayBox.open(frame: forged, key: key, expecting: .watchToHost, replay: &fresh)) { error in
+            XCTAssertEqual(error as? RelayBoxError, .refused)
+        }
+        XCTAssertEqual(fresh.highest, 0)
+        XCTAssertEqual(try RelayBox.open(frame: frame, key: key, expecting: .watchToHost, replay: &fresh), plain)
+        let message = DirectMessage(op: .start, id: "2", prompt: "Read the build logs")
+        let encoded = try XCTUnwrap(DirectMessage.encode(message))
+        XCTAssertEqual(DirectMessage.decode(encoded), message)
     }
 
     func testRelayPinAndSnapshotRoundTrip() {

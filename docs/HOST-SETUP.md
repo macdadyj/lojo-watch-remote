@@ -1,6 +1,6 @@
 # Computer setup
 
-Watch Remote’s primary path is SSH to a computer you control, in the same shape as the Terminal feature in [lojo-private-networks-ios](https://github.com/macdadyj/lojo-private-networks-ios) (branch `cursor/lojo-ssh-terminal-a06d`). The iPhone holds the SSH connection. The Watch talks only to the iPhone.
+Watch Remote’s primary path is SSH to a computer you control, in the same shape as the Terminal feature in [lojo-private-networks-ios](https://github.com/macdadyj/lojo-private-networks-ios) (branch `cursor/lojo-ssh-terminal-a06d`). The iPhone holds the SSH connection. The Watch uses the iPhone when it is nearby. A pairing that includes a relay address lets the Watch connect without the iPhone. That path is in [outbound-relay.md](outbound-relay.md).
 
 The repo does not contain a real host. Pair a computer by scanning one QR from that computer. You can still type the fields on **Computer**, and you can keep several saved computers and switch the active one. The Watch shows the active computer and can switch when more than one is saved. Placeholders at build time live in `Config/Local.xcconfig` (gitignored; start from `Config/Local.xcconfig.example`).
 
@@ -122,6 +122,16 @@ Interactive `grok` TUIs already running on the computer are not remote-controlla
 
 Your Grok login stays in `~/.grok` on the computer. The phone never reads it.
 
-## Optional relay
+## Watch without the iPhone
+
+The overlay address is not reachable from the Watch, and SSH is not published. Host the outbound relay yourself, then pair with its address:
+
+```bash
+watch-remote-pair --relay-url wss://relay.example/v1/room
+```
+
+`relay.example` is a placeholder. There is no default. The steps, the systemd unit, and the watchOS limit (the socket stays up only while the Watch app is open) are in [outbound-relay.md](outbound-relay.md). This repository does not deploy the relay.
+
+## Optional HTTP relay
 
 The HTTP relay is a second path. Leave Settings on **SSH** unless you want it. Setup for the relay is in [relay-api.md](relay-api.md). Its unit is `host/watch-remote-relay.service`. `WATCHREMOTE_RELAY_BIND` has no default. Set it in `relay.env` to an address in `100.64.0.0/10`, or to `127.0.0.1` for a local process. Public addresses are refused.

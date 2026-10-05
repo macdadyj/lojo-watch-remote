@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Keeps an outbound wss connection to the relay URL saved by watch-remote-pair.
+# The URL is not in this script. It is read from ~/.config/watch-remote/outbound.json.
+set -euo pipefail
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required. See docs/outbound-relay.md." >&2
+  exit 1
+fi
+
+root="$(cd "$(dirname "$0")" && pwd)"
+exec python3 "${root}/outbound.py" "$@"

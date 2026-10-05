@@ -133,6 +133,8 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
     public var hostLabel: String
     public var computers: [ComputerSummary]
     public var activeComputerID: String
+    /// The active computer has a direct relay pairing the Watch can use on its own.
+    public var directReady: Bool
 
     public init(
         mode: ConnectionMode,
@@ -142,7 +144,8 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         approvalsAvailable: Bool,
         hostLabel: String,
         computers: [ComputerSummary] = [],
-        activeComputerID: String = ""
+        activeComputerID: String = "",
+        directReady: Bool = false
     ) {
         self.mode = mode
         self.link = link
@@ -152,6 +155,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         self.hostLabel = hostLabel
         self.computers = computers
         self.activeComputerID = activeComputerID
+        self.directReady = directReady
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -163,6 +167,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         case hostLabel
         case computers
         case activeComputerID
+        case directReady
     }
 
     public init(from decoder: Decoder) throws {
@@ -175,6 +180,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         hostLabel = try container.decode(String.self, forKey: .hostLabel)
         computers = try container.decodeIfPresent([ComputerSummary].self, forKey: .computers) ?? []
         activeComputerID = try container.decodeIfPresent(String.self, forKey: .activeComputerID) ?? ""
+        directReady = try container.decodeIfPresent(Bool.self, forKey: .directReady) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -187,6 +193,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         try container.encode(hostLabel, forKey: .hostLabel)
         try container.encode(computers, forKey: .computers)
         try container.encode(activeComputerID, forKey: .activeComputerID)
+        try container.encode(directReady, forKey: .directReady)
     }
 
     /// WatchConnectivity application context is small. Keep the payload short.
@@ -374,6 +381,25 @@ public enum DemoCatalog {
                 link: .needsPairing,
                 sessions: [],
                 banner: "Generate a key on the iPhone, then authorize it on the computer.",
+                approvalsAvailable: false,
+                hostLabel: "example-host"
+            )
+        case "direct", "via":
+            return PhoneSnapshot(
+                mode: .ssh,
+                link: .connected,
+                sessions: sessions(),
+                banner: nil,
+                approvalsAvailable: true,
+                hostLabel: "example-host",
+                directReady: true
+            )
+        case "watch-unpaired":
+            return PhoneSnapshot(
+                mode: .ssh,
+                link: .needsPairing,
+                sessions: [],
+                banner: "Pair on iPhone first.",
                 approvalsAvailable: false,
                 hostLabel: "example-host"
             )

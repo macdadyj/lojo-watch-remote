@@ -37,6 +37,13 @@ jobs:
           host/watch-remote-pair --self-test
           host/watch-remote-authorize --self-test
 
+      - name: Direct relay tests
+        run: |
+          python3 host/test_relaybox.py
+          python3 host/test_outbound.py
+          node --test relay/outbound/test.mjs
+          scripts/privacy-scan.sh
+
       - name: Archive script self-test
         run: scripts/archive-upload.sh --self-test
 
@@ -140,6 +147,13 @@ jobs:
 
       - name: Relay unit tests
         run: PYTHONPATH=relay python3 relay/tests/test_relay.py
+
+      - name: Direct relay tests
+        run: |
+          python3 host/test_relaybox.py
+          python3 host/test_outbound.py
+          node --test relay/outbound/test.mjs
+          scripts/privacy-scan.sh
 
       - name: Archive script self-test
         run: scripts/archive-upload.sh --self-test

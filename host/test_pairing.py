@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import stat
 import sys
@@ -113,6 +115,49 @@ class PairingTests(unittest.TestCase):
         rendered = pairing.render_qr(url)
         self.assertIn("█", rendered)
         self.assertNotIn("example-secret", rendered)
+
+    def test_direct_relay_fields_round_trip_without_leaking(self) -> None:
+        raw_key = base64.urlsafe_b64encode(b"\x11" * 32).decode("ascii").rstrip("=")
+        token = "roomtokenvalue0001"
+        relay = "wss://relay.example/v1/room"
+        payload = pairing.build_payload(
+            "example-host",
+            "100.64.0.2",
+            "user",
+            22,
+            secret="example-secret",
+            relay=relay,
+            token=token,
+            e2e=raw_key,
+        )
+        self.assertEqual(payload["relay"], relay)
+        self.assertEqual(payload["token"], token)
+        self.assertNotIn("=", payload["e2e"])
+        summary = "\n".join(pairing.summary_lines(payload))
+        self.assertIn("Direct connection included.", summary)
+        self.assertNotIn(token, summary)
+        self.assertNotIn(payload["e2e"], summary)
+        self.assertNotIn("example-secret", summary)
+        self.assertNotIn(relay, summary)
+        decoded = pairing.decode_text(pairing.url_for(payload))
+        self.assertEqual(decoded["token"], token)
+        self.assertEqual(decoded["relay"], relay)
+        for refused in ("ws://relay.example/v1/room", "wss://user:pass@relay.example/v1/room", "wss://relay.example/v1/room?token=abc"):
+            with self.assertRaises(pairing.PairingError):
+                pairing.build_payload("example-host", "100.64.0.2", "user", 22, relay=refused, token=token, e2e=raw_key)
+        with self.assertRaises(pairing.PairingError):
+            pairing.build_payload("example-host", "100.64.0.2", "user", 22, relay=relay, token="short", e2e=raw_key)
+        with tempfile.TemporaryDirectory() as directory:
+            path = pairing.write_outbound_file(relay, token, raw_key, Path(directory))
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode) & 0o077, 0)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["token"], token)
+            import outbound
+
+            loaded = outbound.load_config(path)
+            self.assertEqual(loaded["relay"], relay)
+            self.assertEqual(loaded["token"], token)
+            self.assertEqual(loaded["key"], b"\x11" * 32)
 
 
 if __name__ == "__main__":

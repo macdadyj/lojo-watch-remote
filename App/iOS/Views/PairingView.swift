@@ -53,6 +53,11 @@ struct PairingImportView: View {
                         .foregroundStyle(LojoTheme.secondaryText)
                 }
             }
+            .onAppear {
+                guard store.launchScanner else { return }
+                store.launchScanner = false
+                openScanner()
+            }
             .fullScreenCover(isPresented: $showScanner) {
                 QRScannerScreen(
                     onCode: { code in
