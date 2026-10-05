@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import net from "node:net";
-import { createRelay } from "./server.mjs";
+import { canonicalIP, clientAddress, createRelay, trustedProxySet } from "./server.mjs";
 
 function listen(relay) {
   return new Promise((resolve) => {
@@ -10,13 +10,17 @@ function listen(relay) {
   });
 }
 
-function connect(port) {
+function connect(port, headers = {}) {
   return new Promise((resolve, reject) => {
     const key = crypto.randomBytes(16).toString("base64");
     const socket = new net.Socket();
     let buffer = Buffer.alloc(0);
     const frames = [];
     let opened = false;
+    const extra = Object.entries(headers).map(([name, value]) => {
+      if (/[\r\n]/.test(name) || /[\r\n]/.test(String(value))) throw new Error("header");
+      return `${name}: ${value}\r\n`;
+    }).join("");
     socket.connect(port, "127.0.0.1", () => {
       socket.write(
         "GET /v1/room HTTP/1.1\r\n" +
@@ -24,7 +28,9 @@ function connect(port) {
           "Upgrade: websocket\r\n" +
           "Connection: Upgrade\r\n" +
           `Sec-WebSocket-Key: ${key}\r\n` +
-          "Sec-WebSocket-Version: 13\r\n\r\n"
+          "Sec-WebSocket-Version: 13\r\n" +
+          extra +
+          "\r\n"
       );
     });
     const api = {
@@ -175,6 +181,93 @@ test("text after auth is not forwarded", async () => {
   relay.server.close();
   host.socket.destroy();
   watch.socket.destroy();
+});
+
+async function openOrStatus(port, headers) {
+  try {
+    const client = await connect(port, headers);
+    return { status: 101, client };
+  } catch (error) {
+    const match = String(error.message).match(/\b(\d{3})\b/);
+    return { status: match ? Number(match[1]) : 0, client: null };
+  }
+}
+
+test("trust proxy is off unless configured", () => {
+  assert.equal(trustedProxySet(undefined), null);
+  assert.equal(trustedProxySet("off"), null);
+  assert.equal(trustedProxySet("0"), null);
+  assert.equal(trustedProxySet(false), null);
+  const defaults = trustedProxySet("on");
+  assert.equal(clientAddress("127.0.0.1", "192.0.2.10", null), "127.0.0.1");
+  assert.equal(clientAddress("127.0.0.1", "203.0.113.9, 198.51.100.4", defaults), "198.51.100.4");
+  assert.equal(clientAddress("127.0.0.1", "198.51.100.4, ::1", defaults), "198.51.100.4");
+  assert.equal(clientAddress("::ffff:127.0.0.1", "192.0.2.10", defaults), "192.0.2.10");
+  assert.equal(clientAddress("::1", "192.0.2.20", trustedProxySet(true)), "192.0.2.20");
+  assert.equal(clientAddress("192.0.2.50", "198.51.100.8", defaults), "192.0.2.50");
+  assert.equal(clientAddress("127.0.0.1", "127.0.0.1, ::1", defaults), "127.0.0.1");
+  assert.equal(clientAddress("127.0.0.1", "not-an-ip, 192.0.2.10", defaults), "192.0.2.10");
+  const custom = trustedProxySet("192.0.2.1, ::1");
+  assert.equal(clientAddress("::1", "198.51.100.4, 192.0.2.1", custom), "198.51.100.4");
+  assert.equal(clientAddress("127.0.0.1", "198.51.100.4", custom), "127.0.0.1");
+  assert.equal(canonicalIP("::ffff:127.0.0.1"), "127.0.0.1");
+  assert.equal(canonicalIP("[::1]"), canonicalIP("::1"));
+});
+
+test("a forwarded address is ignored when trust proxy is off", async () => {
+  const relay = createRelay({ log: () => {}, upgradesPerMinute: 1 });
+  const port = await listen(relay);
+  const first = await connect(port, { "X-Forwarded-For": "192.0.2.10" });
+  const second = await openOrStatus(port, { "X-Forwarded-For": "192.0.2.20" });
+  assert.equal(second.status, 429);
+  relay.server.close();
+  first.socket.destroy();
+  second.client?.socket.destroy();
+});
+
+test("trusted proxy rate limits and lockouts follow the right-most untrusted address", async () => {
+  const logs = [];
+  const relay = createRelay({
+    log: (entry) => logs.push(entry),
+    trustProxy: true,
+    upgradesPerMinute: 10,
+    authFailuresPerMinute: 1,
+  });
+  const port = await listen(relay);
+  const bad = JSON.stringify({ role: "watch", token: "short" });
+
+  async function fail(forwarded) {
+    const client = await connect(port, { "X-Forwarded-For": forwarded });
+    client.send(1, bad);
+    await client.waitFor((frames) => frames.some((frame) => frame.opcode === 8));
+    client.socket.destroy();
+  }
+
+  await fail("198.51.100.10");
+  await fail("198.51.100.10");
+  const locked = await openOrStatus(port, { "X-Forwarded-For": "198.51.100.10" });
+  assert.equal(locked.status, 429);
+  const spoofed = await openOrStatus(port, { "X-Forwarded-For": "203.0.113.8, 198.51.100.10" });
+  assert.equal(spoofed.status, 429);
+  const other = await connect(port, { "X-Forwarded-For": "198.51.100.20" });
+  await auth(other, "host", "roomtokenvalue0004");
+  const dumped = JSON.stringify(logs);
+  assert.equal(dumped.includes("198.51.100.10"), false);
+  assert.equal(dumped.includes("198.51.100.20"), false);
+  assert.equal(dumped.includes("203.0.113.8"), false);
+  assert.equal(dumped.includes("short"), false);
+  relay.server.close();
+  other.socket.destroy();
+});
+
+test("a peer outside the proxy list cannot choose its address", async () => {
+  const relay = createRelay({ log: () => {}, trustProxy: ["192.0.2.1"], upgradesPerMinute: 1 });
+  const port = await listen(relay);
+  const first = await connect(port, { "X-Forwarded-For": "192.0.2.10" });
+  const second = await openOrStatus(port, { "X-Forwarded-For": "192.0.2.20" });
+  assert.equal(second.status, 429);
+  relay.server.close();
+  first.socket.destroy();
 });
 
 test("message rate limit closes the socket", async () => {

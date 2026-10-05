@@ -36,6 +36,9 @@ Use a hostname you control and a certificate the Watch will trust. The pairing U
 | `WATCHREMOTE_OUTBOUND_UPGRADES` | 30 | New sockets per minute from one address |
 | `WATCHREMOTE_OUTBOUND_AUTH_FAILURES` | 8 | Bad tokens per minute from one address |
 | `WATCHREMOTE_OUTBOUND_MAX` | 200 | Open sockets |
+| `WATCHREMOTE_OUTBOUND_TRUST_PROXY` | off | See below |
+
+`WATCHREMOTE_OUTBOUND_TRUST_PROXY` stays off until you set it. `on` trusts only `127.0.0.1` and `::1`. A comma-separated list trusts those proxy addresses instead. The client address is then the right-most untrusted `X-Forwarded-For` entry, and that address is what the per-address limits use. Any other peer is limited by its socket address. Do not log the forwarded header.
 
 A room is one pairing token. It holds one host and one Watch. A new connection with the same role replaces the old one. Frames are not written to disk. Restarting the process drops every room. Both sides connect again.
 
@@ -46,7 +49,7 @@ docker build -t watch-remote-outbound -f relay/outbound/Dockerfile relay/outboun
 docker run --rm -p 8787:8787 watch-remote-outbound
 ```
 
-The image listens in the container without TLS. Terminate TLS at your proxy, and do not enable access logs that record WebSocket bodies.
+The image listens in the container without TLS. Terminate TLS at your proxy, and do not enable access logs that record WebSocket bodies or `X-Forwarded-For`. If that proxy is the only path in, set `WATCHREMOTE_OUTBOUND_TRUST_PROXY` to `on` when it connects from localhost, or to the address this process sees for the proxy.
 
 ## Tests
 
