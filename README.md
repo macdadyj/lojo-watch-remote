@@ -40,9 +40,9 @@ The design follows LOJO Networks: system fonts, grouped backgrounds, 18pt cards,
 
 ## Watch voice
 
-The Watch home keeps a microphone button on screen. Tapping it starts dictation. The text is a new task for the active computer. Send and Cancel come up first. **Auto-send** skips that step. **Read results aloud** speaks the latest finished summary. Both stay off until you turn them on.
+The Watch home keeps a microphone button on screen. Tapping it starts a voice conversation. Speak a task and it goes to the active computer. The Watch speaks a short status or result and keeps listening, so a follow-up, an approval, or the next command stays in the same flow. Read-aloud is on for that conversation. The **Read results aloud** toggle stays off until you turn it on, and then it also speaks results outside a conversation. **Auto-send** stays off until you turn it on. **New task** still opens the task screen and sends when you tap Start.
 
-On an approval, say allow, deny, or stop. Deny and stop send immediately. Allow waits for a tap.
+Say allow. The Watch reads the action back, on screen and out loud, and asks you to say yes. Say yes or confirm to approve. Tap Yes if you prefer. Deny and stop send on the first word. List sessions, status, stop session, and switch computer work in the same conversation.
 
 Siri on the Watch takes “Ask Grok to” plus the task. The task goes through the iPhone when it is nearby, and through the direct relay when it is not.
 

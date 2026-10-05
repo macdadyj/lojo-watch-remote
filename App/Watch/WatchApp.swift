@@ -27,6 +27,8 @@ final class WatchModel: ObservableObject {
     @Published var pendingAllowSessionID: String?
     @Published var voiceNote: String?
     @Published var voiceNoteSessionID: String?
+    @Published var voiceModeActive = false
+    @Published var voiceLine = ""
     var heldVoiceTask: String?
     private let bridge = WatchBridge()
     private let direct = DirectSession()

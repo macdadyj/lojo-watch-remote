@@ -369,36 +369,105 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(encoded.flatMap(LinkCodec.decodeCommand), command)
     }
 
-    func testVoiceApprovalCommandsMatchWholePhrases() {
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "allow"), .confirmAllow)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "Allow!"), .confirmAllow)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "please approve it"), .confirmAllow)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "yes"), .confirmAllow)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "OK"), .confirmAllow)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "go ahead"), .confirmAllow)
-        XCTAssertEqual(VoiceCommandMatcher.action(in: "allow"), .allow)
+    func testVoiceDialogueMatchesCommandsAndConfirmsAllowInTwoSteps() {
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Allow", phase: .idle), .requestAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Allow!", phase: .idle), .requestAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("please approve it", phase: .idle), .requestAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("yes", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("confirm", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Yes, confirm", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("OK", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("go ahead", phase: .idle), .unrecognized)
 
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "deny"), .deny)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "Don't allow"), .deny)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "Don\u{2019}t allow"), .deny)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "do not approve"), .deny)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "no"), .deny)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "reject it"), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("yes", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("confirm", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Yes, confirm", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("okay", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("go ahead", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("allow", phase: .awaitingAllowYes), .requestAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("deny", phase: .awaitingAllowYes), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("stop", phase: .awaitingAllowYes), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("never mind", phase: .awaitingAllowYes), .cancelConfirm)
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("Fix the tests", phase: .awaitingAllowYes),
+            .newTask("Fix the tests")
+        )
 
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "stop"), .stop)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "STOP the task"), .stop)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "cancel"), .stop)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "halt it"), .stop)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "please stop"), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("deny", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Don't allow", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Don\u{2019}t allow", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("do not approve", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("no", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("reject it", phase: .idle), .deny)
 
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: ""), .unrecognized)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "   "), .unrecognized)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "please"), .unrecognized)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "allow the parser to write the file"), .unrecognized)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "stop by the lab"), .unrecognized)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "don't stop"), .unrecognized)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "allowance"), .unrecognized)
-        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "Ask Grok to fix the tests"), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("stop", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("STOP the task", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("cancel", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("halt it", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("please stop", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("stop session", phase: .idle), .stopSession)
+
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("list sessions", phase: .idle), .listSessions)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("status", phase: .idle), .status)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("switch computer", phase: .idle), .switchComputer(nil))
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("switch computer to", phase: .idle), .switchComputer(nil))
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("switch to example-host", phase: .idle),
+            .switchComputer("example host")
+        )
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Fix the tests", phase: .idle), .newTask("Fix the tests"))
+
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("   ", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("please", phase: .idle), .unrecognized)
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("allow the parser to write the file", phase: .idle),
+            .newTask("allow the parser to write the file")
+        )
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("stop by the lab", phase: .idle),
+            .newTask("stop by the lab")
+        )
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("don't stop", phase: .idle), .newTask("don't stop"))
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("allowance", phase: .idle), .newTask("allowance"))
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("Ask Grok to fix the tests", phase: .idle),
+            .newTask("Ask Grok to fix the tests")
+        )
+
+        let line = VoiceAllowScript.readback(title: "Edit the file", detail: "Write the tests")
+        XCTAssertTrue(line.contains("Edit the file"))
+        XCTAssertTrue(line.contains("Write the tests"))
+        XCTAssertTrue(line.hasSuffix(VoiceAllowScript.confirmCue))
+        XCTAssertNotEqual(VoiceDialogueMatcher.interpret(line, phase: .idle), .requestAllow)
+        XCTAssertNotEqual(VoiceDialogueMatcher.interpret(line, phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertNotEqual(VoiceDialogueMatcher.interpret(line, phase: .awaitingAllowYes), .requestAllow)
+
+        let long = VoiceAllowScript.readback(title: String(repeating: "word ", count: 80), detail: "detail")
+        XCTAssertTrue(long.hasSuffix(VoiceAllowScript.confirmCue))
+        XCTAssertLessThanOrEqual(long.count, 180)
+
+        XCTAssertEqual(
+            VoiceAllowScript.matchingLabel(spoken: "example host", labels: ["example-host"]),
+            "example-host"
+        )
+        XCTAssertNil(VoiceAllowScript.matchingLabel(spoken: "lab", labels: ["lab-1", "lab-2"]))
+        XCTAssertNil(VoiceAllowScript.matchingLabel(spoken: "a", labels: ["example-host"]))
+
+        let sessions = [
+            GrokSession(id: "1", title: "Logs", summary: "", status: .running),
+            GrokSession(id: "2", title: "Edit", summary: "", status: .needsApproval),
+        ]
+        XCTAssertEqual(VoiceAllowScript.sessionsSpeech(sessions), "2 sessions. Logs, Running. Edit, Needs approval.")
+        XCTAssertEqual(VoiceAllowScript.sessionsSpeech([]), "No sessions.")
+        XCTAssertEqual(
+            VoiceAllowScript.statusSpeech(host: "example-host", linkTitle: "Connected", running: 2, waiting: 1),
+            "example-host. Connected. 1 task needs approval."
+        )
+        XCTAssertEqual(
+            VoiceAllowScript.statusSpeech(host: "example-host", linkTitle: "Connected", running: 0, waiting: 0),
+            "example-host. Connected. Nothing is running."
+        )
     }
 
     func testVoiceTaskAsksBeforeSendingUnlessAutoSendIsOn() {

@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import WatchKit
 import WatchRemoteCore
 
 enum VoicePreview {
@@ -61,42 +62,78 @@ enum VoiceHandoff {
     }
 }
 
-@MainActor
-final class VoiceSpeaker {
+final class VoiceSpeaker: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = VoiceSpeaker()
     private var synthesizer: AVSpeechSynthesizer?
     private var lastKey: String?
+    private var current: AVSpeechUtterance?
+    private var onFinish: (() -> Void)?
 
-    func speakIfNeeded(previous: PhoneSnapshot, current: PhoneSnapshot, enabled: Bool) {
-        guard enabled else { return }
-        let includeNew = previous.mode == current.mode
-        guard let result = VoiceResultPicker.latestResult(
-            previous: previous.sessions,
-            current: current.sessions,
-            includeNew: includeNew
-        ) else { return }
-        say(sessionID: result.sessionID, text: result.text)
-    }
-
-    func stop() {
-        synthesizer?.stopSpeaking(at: .immediate)
-    }
-
-    private func say(sessionID: String, text: String) {
-        let key = sessionID + "\n" + text
-        guard key != lastKey else { return }
-        lastKey = key
+    func speakNow(_ text: String, dedupeKey: String? = nil, whenFinished: (() -> Void)? = nil) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            whenFinished?()
+            return
+        }
+        if let dedupeKey {
+            if dedupeKey == lastKey {
+                whenFinished?()
+                return
+            }
+            lastKey = dedupeKey
+        }
         let speaker = synthesizer ?? AVSpeechSynthesizer()
         synthesizer = speaker
+        speaker.delegate = self
         if speaker.isSpeaking {
             speaker.stopSpeaking(at: .immediate)
         }
-        let utterance = AVSpeechUtterance(string: text)
+        let utterance = AVSpeechUtterance(string: trimmed)
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         if let voice = AVSpeechSynthesisVoice(language: "en-US") {
             utterance.voice = voice
         }
+        current = utterance
+        onFinish = whenFinished
         speaker.speak(utterance)
+    }
+
+    func stop() {
+        onFinish = nil
+        current = nil
+        synthesizer?.stopSpeaking(at: .immediate)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        let finished = utterance
+        DispatchQueue.main.async { [weak self] in
+            guard let self, finished === self.current else { return }
+            let finish = self.onFinish
+            self.onFinish = nil
+            self.current = nil
+            finish?()
+        }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        let cancelled = utterance
+        DispatchQueue.main.async { [weak self] in
+            guard let self, cancelled === self.current else { return }
+            self.onFinish = nil
+            self.current = nil
+        }
+    }
+}
+
+enum VoiceInput {
+    static func present(_ onText: @escaping (String) -> Void) {
+        guard let controller = WKExtension.shared().visibleInterfaceController else { return }
+        controller.presentTextInputController(withSuggestions: nil, allowedInputMode: .plain) { results in
+            guard let text = results?.first as? String else { return }
+            DispatchQueue.main.async {
+                onText(text)
+            }
+        }
     }
 }
 
@@ -122,17 +159,17 @@ struct VoiceHomeSection: View {
                         .fill(LojoTheme.brandGradient)
                 )
             } onSubmit: { text in
-                model.acceptDictation(text)
+                model.openVoiceConversation(text)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Dictate a task")
-            .accessibilityHint("Starts dictation and sends the text as a new task to the active computer.")
+            .accessibilityLabel("Voice conversation")
+            .accessibilityHint("Starts dictation. Tasks, status, and approvals continue by voice.")
 
             Toggle(isOn: $preferences.autoSend) {
                 Text("Auto-send")
                     .font(.caption2)
             }
-            .accessibilityHint("Sends a dictated task without asking. Off until you turn it on.")
+            .accessibilityHint("Voice conversation sends a spoken task either way. Off until you turn it on.")
 
             Toggle(isOn: $preferences.readAloud) {
                 Text("Read results aloud")
@@ -222,24 +259,23 @@ struct VoiceApprovalMic: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            TextFieldLink(prompt: Text("Allow, deny, or stop")) {
+            TextFieldLink(prompt: Text("Allow, deny, stop, or yes")) {
                 Label("Voice", systemImage: "mic.fill")
                     .frame(maxWidth: .infinity)
             } onSubmit: { text in
-                model.acceptApprovalVoice(text, session: session)
+                model.handleVoiceTurn(text, focused: session)
             }
             .buttonStyle(QuietButtonStyle(compact: true))
             .accessibilityLabel("Voice command")
-            .accessibilityHint("Say allow, deny, or stop. Allow waits for a tap.")
+            .accessibilityHint("Say allow, then yes to confirm. Deny and stop send immediately.")
 
             if model.pendingAllowSessionID == session.id {
-                Button("Tap to allow") {
-                    WatchFeedback.success()
+                Button("Yes") {
                     model.confirmPendingAllow(session)
                 }
                 .buttonStyle(PrimaryButtonStyle(compact: true))
-                .accessibilityLabel("Tap to allow")
-                .accessibilityHint("Confirms the spoken allow")
+                .accessibilityLabel("Yes")
+                .accessibilityHint("Confirms the spoken allow. Say yes to confirm, or tap.")
             }
 
             if model.voiceNoteSessionID == session.id, let note = model.voiceNote, !note.isEmpty {
@@ -249,6 +285,58 @@ struct VoiceApprovalMic: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+}
+
+struct VoiceChatView: View {
+    @EnvironmentObject private var model: WatchModel
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(model.voiceLine.isEmpty ? "Say a task, or say list sessions, status, stop, or allow." : model.voiceLine)
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+                    .accessibilityLabel("Spoken")
+                    .accessibilityValue(model.voiceLine)
+                TextFieldLink(prompt: Text("Reply")) {
+                    Label("Speak", systemImage: "mic.fill")
+                        .frame(maxWidth: .infinity)
+                } onSubmit: { text in
+                    model.handleVoiceTurn(text)
+                }
+                .buttonStyle(PrimaryButtonStyle(compact: true))
+                .accessibilityLabel("Speak")
+                .accessibilityHint("Continues the voice conversation.")
+                if model.pendingAllowSessionID != nil {
+                    Button("Yes") {
+                        model.confirmSpokenAllow()
+                    }
+                    .buttonStyle(PrimaryButtonStyle(compact: true))
+                    .accessibilityLabel("Yes")
+                    .accessibilityHint("Confirms the spoken allow. Say yes to confirm, or tap.")
+                }
+                if let banner = model.banner, !banner.isEmpty {
+                    Text(banner)
+                        .font(.caption2)
+                        .foregroundStyle(LojoTheme.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button("Done") {
+                    model.endVoiceConversation()
+                }
+                .buttonStyle(QuietButtonStyle(compact: true))
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 16)
+        }
+        .watchPage()
+        .contentMargins(.top, 8, for: .scrollContent)
+        .navigationTitle("Voice")
+        .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
     }
 }
 
@@ -268,16 +356,25 @@ extension WatchModel {
         }
     }
 
-    /// Siri already named the task. Send it on the iPhone path or the direct relay, whichever is up.
+    /// Siri and the home microphone enter the same conversation.
     func submitSpokenTask(_ transcript: String) {
         guard forcedScreen == nil else { return }
-        switch VoiceTaskPolicy.disposition(transcript: transcript, autoSend: true) {
-        case .ignore:
-            return
-        case .confirm(let prompt), .send(let prompt):
-            heldVoiceTask = prompt
-            flushHeldVoiceTask(announcingFailure: false)
-        }
+        voiceModeActive = true
+        handleVoiceTurn(transcript)
+    }
+
+    func openVoiceConversation(_ transcript: String) {
+        guard forcedScreen == nil else { return }
+        voiceModeActive = true
+        handleVoiceTurn(transcript)
+    }
+
+    func endVoiceConversation() {
+        voiceModeActive = false
+        pendingAllowSessionID = nil
+        voiceNote = nil
+        voiceNoteSessionID = nil
+        VoiceSpeaker.shared.stop()
     }
 
     func flushHeldVoiceTask(announcingFailure: Bool = true) {
@@ -288,29 +385,89 @@ extension WatchModel {
         }
     }
 
-    func acceptApprovalVoice(_ transcript: String, session: GrokSession) {
-        switch VoiceCommandMatcher.approvalEffect(for: transcript) {
+    func handleVoiceTurn(_ transcript: String, focused: GrokSession? = nil) {
+        guard forcedScreen == nil else { return }
+        let phase: VoiceDialogue = pendingAllowSessionID == nil ? .idle : .awaitingAllowYes
+        let command = VoiceDialogueMatcher.interpret(transcript, phase: phase)
+        heldVoiceTask = nil
+        switch command {
+        case .requestAllow:
+            beginAllowReadback(for: focused ?? approvalSession())
         case .confirmAllow:
-            pendingAllowSessionID = session.id
-            voiceNote = nil
-            voiceNoteSessionID = nil
-            WatchFeedback.notification()
+            confirmSpokenAllow()
         case .deny:
+            guard let session = focused ?? approvalSession() ?? stoppableSession() else {
+                reply("Nothing is waiting.", listenAfter: voiceModeActive)
+                return
+            }
             pendingAllowSessionID = nil
             voiceNote = nil
             voiceNoteSessionID = nil
             WatchFeedback.failure()
             deny(session)
-        case .stop:
+            reply("Denied.", listenAfter: voiceModeActive)
+        case .stop, .stopSession:
+            guard let session = focused ?? stoppableSession() else {
+                reply("Nothing is running.", listenAfter: voiceModeActive)
+                return
+            }
             pendingAllowSessionID = nil
             voiceNote = nil
             voiceNoteSessionID = nil
             WatchFeedback.click()
             stop(session)
+            reply("Stopping \(session.title).", listenAfter: voiceModeActive)
+        case .listSessions:
+            reply(VoiceAllowScript.sessionsSpeech(snapshot.sessions), listenAfter: voiceModeActive)
+        case .status:
+            let running = snapshot.sessions.filter { $0.status == .running }.count
+            let waiting = snapshot.sessions.filter { $0.permission != nil }.count
+            reply(
+                VoiceAllowScript.statusSpeech(
+                    host: snapshot.hostLabel,
+                    linkTitle: snapshot.link.title,
+                    running: running,
+                    waiting: waiting
+                ),
+                listenAfter: voiceModeActive
+            )
+        case .switchComputer(let name):
+            switchSpokenComputer(name)
+        case .newTask(let prompt):
+            pendingAllowSessionID = nil
+            voiceNote = nil
+            voiceNoteSessionID = nil
+            heldVoiceTask = prompt
+            flushHeldVoiceTask(announcingFailure: true)
+            if heldVoiceTask == nil {
+                let spoken = VoiceAllowScript.shortTask(prompt)
+                if let banner, !banner.isEmpty {
+                    reply("\(banner) \(spoken)", listenAfter: false)
+                } else {
+                    reply("Sending. \(spoken)", listenAfter: false)
+                }
+            } else if let banner, !banner.isEmpty {
+                reply(banner, listenAfter: voiceModeActive)
+            } else {
+                reply("Could not send that.", listenAfter: voiceModeActive)
+            }
+        case .cancelConfirm:
+            pendingAllowSessionID = nil
+            voiceNote = nil
+            voiceNoteSessionID = nil
+            reply("Not allowed.", listenAfter: voiceModeActive)
         case .unrecognized:
-            voiceNoteSessionID = session.id
-            voiceNote = "Say allow, deny, or stop."
+            reply("Say a task, list sessions, status, stop, or allow.", listenAfter: voiceModeActive)
         }
+    }
+
+    func confirmSpokenAllow() {
+        guard let session = approvalSession(), session.id == pendingAllowSessionID else {
+            pendingAllowSessionID = nil
+            reply("Nothing is waiting for approval.", listenAfter: voiceModeActive)
+            return
+        }
+        confirmPendingAllow(session)
     }
 
     func confirmPendingAllow(_ session: GrokSession) {
@@ -318,6 +475,111 @@ extension WatchModel {
         pendingAllowSessionID = nil
         voiceNote = nil
         voiceNoteSessionID = nil
+        WatchFeedback.success()
         allow(session)
+        reply("Allowed.", listenAfter: voiceModeActive)
+    }
+
+    func noteVoiceSnapshot(previous: PhoneSnapshot, current: PhoneSnapshot) {
+        guard forcedScreen == nil else { return }
+        let speakResults = VoicePreferences.shared.readAloud || voiceModeActive
+        let includeNew = previous.mode == current.mode
+        let result = speakResults
+            ? VoiceResultPicker.latestResult(previous: previous.sessions, current: current.sessions, includeNew: includeNew)
+            : nil
+        let oldIDs = Set(previous.sessions.compactMap(\.permission?.id))
+        let arrived = current.sessions.first { session in
+            guard let permission = session.permission else { return false }
+            return !oldIDs.contains(permission.id)
+        }
+        if voiceModeActive, let arrived {
+            beginAllowReadback(for: arrived, haptic: false)
+            return
+        }
+        if let result {
+            if voiceModeActive {
+                voiceLine = result.text
+            }
+            VoiceSpeaker.shared.speakNow(result.text, dedupeKey: result.sessionID + "\n" + result.text) { [weak self] in
+                guard let self, self.voiceModeActive else { return }
+                self.presentNextListenIfNeeded()
+            }
+        }
+    }
+
+    private func beginAllowReadback(for session: GrokSession?, haptic: Bool = true) {
+        guard let session, let permission = session.permission else {
+            reply("Nothing is waiting for approval.", listenAfter: voiceModeActive)
+            return
+        }
+        pendingAllowSessionID = session.id
+        let line = VoiceAllowScript.readback(title: permission.title, detail: permission.detail)
+        voiceNote = line
+        voiceNoteSessionID = session.id
+        if haptic {
+            WatchFeedback.notification()
+        }
+        reply(line, listenAfter: true)
+    }
+
+    private func switchSpokenComputer(_ name: String?) {
+        let computers = snapshot.computers
+        guard !computers.isEmpty else {
+            reply("No saved computers.", listenAfter: voiceModeActive)
+            return
+        }
+        guard let name, !name.isEmpty else {
+            let labels = computers.map(\.label).joined(separator: ", ")
+            reply("Say switch to \(labels).", listenAfter: true)
+            return
+        }
+        guard let label = VoiceAllowScript.matchingLabel(spoken: name, labels: computers.map(\.label)),
+              let match = computers.first(where: { $0.label == label }) else {
+            let labels = computers.map(\.label).joined(separator: ", ")
+            reply("Say switch to \(labels).", listenAfter: true)
+            return
+        }
+        if match.id == snapshot.activeComputerID {
+            reply("Already using \(match.label).", listenAfter: voiceModeActive)
+            return
+        }
+        selectComputer(match.id)
+        if let banner, !banner.isEmpty {
+            reply(banner, listenAfter: voiceModeActive)
+            return
+        }
+        reply("Switching to \(match.label).", listenAfter: voiceModeActive)
+    }
+
+    private func approvalSession() -> GrokSession? {
+        if let id = pendingAllowSessionID,
+           let session = snapshot.sessions.first(where: { $0.id == id }),
+           session.permission != nil {
+            return session
+        }
+        return snapshot.sessions.first { $0.permission != nil }
+    }
+
+    private func stoppableSession() -> GrokSession? {
+        if let id = pendingAllowSessionID, let session = snapshot.sessions.first(where: { $0.id == id }) {
+            return session
+        }
+        return snapshot.sessions.first { $0.status == .needsApproval || $0.status == .running }
+    }
+
+    private func reply(_ text: String, listenAfter: Bool) {
+        voiceLine = text
+        VoiceSpeaker.shared.speakNow(text) { [weak self] in
+            guard let self, listenAfter else { return }
+            self.presentNextListenIfNeeded()
+        }
+    }
+
+    private func presentNextListenIfNeeded() {
+        guard forcedScreen == nil else { return }
+        guard voiceModeActive || pendingAllowSessionID != nil else { return }
+        VoiceInput.present { [weak self] text in
+            self?.handleVoiceTurn(text)
+        }
     }
 }

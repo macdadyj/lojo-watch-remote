@@ -14,7 +14,9 @@ struct WatchRootView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if model.forcedScreen == nil, let prompt = model.pendingDictation {
+                if model.forcedScreen == nil, model.voiceModeActive {
+                    VoiceChatView()
+                } else if model.forcedScreen == nil, let prompt = model.pendingDictation {
                     VoiceConfirmView(transcript: prompt, isPreview: false)
                 } else {
                     switch model.forcedScreen {
@@ -43,12 +45,7 @@ struct WatchRootView: View {
             model.wake()
         }
         .onChange(of: model.snapshot) { previous, current in
-            guard model.forcedScreen == nil else { return }
-            VoiceSpeaker.shared.speakIfNeeded(
-                previous: previous,
-                current: current,
-                enabled: VoicePreferences.shared.readAloud
-            )
+            model.noteVoiceSnapshot(previous: previous, current: current)
         }
     }
 }
