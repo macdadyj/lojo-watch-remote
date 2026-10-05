@@ -73,9 +73,13 @@ private enum EnrollTCP {
                 switch state {
                 case .ready:
                     gate.succeed(continuation)
-                case .failed, .cancelled:
+                case .failed:
                     gate.fail(continuation)
-                case .setup, .preparing, .waiting:
+                case .cancelled:
+                    gate.fail(continuation)
+                case .setup, .preparing:
+                    break
+                case .waiting:
                     break
                 @unknown default:
                     break
@@ -110,7 +114,7 @@ private enum EnrollTCP {
             }
             if chunk.isEmpty { break }
             let room = maxResponse - collected.count
-            collected.append(chunk.prefix(room))
+            collected.append(contentsOf: chunk.prefix(room))
         }
         guard !collected.isEmpty else { throw EnrollTCPError.failed }
         return collected
