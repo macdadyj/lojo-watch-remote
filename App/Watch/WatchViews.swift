@@ -51,6 +51,9 @@ struct WatchListView: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(headerTitle)
+                    if model.snapshot.computers.count > 1 {
+                        computerSwitcher
+                    }
                     if model.snapshot.mode == .demo { DemoBadge(compact: true) }
                     if showsApprovalNote {
                         Text("Tasks cannot ask for approval.")
@@ -98,6 +101,30 @@ struct WatchListView: View {
         .navigationTitle("Remote")
         .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
         .onAppear { model.refresh() }
+    }
+
+    private var computerSwitcher: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Computers")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(LojoTheme.readableSecondary(scheme))
+            ForEach(model.snapshot.computers) { computer in
+                Button {
+                    model.selectComputer(computer.id)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: computer.id == model.snapshot.activeComputerID ? "checkmark.circle.fill" : "circle")
+                            .font(.caption2)
+                        Text(computer.label)
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(computer.id == model.snapshot.activeComputerID ? "\(computer.label), active" : "Switch to \(computer.label)")
+            }
+        }
     }
 
     private var phoneAway: Bool {

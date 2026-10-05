@@ -81,7 +81,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Agent server secret")
                 .font(.headline)
-            Text(store.hasAgentSecret ? "Saved in the Keychain." : "Not saved yet.")
+            Text(store.hasAgentSecret ? "Saved in the Keychain for this computer." : "Not saved yet for this computer.")
                 .font(.subheadline)
                 .foregroundStyle(LojoTheme.secondaryText)
             SecureField("From the computer, not stored in git", text: $agentSecret)

@@ -32,6 +32,11 @@ jobs:
       - name: Relay unit tests
         run: PYTHONPATH=relay python3 relay/tests/test_relay.py
 
+      - name: Pairing script self-test
+        run: |
+          host/watch-remote-pair --self-test
+          host/watch-remote-authorize --self-test
+
       - name: Archive script self-test
         run: scripts/archive-upload.sh --self-test
 

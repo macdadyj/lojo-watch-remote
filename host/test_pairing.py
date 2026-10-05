@@ -1,0 +1,121 @@
+#!/usr/bin/env python3
+"""Self-test for the pairing payload. Uses placeholders only."""
+
+from __future__ import annotations
+
+import os
+import stat
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import pairing  # noqa: E402
+import qrcodegen  # noqa: E402
+
+
+FINGERPRINT = "SHA256:" + ("A" * 43)
+GOLDEN = (
+    "eyJhZGRyZXNzIjoiMTAwLjY0LjAuMiIsImZpbmdlcnByaW50IjoiU0hBMjU2OkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEiLCJsYWJlbCI6ImV4YW1wbGUtaG9zdCIsInBvcnQiOjIyLCJzZWNyZXQiOiJleGFtcGxlLXNlY3JldCIsInVzZXIiOiJ1c2VyIiwidiI6MX0"
+)
+BARE = "eyJhZGRyZXNzIjoiMTAwLjY0LjAuMSIsImxhYmVsIjoiZXhhbXBsZS1ob3N0IiwicG9ydCI6MjIsInVzZXIiOiJ1c2VyIiwidiI6MX0"
+
+
+class PairingTests(unittest.TestCase):
+    def test_round_trip_matches_the_phone_token(self) -> None:
+        payload = pairing.build_payload(
+            "example-host",
+            "100.64.0.2",
+            "user",
+            22,
+            secret="example-secret",
+            fingerprint="sha256:" + ("A" * 43) + "=",
+        )
+        self.assertEqual(payload["fingerprint"], FINGERPRINT)
+        self.assertEqual(pairing.token_for(payload), GOLDEN)
+        url = pairing.url_for(payload)
+        self.assertTrue(url.startswith("watchremote://pair?d="))
+        decoded = pairing.decode_text("  " + url + "\n")
+        self.assertEqual(decoded, payload)
+        summary = "\n".join(pairing.summary_lines(payload))
+        self.assertNotIn("example-secret", summary)
+        self.assertNotIn("example-secret", pairing.warning_text(True))
+        self.assertIn("do not share", pairing.warning_text(True).lower())
+        self.assertIn("screenshot", pairing.warning_text(True).lower())
+        self.assertIn("watch-remote-authorize", pairing.authorize_hint())
+
+    def test_optional_fields_and_overlay(self) -> None:
+        bare = pairing.build_payload(" example-host ", "100.64.0.1", "user", 22)
+        self.assertNotIn("secret", bare)
+        self.assertEqual(pairing.token_for(bare), BARE)
+        edge = pairing.decode_text(
+            '{"v":1,"user":"user","port":22,"address":"100.127.255.254","label":"example-host"}'
+        )
+        self.assertEqual(edge["address"], "100.127.255.254")
+        for refused in ("8.8.8.8", "10.0.0.1", "127.0.0.1", "192.168.1.1", "example-host", "100.064.0.1", "100.128.0.1"):
+            with self.assertRaises(pairing.PairingError):
+                pairing.build_payload("example-host", refused, "user", 22)
+        with self.assertRaises(pairing.PairingError):
+            pairing.build_payload("example-host", "100.64.0.2", "bad user", 22)
+        with self.assertRaises(pairing.PairingError):
+            pairing.build_payload("example-host", "100.64.0.2", "user", 22, secret="short")
+        with self.assertRaises(pairing.PairingError):
+            pairing.decode_text('{"v":2,"label":"example-host","address":"100.64.0.2","user":"user","port":22}')
+
+    def test_address_scan_ignores_public_and_leading_zeros(self) -> None:
+        text = "inet 10.0.0.1 netmask inet 100.64.0.2 inet 8.8.8.8 inet 100.064.0.1 inet 100.127.255.254"
+        self.assertEqual(pairing.addresses_in(text), ["100.64.0.2", "100.127.255.254"])
+        config = "# Port 2222\nPort 22\nMatch User user\n    Port 2200\n"
+        self.assertEqual(pairing.port_from_config(config), 22)
+        sample = f"256 {FINGERPRINT} example (ED25519)"
+        self.assertEqual(pairing.fingerprint_from_ssh_keygen(sample), FINGERPRINT)
+
+    def test_authorize_is_restricted_and_idempotent(self) -> None:
+        public = "ssh-ed25519 AAAAB3NzaC1lZDI1NTE5AAAAIExamplePublicKeyPlaceholderOnly watch-remote@iphone"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / ".ssh" / "authorized_keys"
+            message = pairing.authorize_key(public, path)
+            self.assertIn("127.0.0.1:2419", message)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn('restrict,port-forwarding,permitopen="127.0.0.1:2419"', text)
+            self.assertIn(public, text)
+            self.assertNotIn("PRIVATE", text)
+            mode = stat.S_IMODE(path.stat().st_mode)
+            self.assertEqual(mode, 0o600)
+            dir_mode = stat.S_IMODE(path.parent.stat().st_mode)
+            self.assertEqual(dir_mode, 0o700)
+            pairing.authorize_key(public, path)
+            self.assertEqual(path.read_text(encoding="utf-8").count("AAAAB3NzaC1lZDI1NTE5AAAAIExamplePublicKeyPlaceholderOnly"), 1)
+            path.write_text(public + "\n", encoding="utf-8")
+            pairing.authorize_key(f"watch-remote-authorize '{public}'", path)
+            replaced = path.read_text(encoding="utf-8").strip()
+            self.assertTrue(replaced.startswith('restrict,port-forwarding,permitopen="127.0.0.1:2419" '))
+            self.assertEqual(replaced.count("AAAAB3NzaC1lZDI1NTE5AAAAIExamplePublicKeyPlaceholderOnly"), 1)
+        with self.assertRaises(pairing.PairingError):
+            pairing.parse_public_key("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n")
+
+    def test_builtin_qr_has_a_finder(self) -> None:
+        url = pairing.url_for(
+            pairing.build_payload(
+                "example-host",
+                "100.64.0.2",
+                "user",
+                22,
+                secret="example-secret",
+                fingerprint=FINGERPRINT,
+            )
+        )
+        qr = qrcodegen.QrCode.encode_text(url, qrcodegen.QrCode.Ecc.MEDIUM)
+        self.assertGreaterEqual(qr.get_size(), 21)
+        self.assertTrue(qr.get_module(0, 0))
+        rendered = pairing.render_qr(url)
+        self.assertIn("█", rendered)
+        self.assertNotIn("example-secret", rendered)
+
+
+if __name__ == "__main__":
+    suite = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+    result = unittest.TextTestRunner(verbosity=1).run(suite)
+    raise SystemExit(0 if result.wasSuccessful() else 1)

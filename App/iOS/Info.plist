@@ -29,6 +29,19 @@
 	<false/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Watch Remote reaches your computer on your private network.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Watch Remote scans a pairing QR code shown on your computer. The camera is not used for anything else.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.lojo.WatchRemote.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>watchremote</string>
+			</array>
+		</dict>
+	</array>
 	<key>WatchRemoteHostLabel</key>
 	<string>$(WATCHREMOTE_HOST_LABEL)</string>
 	<key>WatchRemoteHostAddress</key>

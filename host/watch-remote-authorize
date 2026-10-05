@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Append this iPhone's public key with local forwarding limited to 127.0.0.1:2419.
+set -euo pipefail
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required. See docs/HOST-SETUP.md." >&2
+  exit 1
+fi
+
+root="$(cd "$(dirname "$0")" && pwd)"
+if [[ "${1:-}" == "--self-test" ]]; then
+  exec python3 "${root}/test_pairing.py"
+fi
+exec python3 "${root}/pairing.py" authorize "$@"
