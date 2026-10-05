@@ -24,5 +24,16 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Grok</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>grok</string>
+			<key>INPreferredForAppShortcuts</key>
+			<true/>
+		</dict>
+	</array>
 </dict>
 </plist>

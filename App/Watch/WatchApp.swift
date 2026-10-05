@@ -23,6 +23,13 @@ final class WatchModel: ObservableObject {
     @Published var reachable = false
     @Published var banner: String?
     @Published var pathTitle = "via iPhone"
+    @Published var pendingDictation: String?
+    @Published var pendingAllowSessionID: String?
+    @Published var voiceNote: String?
+    @Published var voiceNoteSessionID: String?
+    @Published var voiceModeActive = false
+    @Published var voiceLine = ""
+    var heldVoiceTask: String?
     private let bridge = WatchBridge()
     private let direct = DirectSession()
     private var pendingPrompt: String?
@@ -60,6 +67,14 @@ final class WatchModel: ObservableObject {
             }
             self.reachable = reachable
             self.route()
+            self.deliverPendingPromptIfPhoneIsBack()
+            self.flushHeldVoiceTask()
+        }
+        VoiceHandoff.handler = { [weak self] prompt in
+            self?.submitSpokenTask(prompt)
+        }
+        if forcedScreen == nil, let pending = VoiceHandoff.takePending() {
+            submitSpokenTask(pending)
         }
     }
 
@@ -78,7 +93,7 @@ final class WatchModel: ObservableObject {
     }
 
     @discardableResult
-    func start(_ prompt: String) -> Bool {
+    func start(_ prompt: String, announcingFailure: Bool = true) -> Bool {
         if forcedScreen != nil {
             return true
         }
@@ -94,11 +109,24 @@ final class WatchModel: ObservableObject {
             return true
         }
         let queued = bridge.send(PhoneCommand(kind: .start, prompt: prompt))
-        banner = queued ? nil : (direct.hasPairing ? "Connecting directly. Try again in a moment." : "Pair on iPhone first.")
-        if !queued && direct.hasPairing {
+        if queued {
+            banner = nil
+        } else if announcingFailure {
+            banner = direct.hasPairing ? "Connecting directly. Try again in a moment." : "Pair on iPhone first."
+            if direct.hasPairing {
+                direct.connectIfNeeded()
+            }
+        } else if direct.hasPairing {
             direct.connectIfNeeded()
         }
         return queued
+    }
+
+    private func deliverPendingPromptIfPhoneIsBack() {
+        guard reachable, let prompt = pendingPrompt else { return }
+        guard bridge.send(PhoneCommand(kind: .start, prompt: prompt)) else { return }
+        pendingPrompt = nil
+        banner = nil
     }
 
     func allow(_ session: GrokSession) {
@@ -172,6 +200,7 @@ final class WatchModel: ObservableObject {
                 pendingPrompt = nil
                 direct.start(prompt, cwd: nil)
             }
+            flushHeldVoiceTask()
         case .connecting:
             snapshot.link = .connecting
         case .failed(let text):

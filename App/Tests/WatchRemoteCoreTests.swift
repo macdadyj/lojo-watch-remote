@@ -388,4 +388,200 @@ final class WatchRemoteCoreTests: XCTestCase {
         let encoded = try? XCTUnwrap(LinkCodec.encodeCommand(command))
         XCTAssertEqual(encoded.flatMap(LinkCodec.decodeCommand), command)
     }
+
+    func testVoiceDialogueMatchesCommandsAndConfirmsAllowInTwoSteps() {
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Allow", phase: .idle), .requestAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Allow!", phase: .idle), .requestAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("please approve it", phase: .idle), .requestAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("yes", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("confirm", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Yes, confirm", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("OK", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("go ahead", phase: .idle), .unrecognized)
+
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("yes", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("confirm", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Yes, confirm", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("okay", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("go ahead", phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("allow", phase: .awaitingAllowYes), .requestAllow)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("deny", phase: .awaitingAllowYes), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("stop", phase: .awaitingAllowYes), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("never mind", phase: .awaitingAllowYes), .cancelConfirm)
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("Fix the tests", phase: .awaitingAllowYes),
+            .newTask("Fix the tests")
+        )
+
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("deny", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Don't allow", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Don\u{2019}t allow", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("do not approve", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("no", phase: .idle), .deny)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("reject it", phase: .idle), .deny)
+
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("stop", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("STOP the task", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("cancel", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("halt it", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("please stop", phase: .idle), .stop)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("stop session", phase: .idle), .stopSession)
+
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("list sessions", phase: .idle), .listSessions)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("status", phase: .idle), .status)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("switch computer", phase: .idle), .switchComputer(nil))
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("switch computer to", phase: .idle), .switchComputer(nil))
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("switch to example-host", phase: .idle),
+            .switchComputer("example host")
+        )
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("Fix the tests", phase: .idle), .newTask("Fix the tests"))
+
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("   ", phase: .idle), .unrecognized)
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("please", phase: .idle), .unrecognized)
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("allow the parser to write the file", phase: .idle),
+            .newTask("allow the parser to write the file")
+        )
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("stop by the lab", phase: .idle),
+            .newTask("stop by the lab")
+        )
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("don't stop", phase: .idle), .newTask("don't stop"))
+        XCTAssertEqual(VoiceDialogueMatcher.interpret("allowance", phase: .idle), .newTask("allowance"))
+        XCTAssertEqual(
+            VoiceDialogueMatcher.interpret("Ask Grok to fix the tests", phase: .idle),
+            .newTask("Ask Grok to fix the tests")
+        )
+
+        let line = VoiceAllowScript.readback(title: "Edit the file", detail: "Write the tests")
+        XCTAssertTrue(line.contains("Edit the file"))
+        XCTAssertTrue(line.contains("Write the tests"))
+        XCTAssertTrue(line.hasSuffix(VoiceAllowScript.confirmCue))
+        XCTAssertNotEqual(VoiceDialogueMatcher.interpret(line, phase: .idle), .requestAllow)
+        XCTAssertNotEqual(VoiceDialogueMatcher.interpret(line, phase: .awaitingAllowYes), .confirmAllow)
+        XCTAssertNotEqual(VoiceDialogueMatcher.interpret(line, phase: .awaitingAllowYes), .requestAllow)
+
+        let long = VoiceAllowScript.readback(title: String(repeating: "word ", count: 80), detail: "detail")
+        XCTAssertTrue(long.hasSuffix(VoiceAllowScript.confirmCue))
+        XCTAssertLessThanOrEqual(long.count, 180)
+
+        XCTAssertEqual(
+            VoiceAllowScript.matchingLabel(spoken: "example host", labels: ["example-host"]),
+            "example-host"
+        )
+        XCTAssertNil(VoiceAllowScript.matchingLabel(spoken: "lab", labels: ["lab-1", "lab-2"]))
+        XCTAssertNil(VoiceAllowScript.matchingLabel(spoken: "a", labels: ["example-host"]))
+
+        let sessions = [
+            GrokSession(id: "1", title: "Logs", summary: "", status: .running),
+            GrokSession(id: "2", title: "Edit", summary: "", status: .needsApproval),
+        ]
+        XCTAssertEqual(VoiceAllowScript.sessionsSpeech(sessions), "2 sessions. Logs, Running. Edit, Needs approval.")
+        XCTAssertEqual(VoiceAllowScript.sessionsSpeech([]), "No sessions.")
+        XCTAssertEqual(
+            VoiceAllowScript.statusSpeech(host: "example-host", linkTitle: "Connected", running: 2, waiting: 1),
+            "example-host. Connected. 1 task needs approval."
+        )
+        XCTAssertEqual(
+            VoiceAllowScript.statusSpeech(host: "example-host", linkTitle: "Connected", running: 0, waiting: 0),
+            "example-host. Connected. Nothing is running."
+        )
+    }
+
+    func testVoiceTaskAsksBeforeSendingUnlessAutoSendIsOn() {
+        XCTAssertEqual(
+            VoiceTaskPolicy.disposition(transcript: "  Fix the tests  ", autoSend: false),
+            .confirm("Fix the tests")
+        )
+        XCTAssertEqual(
+            VoiceTaskPolicy.disposition(transcript: "Fix\nthe tests", autoSend: true),
+            .send("Fix the tests")
+        )
+        XCTAssertEqual(VoiceTaskPolicy.disposition(transcript: "   ", autoSend: true), .ignore)
+        XCTAssertEqual(VoiceTaskPolicy.disposition(transcript: "", autoSend: false), .ignore)
+        XCTAssertEqual(VoiceTaskPolicy.disposition(transcript: "cancel", autoSend: false), .confirm("cancel"))
+        XCTAssertEqual(VoiceTaskPolicy.disposition(transcript: "stop", autoSend: true), .send("stop"))
+        XCTAssertEqual(
+            VoiceTaskPolicy.disposition(transcript: "summarize the open changes", autoSend: true),
+            .send("summarize the open changes")
+        )
+    }
+
+    func testVoiceResultPickerReadsFinishedChangesOnly() {
+        let running = GrokSession(id: "1", title: "Logs", summary: "Looking", status: .running)
+        let done = GrokSession(
+            id: "1",
+            title: "Logs",
+            summary: "Build passed.",
+            status: .idle,
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(previous: [running], current: [done], includeNew: true),
+            VoiceResult(sessionID: "1", text: "Build passed.")
+        )
+        XCTAssertNil(VoiceResultPicker.latestResult(previous: [], current: [done], includeNew: true))
+        XCTAssertNil(VoiceResultPicker.latestResult(previous: [running], current: [running], includeNew: true))
+
+        let approval = GrokSession(id: "1", title: "Logs", summary: "Wants to edit.", status: .needsApproval)
+        XCTAssertNil(VoiceResultPicker.latestResult(previous: [running], current: [approval], includeNew: true))
+
+        let failed = GrokSession(id: "1", title: "Logs", summary: "The agent server did not answer.", status: .failed)
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(previous: [running], current: [failed], includeNew: false)?.text,
+            "The agent server did not answer."
+        )
+
+        let kept = GrokSession(id: "1", title: "Logs", summary: "Build passed.", status: .idle)
+        let fresh = GrokSession(id: "2", title: "New", summary: "Done.", status: .stopped)
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(previous: [done], current: [kept, fresh], includeNew: true)?.sessionID,
+            "2"
+        )
+        XCTAssertNil(VoiceResultPicker.latestResult(previous: [done], current: [kept, fresh], includeNew: false))
+
+        let older = GrokSession(
+            id: "1",
+            title: "A",
+            summary: "First result.",
+            status: .idle,
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        let newer = GrokSession(
+            id: "2",
+            title: "B",
+            summary: "Second result.",
+            status: .idle,
+            updatedAt: Date(timeIntervalSince1970: 9)
+        )
+        let olderWas = GrokSession(id: "1", title: "A", summary: "Old.", status: .running)
+        let newerWas = GrokSession(id: "2", title: "B", summary: "Old.", status: .running)
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(
+                previous: [olderWas, newerWas],
+                current: [older, newer],
+                includeNew: true
+            )?.text,
+            "Second result."
+        )
+
+        let sameTimeFirst = GrokSession(id: "1", title: "A", summary: "Alpha.", status: .idle)
+        let sameTimeSecond = GrokSession(id: "2", title: "B", summary: "Beta.", status: .idle)
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(
+                previous: [olderWas, newerWas],
+                current: [sameTimeFirst, sameTimeSecond],
+                includeNew: false
+            )?.text,
+            "Alpha."
+        )
+
+        let long = String(repeating: "word ", count: 80)
+        let longSession = GrokSession(id: "1", title: "Logs", summary: long, status: .stopped)
+        let spoken = VoiceResultPicker.latestResult(previous: [running], current: [longSession], includeNew: true)
+        XCTAssertLessThanOrEqual(spoken?.text.count ?? 0, 280)
+        XCTAssertTrue(spoken?.text.hasSuffix("…") ?? false)
+    }
 }
