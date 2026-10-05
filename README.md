@@ -21,7 +21,7 @@ Watch Remote is a client for your own computer. The iPhone stores the SSH key an
 
 - `Core/` — shared models, overlay policy, ACP and streaming-json codecs, demo data, LOJO theme. No networking.
 - `App/iOS/` — SwiftUI phone app, SSH (swift-nio-ssh), Keychain keys, WatchConnectivity.
-- `App/Watch/` — SwiftUI watch app. WatchConnectivity, and a direct `wss` path when a relay was paired.
+- `App/Watch/` — SwiftUI watch app. WatchConnectivity, a direct `wss` path when a relay was paired, dictation, and the Ask Grok shortcut.
 - `relay/` — optional Python HTTP relay for the iPhone (`watchremote_relay`). `relay/outbound/` is the separate ciphertext forwarder for the Watch.
 - `docs/outbound-relay.md` — how to host that forwarder. This repo does not deploy it.
 - `host/` — user systemd units, the agent wrapper, and `watch-remote-pair` / `watch-remote-authorize`.
@@ -37,6 +37,14 @@ Watch Remote is a client for your own computer. The iPhone stores the SSH key an
 Approvals (Allow, Deny, Stop) go through `grok agent serve` inside the SSH tunnel. If that server is not running, the phone runs headless `grok -p … --output-format streaming-json` and cannot approve a tool. Interactive TUIs already open on the computer stay untouched.
 
 The design follows LOJO Networks: system fonts, grouped backgrounds, 18pt cards, a 0.06 hairline, and the teal `#0F8C94` / indigo `#262E78` gradient on icon tiles and primary buttons.
+
+## Watch voice
+
+The Watch home keeps a microphone button on screen. Tapping it starts dictation. The text is a new task for the active computer. Send and Cancel come up first. **Auto-send** skips that step. **Read results aloud** speaks the latest finished summary. Both stay off until you turn them on.
+
+On an approval, say allow, deny, or stop. Deny and stop send immediately. Allow waits for a tap.
+
+Siri on the Watch takes “Ask Grok to” plus the task. The task goes through the iPhone when it is nearby, and through the direct relay when it is not.
 
 ## Generate and test
 

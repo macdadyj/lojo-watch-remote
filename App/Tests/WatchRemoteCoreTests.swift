@@ -346,4 +346,131 @@ final class WatchRemoteCoreTests: XCTestCase {
         let encoded = try? XCTUnwrap(LinkCodec.encodeCommand(command))
         XCTAssertEqual(encoded.flatMap(LinkCodec.decodeCommand), command)
     }
+
+    func testVoiceApprovalCommandsMatchWholePhrases() {
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "allow"), .confirmAllow)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "Allow!"), .confirmAllow)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "please approve it"), .confirmAllow)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "yes"), .confirmAllow)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "OK"), .confirmAllow)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "go ahead"), .confirmAllow)
+        XCTAssertEqual(VoiceCommandMatcher.action(in: "allow"), .allow)
+
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "deny"), .deny)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "Don't allow"), .deny)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "Don\u{2019}t allow"), .deny)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "do not approve"), .deny)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "no"), .deny)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "reject it"), .deny)
+
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "stop"), .stop)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "STOP the task"), .stop)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "cancel"), .stop)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "halt it"), .stop)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "please stop"), .stop)
+
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: ""), .unrecognized)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "   "), .unrecognized)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "please"), .unrecognized)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "allow the parser to write the file"), .unrecognized)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "stop by the lab"), .unrecognized)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "don't stop"), .unrecognized)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "allowance"), .unrecognized)
+        XCTAssertEqual(VoiceCommandMatcher.approvalEffect(for: "Ask Grok to fix the tests"), .unrecognized)
+    }
+
+    func testVoiceTaskAsksBeforeSendingUnlessAutoSendIsOn() {
+        XCTAssertEqual(
+            VoiceTaskPolicy.disposition(transcript: "  Fix the tests  ", autoSend: false),
+            .confirm("Fix the tests")
+        )
+        XCTAssertEqual(
+            VoiceTaskPolicy.disposition(transcript: "Fix\nthe tests", autoSend: true),
+            .send("Fix the tests")
+        )
+        XCTAssertEqual(VoiceTaskPolicy.disposition(transcript: "   ", autoSend: true), .ignore)
+        XCTAssertEqual(VoiceTaskPolicy.disposition(transcript: "", autoSend: false), .ignore)
+        XCTAssertEqual(VoiceTaskPolicy.disposition(transcript: "cancel", autoSend: false), .confirm("cancel"))
+        XCTAssertEqual(VoiceTaskPolicy.disposition(transcript: "stop", autoSend: true), .send("stop"))
+        XCTAssertEqual(
+            VoiceTaskPolicy.disposition(transcript: "summarize the open changes", autoSend: true),
+            .send("summarize the open changes")
+        )
+    }
+
+    func testVoiceResultPickerReadsFinishedChangesOnly() {
+        let running = GrokSession(id: "1", title: "Logs", summary: "Looking", status: .running)
+        let done = GrokSession(
+            id: "1",
+            title: "Logs",
+            summary: "Build passed.",
+            status: .idle,
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(previous: [running], current: [done], includeNew: true),
+            VoiceResult(sessionID: "1", text: "Build passed.")
+        )
+        XCTAssertNil(VoiceResultPicker.latestResult(previous: [], current: [done], includeNew: true))
+        XCTAssertNil(VoiceResultPicker.latestResult(previous: [running], current: [running], includeNew: true))
+
+        let approval = GrokSession(id: "1", title: "Logs", summary: "Wants to edit.", status: .needsApproval)
+        XCTAssertNil(VoiceResultPicker.latestResult(previous: [running], current: [approval], includeNew: true))
+
+        let failed = GrokSession(id: "1", title: "Logs", summary: "The agent server did not answer.", status: .failed)
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(previous: [running], current: [failed], includeNew: false)?.text,
+            "The agent server did not answer."
+        )
+
+        let kept = GrokSession(id: "1", title: "Logs", summary: "Build passed.", status: .idle)
+        let fresh = GrokSession(id: "2", title: "New", summary: "Done.", status: .stopped)
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(previous: [done], current: [kept, fresh], includeNew: true)?.sessionID,
+            "2"
+        )
+        XCTAssertNil(VoiceResultPicker.latestResult(previous: [done], current: [kept, fresh], includeNew: false))
+
+        let older = GrokSession(
+            id: "1",
+            title: "A",
+            summary: "First result.",
+            status: .idle,
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        let newer = GrokSession(
+            id: "2",
+            title: "B",
+            summary: "Second result.",
+            status: .idle,
+            updatedAt: Date(timeIntervalSince1970: 9)
+        )
+        let olderWas = GrokSession(id: "1", title: "A", summary: "Old.", status: .running)
+        let newerWas = GrokSession(id: "2", title: "B", summary: "Old.", status: .running)
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(
+                previous: [olderWas, newerWas],
+                current: [older, newer],
+                includeNew: true
+            )?.text,
+            "Second result."
+        )
+
+        let sameTimeFirst = GrokSession(id: "1", title: "A", summary: "Alpha.", status: .idle)
+        let sameTimeSecond = GrokSession(id: "2", title: "B", summary: "Beta.", status: .idle)
+        XCTAssertEqual(
+            VoiceResultPicker.latestResult(
+                previous: [olderWas, newerWas],
+                current: [sameTimeFirst, sameTimeSecond],
+                includeNew: false
+            )?.text,
+            "Alpha."
+        )
+
+        let long = String(repeating: "word ", count: 80)
+        let longSession = GrokSession(id: "1", title: "Logs", summary: long, status: .stopped)
+        let spoken = VoiceResultPicker.latestResult(previous: [running], current: [longSession], includeNew: true)
+        XCTAssertLessThanOrEqual(spoken?.text.count ?? 0, 280)
+        XCTAssertTrue(spoken?.text.hasSuffix("…") ?? false)
+    }
 }

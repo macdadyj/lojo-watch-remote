@@ -14,15 +14,24 @@ struct WatchRootView: View {
     var body: some View {
         NavigationStack {
             Group {
-                switch model.forcedScreen {
-                case "session", "long":
-                    if let session = model.snapshot.sessions.first(where: { $0.id == DemoCatalog.approvalID }) {
-                        WatchDetailView(session: session)
+                if model.forcedScreen == nil, let prompt = model.pendingDictation {
+                    VoiceConfirmView(transcript: prompt, isPreview: false)
+                } else {
+                    switch model.forcedScreen {
+                    case "session", "long":
+                        if let session = model.snapshot.sessions.first(where: { $0.id == DemoCatalog.approvalID }) {
+                            WatchDetailView(session: session)
+                        }
+                    case "compose":
+                        WatchComposeView()
+                    case "dictate":
+                        VoiceConfirmView(transcript: VoicePreview.task, isPreview: true)
+                    default:
+                        WatchListView()
+                            .safeAreaInset(edge: .bottom, spacing: 4) {
+                                VoiceHomeSection()
+                            }
                     }
-                case "compose":
-                    WatchComposeView()
-                default:
-                    WatchListView()
                 }
             }
         }
@@ -32,6 +41,14 @@ struct WatchRootView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             model.wake()
+        }
+        .onChange(of: model.snapshot) { previous, current in
+            guard model.forcedScreen == nil else { return }
+            VoiceSpeaker.shared.speakIfNeeded(
+                previous: previous,
+                current: current,
+                enabled: VoicePreferences.shared.readAloud
+            )
         }
     }
 }
@@ -308,6 +325,7 @@ struct WatchDetailView: View {
                     .accessibilityLabel("Stop")
                     .accessibilityHint("Stops this task")
                 }
+                VoiceApprovalMic(session: current)
             }
         }
     }
@@ -394,7 +412,7 @@ private struct WatchPage: ViewModifier {
 }
 
 extension View {
-    fileprivate func watchPage() -> some View {
+    func watchPage() -> some View {
         modifier(WatchPage())
     }
 }
