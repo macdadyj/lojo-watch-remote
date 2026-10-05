@@ -6,7 +6,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import socket
 import stat
 import sys
 import tempfile
@@ -179,19 +178,32 @@ class PairingTests(unittest.TestCase):
         self.assertIn("This iPhone can authorize itself.", summary)
         self.assertNotIn(ticket, summary)
         public = "ssh-ed25519 AAAAB3NzaC1lZDI1NTE5AAAAIExamplePublicKeyPlaceholderOnly watch-remote@iphone"
-        probe = socket.socket()
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-        probe.close()
         with tempfile.TemporaryDirectory() as directory:
             keys = Path(directory) / "authorized_keys"
             result: dict[str, str] = {}
+            bound = threading.Event()
+            ports: dict[str, int] = {}
+
+            def ready(actual: int) -> None:
+                ports["port"] = actual
+                bound.set()
 
             def run() -> None:
-                result["value"] = enroll.serve_enroll("127.0.0.1", port, ticket, keys, timeout=5)
+                try:
+                    result["value"] = enroll.serve_enroll(
+                        "127.0.0.1", 0, ticket, keys, timeout=5, ready=ready
+                    )
+                except Exception as error:
+                    result["error"] = f"{type(error).__name__}: {error}"
+                finally:
+                    bound.set()
 
             worker = threading.Thread(target=run, daemon=True)
             worker.start()
+            self.assertTrue(bound.wait(3), "enroll listener did not start")
+            if "error" in result:
+                self.fail(result["error"])
+            port = ports["port"]
             # macOS runners can send urllib through a system proxy. That never reaches this listener.
             opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
             bad = urllib.request.Request(
@@ -201,6 +213,7 @@ class PairingTests(unittest.TestCase):
                 method="POST",
             )
             refused = False
+            last_error = ""
             deadline = time.time() + 3
             while time.time() < deadline and not refused:
                 try:
@@ -208,9 +221,10 @@ class PairingTests(unittest.TestCase):
                 except urllib.error.HTTPError as error:
                     self.assertEqual(error.code, 401)
                     refused = True
-                except urllib.error.URLError:
+                except urllib.error.URLError as error:
+                    last_error = str(error.reason)
                     time.sleep(0.05)
-            self.assertTrue(refused)
+            self.assertTrue(refused, last_error)
             good = urllib.request.Request(
                 f"http://127.0.0.1:{port}/v1/enroll",
                 data=public.encode("utf-8"),

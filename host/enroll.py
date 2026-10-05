@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hmac
 import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -23,12 +24,20 @@ class EnrollError(Exception):
     pass
 
 
-def serve_enroll(address: str, port: int, ticket: str, keys_path: Path, timeout: float = TTL_SECONDS) -> str:
+def serve_enroll(
+    address: str,
+    port: int,
+    ticket: str,
+    keys_path: Path,
+    timeout: float = TTL_SECONDS,
+    ready: Callable[[int], None] | None = None,
+) -> str:
     if not ticket or pairing.normalize_token(ticket) != ticket:
         raise EnrollError("The one-time pairing ticket is not usable.")
     if address not in {"127.0.0.1", "localhost"} and not pairing.in_overlay(address):
         raise EnrollError("The pairing channel only listens on the private overlay.")
-    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+    # Port 0 lets the OS pick a free port. Tests use that so a probe socket cannot keep the port.
+    if not isinstance(port, int) or isinstance(port, bool) or not 0 <= port <= 65535:
         raise EnrollError("The pairing channel port is not usable.")
 
     outcome = {"value": "expired"}
@@ -81,8 +90,13 @@ def serve_enroll(address: str, port: int, ticket: str, keys_path: Path, timeout:
             self.end_headers()
             self.wfile.write(payload)
 
-    server = ThreadingHTTPServer((address, port), Handler)
+    class EnrollServer(ThreadingHTTPServer):
+        allow_reuse_address = True
+
+    server = EnrollServer((address, port), Handler)
     server.timeout = 0.5
+    if ready is not None:
+        ready(int(server.server_address[1]))
     deadline = time.monotonic() + timeout
     try:
         while time.monotonic() < deadline and outcome["value"] == "expired":
