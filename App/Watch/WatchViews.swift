@@ -28,6 +28,8 @@ struct WatchRootView: View {
                         WatchComposeView()
                     case "dictate":
                         VoiceConfirmView(transcript: VoicePreview.task, isPreview: true)
+                    case "voice-loop":
+                        VoiceLoopView()
                     default:
                         WatchListView()
                             .safeAreaInset(edge: .bottom, spacing: 4) {
@@ -40,7 +42,11 @@ struct WatchRootView: View {
         .tint(LojoTheme.accent)
         .environment(\.colorScheme, scheme)
         .preferredColorScheme(model.appearance.colorScheme)
+        .onAppear {
+            model.setActive(scenePhase == .active)
+        }
         .onChange(of: scenePhase) { _, phase in
+            model.setActive(phase == .active)
             guard phase == .active else { return }
             model.wake()
         }
