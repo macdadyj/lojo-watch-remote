@@ -44,6 +44,7 @@ jobs:
           python3 host/test_agentdoor.py
           node --test relay/outbound/test.mjs
           scripts/privacy-scan.sh
+          scripts/watch-ui-checklist.sh
 
       - name: Archive script self-test
         run: scripts/archive-upload.sh --self-test
@@ -114,6 +115,9 @@ jobs:
           WATCHREMOTE_SCREENSHOTS: ${{ github.event_name == 'pull_request' && 'full' || 'dispatch' }}
         run: scripts/capture-screenshots.sh
 
+      - name: Watch UI screenshot checklist
+        run: scripts/watch-ui-checklist.sh --screenshots build/screenshots
+
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         with:
@@ -156,6 +160,7 @@ jobs:
           python3 host/test_agentdoor.py
           node --test relay/outbound/test.mjs
           scripts/privacy-scan.sh
+          scripts/watch-ui-checklist.sh
 
       - name: Archive script self-test
         run: scripts/archive-upload.sh --self-test

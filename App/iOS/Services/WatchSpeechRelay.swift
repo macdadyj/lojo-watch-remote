@@ -83,9 +83,9 @@ final class WatchSpeechRelay {
             }
             let request = SFSpeechAudioBufferRecognitionRequest()
             request.shouldReportPartialResults = true
-            if recognizer.supportsOnDeviceRecognition {
-                request.requiresOnDeviceRecognition = true
-            }
+            // Prefer on-device when the model is installed. Requiring it fails the task
+            // when the asset is missing, and that failure used to open the Watch dictation sheet.
+            request.requiresOnDeviceRecognition = false
             let created = ActiveUtterance(id: packet.utteranceID, request: request, format: format)
             active = created
             created.task = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -138,13 +138,15 @@ final class WatchSpeechRelay {
             }
             return
         }
-        if error != nil {
-            if active.latest.isEmpty {
+        if let error {
+            let ns = error as NSError
+            let missed = VoiceFailureClassifier.kind(domain: ns.domain, code: ns.code) == .missed
+            if missed || active.ending || !active.latest.isEmpty {
+                finishActive(text: active.latest, sendTranscript: true)
+            } else {
                 let id = active.id
                 finishActive(text: "", sendTranscript: false)
                 send(VoicePacket(kind: .failure, utteranceID: id, text: VoiceSpeechCopy.unavailable))
-            } else if active.ending {
-                finishActive(text: active.latest, sendTranscript: true)
             }
         }
     }

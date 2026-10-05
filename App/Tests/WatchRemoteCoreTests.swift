@@ -754,4 +754,100 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertTrue(lines.contains { $0.contains("Stopping") })
         XCTAssertTrue(lines.contains { $0.contains("0.65s") })
     }
+
+    func testPairHelpNamesThePublicCommandAndAcceptsAnAliasFromTheCode() throws {
+        let text = PairingHelpCopy.instructions()
+        XCTAssertTrue(text.contains("your pair command"))
+        XCTAssertTrue(text.contains(PairingHelpCopy.publicCommand))
+        XCTAssertTrue(text.contains("alias"))
+        XCTAssertFalse(text.contains("@"))
+        XCTAssertFalse(text.contains("gmail"))
+        XCTAssertEqual(PairingHelpCopy.normalizeCommand("watch-remote-pair-local"), "watch-remote-pair-local")
+        XCTAssertEqual(PairingHelpCopy.normalizeCommand("  watch-remote-pair  "), "watch-remote-pair")
+        XCTAssertNil(PairingHelpCopy.normalizeCommand("user@host"))
+        XCTAssertNil(PairingHelpCopy.normalizeCommand("watch remote"))
+        XCTAssertNil(PairingHelpCopy.normalizeCommand("../pair"))
+        XCTAssertEqual(
+            PairingHelpCopy.leaveOpenLine(command: "watch-remote-pair-local"),
+            "Leave watch-remote-pair-local open on the computer until this phone says Connected."
+        )
+        XCTAssertEqual(PairingHelpCopy.leaveOpenLine(command: nil), PairingHelpCopy.leaveOpen)
+
+        let named = try PairingPayload(
+            label: "example-host",
+            address: "100.64.0.2",
+            user: "user",
+            port: 22,
+            pairCommand: "watch-remote-pair-local"
+        )
+        XCTAssertEqual(named.pairCommand, "watch-remote-pair-local")
+        XCTAssertTrue(named.summary.contains("watch-remote-pair-local"))
+        XCTAssertFalse(named.summary.contains("@"))
+        let decoded = try PairingPayload.decode(named.urlString())
+        XCTAssertEqual(decoded.pairCommand, "watch-remote-pair-local")
+        let plain = try PairingPayload(label: "example-host", address: "100.64.0.2", user: "user", port: 22)
+        XCTAssertNil(plain.pairCommand)
+        XCTAssertFalse(plain.summary.contains("Pair command"))
+        XCTAssertThrowsError(
+            try PairingPayload(label: "example-host", address: "100.64.0.2", user: "user", port: 22, pairCommand: "user@host")
+        ) { error in
+            XCTAssertEqual(error as? PairingError, .invalidPairCommand)
+        }
+    }
+
+    func testOpenPhoneStaysOnPauseToSendAndSpeakStaysOffTheHistory() {
+        XCTAssertEqual(
+            VoiceListenPolicy.route(phoneReachable: true, attempt: 0, recognitionRefused: false, captureFailed: false),
+            .handsFree
+        )
+        XCTAssertEqual(
+            VoiceListenPolicy.route(phoneReachable: false, attempt: 0, recognitionRefused: false, captureFailed: false),
+            .waitForPhone
+        )
+        XCTAssertEqual(
+            VoiceListenPolicy.route(
+                phoneReachable: false,
+                attempt: VoiceListenPolicy.phoneWaitAttempts,
+                recognitionRefused: false,
+                captureFailed: false
+            ),
+            .presentDictation
+        )
+        XCTAssertEqual(
+            VoiceListenPolicy.route(phoneReachable: true, attempt: 3, recognitionRefused: true, captureFailed: false),
+            .offerDictation
+        )
+        XCTAssertEqual(
+            VoiceListenPolicy.route(phoneReachable: true, attempt: 0, recognitionRefused: false, captureFailed: true),
+            .offerDictation
+        )
+        XCTAssertEqual(
+            VoiceListenPolicy.route(
+                phoneReachable: true,
+                attempt: VoiceListenPolicy.phoneWaitAttempts,
+                recognitionRefused: false,
+                captureFailed: false
+            ),
+            .offerDictation
+        )
+        XCTAssertFalse(VoiceListenPolicy.captureFormatIsUsable(sampleRate: 0, channelCount: 1))
+        XCTAssertTrue(VoiceListenPolicy.captureFormatIsUsable(sampleRate: 16_000, channelCount: 1))
+        XCTAssertEqual(VoiceFailureClassifier.kind(domain: "kAFAssistantErrorDomain", code: 1110), .missed)
+        XCTAssertEqual(VoiceFailureClassifier.kind(domain: "kAFAssistantErrorDomain", code: 216), .missed)
+        XCTAssertEqual(VoiceFailureClassifier.kind(domain: "SFSpeech", code: 1), .refused)
+        XCTAssertFalse(VoiceChromeSpec.home.speakCoversContent)
+        XCTAssertTrue(VoiceChromeSpec.home.showsHistory)
+        XCTAssertFalse(VoiceChromeSpec.home.showsEnd)
+        XCTAssertFalse(VoiceChromeSpec.conversation.speakCoversContent)
+        XCTAssertTrue(VoiceChromeSpec.conversation.showsHistory)
+        XCTAssertTrue(VoiceChromeSpec.conversation.showsEnd)
+        XCTAssertTrue(VoiceChromeSpec.conversation.secondaryActions.contains("End") == false)
+        XCTAssertTrue(VoiceChromeSpec.conversation.secondaryActions.contains("Yes"))
+        XCTAssertFalse(VoiceChromeMetrics.speakBarCoversContent(barHeight: 36, contentHeight: 180))
+        XCTAssertTrue(VoiceChromeMetrics.speakBarCoversContent(barHeight: 160, contentHeight: 180))
+        XCTAssertLessThanOrEqual(VoiceChromeMetrics.maxSpeakBarHeight, 44)
+        XCTAssertFalse(VoiceConversationFixture.history.isEmpty)
+        XCTAssertEqual(VoiceListenPolicy.name(.handsFree), "handsFree")
+        XCTAssertEqual(VoiceListenPolicy.name(.presentDictation), "presentDictation")
+    }
 }

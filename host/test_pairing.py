@@ -80,6 +80,29 @@ class PairingTests(unittest.TestCase):
         with self.assertRaises(pairing.PairingError):
             pairing.decode_text('{"v":2,"label":"example-host","address":"100.64.0.2","user":"user","port":22}')
 
+    def test_pair_command_is_a_display_name(self) -> None:
+        named = pairing.build_payload(
+            "example-host",
+            "100.64.0.2",
+            "user",
+            22,
+            command="watch-remote-pair-local",
+        )
+        self.assertEqual(named["cmd"], "watch-remote-pair-local")
+        decoded = pairing.decode_text(pairing.url_for(named))
+        self.assertEqual(decoded["cmd"], "watch-remote-pair-local")
+        summary = "\n".join(pairing.summary_lines(named))
+        self.assertIn("watch-remote-pair-local", summary)
+        self.assertNotIn("@", named["cmd"])
+        plain = pairing.build_payload("example-host", "100.64.0.2", "user", 22)
+        self.assertNotIn("cmd", plain)
+        for refused in ("user@host", "watch remote", "../pair", "a/b"):
+            with self.assertRaises(pairing.PairingError):
+                pairing.build_payload("example-host", "100.64.0.2", "user", 22, command=refused)
+        self.assertIsNone(pairing.normalize_pair_command(None))
+        self.assertIsNone(pairing.normalize_pair_command("   "))
+        self.assertNotIn("cmd", pairing.build_payload("example-host", "100.64.0.2", "user", 22, command=""))
+
     def test_address_scan_ignores_public_and_leading_zeros(self) -> None:
         text = "inet 10.0.0.1 netmask inet 100.64.0.2 inet 8.8.8.8 inet 100.064.0.1 inet 100.127.255.254"
         self.assertEqual(pairing.addresses_in(text), ["100.64.0.2", "100.127.255.254"])

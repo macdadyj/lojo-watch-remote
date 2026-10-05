@@ -46,20 +46,18 @@ final class WatchVoiceCapture {
         buffer = VoiceCaptureBuffer()
         utteranceID = nil
         sequence = 0
-        let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [])
-            try session.setActive(true)
+            try configureSession()
             let engine = AVAudioEngine()
             let input = engine.inputNode
-            let format = input.outputFormat(forBus: 0)
-            guard format.sampleRate > 0, format.channelCount > 0 else {
+            guard let format = Self.usableFormat(input) else {
+                stop()
                 onFailed?()
                 return
             }
+            let rate = format.sampleRate
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] pcm, _ in
                 let samples = Self.channelFloats(pcm)
-                let rate = format.sampleRate
                 DispatchQueue.main.async {
                     self?.ingest(samples, sampleRate: rate)
                 }
@@ -75,6 +73,43 @@ final class WatchVoiceCapture {
             stop()
             onFailed?()
         }
+    }
+
+    /// `.playAndRecord` is the conversation category. watchOS sometimes rejects it, and
+    /// `outputFormat(forBus:)` can report a 0 Hz rate even when `inputFormat` is valid.
+    /// A failed category used to call the dictation sheet immediately.
+    private func configureSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        let attempts: [(AVAudioSession.Category, AVAudioSession.Mode)] = [
+            (.playAndRecord, .default),
+            (.playAndRecord, .voiceChat),
+            (.record, .measurement),
+            (.record, .default),
+        ]
+        var last: Error?
+        for attempt in attempts {
+            do {
+                try session.setCategory(attempt.0, mode: attempt.1, options: [])
+                try session.setActive(true)
+                return
+            } catch {
+                last = error
+            }
+        }
+        throw last ?? NSError(domain: "WatchVoiceCapture", code: 1)
+    }
+
+    static func usableFormat(_ input: AVAudioInputNode) -> AVAudioFormat? {
+        let candidates = [input.inputFormat(forBus: 0), input.outputFormat(forBus: 0)]
+        for format in candidates {
+            if VoiceListenPolicy.captureFormatIsUsable(
+                sampleRate: format.sampleRate,
+                channelCount: Int(format.channelCount)
+            ) {
+                return format
+            }
+        }
+        return nil
     }
 
     func stop() {
@@ -144,11 +179,21 @@ final class WatchVoiceCapture {
 
 enum WatchVoiceLink {
     @discardableResult
-    static func send(_ packet: VoicePacket) -> Bool {
-        guard WCSession.isSupported(), let text = VoiceWire.encode(packet) else { return false }
+    static func send(_ packet: VoicePacket, completion: ((Bool) -> Void)? = nil) -> Bool {
+        guard WCSession.isSupported(), let text = VoiceWire.encode(packet) else {
+            DispatchQueue.main.async { completion?(false) }
+            return false
+        }
         let session = WCSession.default
-        guard session.activationState == .activated, session.isReachable else { return false }
-        session.sendMessage(["voice": text], replyHandler: nil) { _ in }
+        guard session.activationState == .activated, session.isReachable else {
+            DispatchQueue.main.async { completion?(false) }
+            return false
+        }
+        session.sendMessage(["voice": text], replyHandler: { _ in
+            DispatchQueue.main.async { completion?(true) }
+        }, errorHandler: { _ in
+            DispatchQueue.main.async { completion?(false) }
+        })
         return true
     }
 }

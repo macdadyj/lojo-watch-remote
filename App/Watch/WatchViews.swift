@@ -14,7 +14,7 @@ struct WatchRootView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if model.forcedScreen == nil, model.voiceModeActive {
+                if model.forcedScreen == "voice-chat" || model.forcedScreen == "voice-loop" || (model.forcedScreen == nil && model.voiceModeActive) {
                     VoiceChatView()
                 } else if model.forcedScreen == nil, let prompt = model.pendingDictation {
                     VoiceConfirmView(transcript: prompt, isPreview: false)
@@ -28,12 +28,10 @@ struct WatchRootView: View {
                         WatchComposeView()
                     case "dictate":
                         VoiceConfirmView(transcript: VoicePreview.task, isPreview: true)
-                    case "voice-loop":
-                        VoiceLoopView()
                     default:
                         WatchListView()
-                            .safeAreaInset(edge: .bottom, spacing: 4) {
-                                VoiceHomeSection()
+                            .safeAreaInset(edge: .bottom, spacing: 2) {
+                                VoiceHomeBar()
                             }
                     }
                 }
@@ -121,10 +119,12 @@ struct WatchListView: View {
                 }
                 .buttonStyle(PrimaryButtonStyle(compact: true))
                 .accessibilityLabel("New task")
+                VoicePreferenceToggles()
             }
             .padding(.horizontal, 8)
-            .padding(.bottom, 16)
+            .padding(.bottom, 8)
         }
+        .accessibilityIdentifier("session.list")
         .watchPage()
         .contentMargins(.top, 10, for: .scrollContent)
         .contentMargins(.bottom, 18, for: .scrollContent)

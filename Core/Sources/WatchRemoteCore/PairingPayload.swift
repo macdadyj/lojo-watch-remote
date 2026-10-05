@@ -22,6 +22,8 @@ public struct PairingPayload: Equatable, Sendable {
     public var ticket: String?
     /// Port of the short-lived pairing channel. Nil when `ticket` is nil.
     public var enrollPort: Int?
+    /// Name the operator types to print the QR. Nil means the public script. Never a host, user, or address.
+    public var pairCommand: String?
 
     public static let defaultEnrollPort = 2478
 
@@ -36,7 +38,8 @@ public struct PairingPayload: Equatable, Sendable {
         token: String? = nil,
         e2eKey: String? = nil,
         ticket: String? = nil,
-        enrollPort: Int? = nil
+        enrollPort: Int? = nil,
+        pairCommand: String? = nil
     ) throws {
         let payload = try Self.make(
             version: Self.version,
@@ -50,7 +53,8 @@ public struct PairingPayload: Equatable, Sendable {
             token: token,
             e2eKey: e2eKey,
             ticket: ticket,
-            enrollPort: enrollPort
+            enrollPort: enrollPort,
+            pairCommand: pairCommand
         )
         self = payload
     }
@@ -72,6 +76,9 @@ public struct PairingPayload: Equatable, Sendable {
         lines.append(hasDirectRelay ? "Direct connection included." : "No direct connection in this code.")
         if canEnroll {
             lines.append("This iPhone can authorize itself.")
+        }
+        if let pairCommand {
+            lines.append("Pair command \(pairCommand).")
         }
         return lines.joined(separator: "\n")
     }
@@ -131,7 +138,8 @@ public struct PairingPayload: Equatable, Sendable {
             token: raw.token,
             e2eKey: raw.e2e,
             ticket: raw.ticket,
-            enrollPort: raw.enroll
+            enrollPort: raw.enroll,
+            pairCommand: raw.cmd
         )
     }
 
@@ -159,7 +167,8 @@ public struct PairingPayload: Equatable, Sendable {
         token: String? = nil,
         e2eKey: String? = nil,
         ticket: String? = nil,
-        enrollPort: Int? = nil
+        enrollPort: Int? = nil,
+        pairCommand: String? = nil
     ) throws -> PairingPayload {
         guard version == Self.version else { throw PairingError.unsupportedVersion(version) }
         let name = label.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -189,6 +198,7 @@ public struct PairingPayload: Equatable, Sendable {
         }
         let direct = try normalizedDirect(relayURL: relayURL, token: token, e2eKey: e2eKey)
         let enroll = try normalizedEnroll(ticket: ticket, port: enrollPort)
+        let command = try normalizedPairCommand(pairCommand)
         return PairingPayload(
             version: version,
             label: resolvedLabel,
@@ -201,8 +211,19 @@ public struct PairingPayload: Equatable, Sendable {
             token: direct?.token,
             e2eKey: direct?.key,
             ticket: enroll?.ticket,
-            enrollPort: enroll?.port
+            enrollPort: enroll?.port,
+            pairCommand: command
         )
+    }
+
+    private static func normalizedPairCommand(_ raw: String?) throws -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        guard let name = PairingHelpCopy.normalizeCommand(trimmed) else {
+            throw PairingError.invalidPairCommand
+        }
+        return name
     }
 
     private init(
@@ -217,7 +238,8 @@ public struct PairingPayload: Equatable, Sendable {
         token: String?,
         e2eKey: String?,
         ticket: String?,
-        enrollPort: Int?
+        enrollPort: Int?,
+        pairCommand: String?
     ) {
         self.version = version
         self.label = label
@@ -231,6 +253,7 @@ public struct PairingPayload: Equatable, Sendable {
         self.e2eKey = e2eKey
         self.ticket = ticket
         self.enrollPort = enrollPort
+        self.pairCommand = pairCommand
     }
 
     private static func normalizedEnroll(ticket: String?, port: Int?) throws -> (ticket: String, port: Int)? {
@@ -313,6 +336,7 @@ extension PairingPayload: Codable {
         case e2eKey = "e2e"
         case ticket
         case enrollPort = "enroll"
+        case pairCommand = "cmd"
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -329,6 +353,7 @@ extension PairingPayload: Codable {
         try container.encodeIfPresent(e2eKey, forKey: .e2eKey)
         try container.encodeIfPresent(ticket, forKey: .ticket)
         try container.encodeIfPresent(enrollPort, forKey: .enrollPort)
+        try container.encodeIfPresent(pairCommand, forKey: .pairCommand)
     }
 
     public init(from decoder: Decoder) throws {
@@ -345,7 +370,8 @@ extension PairingPayload: Codable {
             token: raw.token,
             e2eKey: raw.e2e,
             ticket: raw.ticket,
-            enrollPort: raw.enroll
+            enrollPort: raw.enroll,
+            pairCommand: raw.cmd
         )
     }
 }
@@ -363,6 +389,7 @@ private struct RawPayload: Decodable {
     var e2e: String?
     var ticket: String?
     var enroll: Int?
+    var cmd: String?
 }
 
 public enum PairingError: Error, Equatable {
@@ -379,6 +406,7 @@ public enum PairingError: Error, Equatable {
     case invalidToken
     case invalidE2EKey
     case invalidTicket
+    case invalidPairCommand
     case tooLarge
 }
 
@@ -411,6 +439,8 @@ extension PairingError: LocalizedError {
             return "The direct connection key in the pairing code is not usable."
         case .invalidTicket:
             return "The one-time pairing ticket in the pairing code is not usable."
+        case .invalidPairCommand:
+            return "The pair command name in the pairing code is not usable."
         case .tooLarge:
             return "That pairing code is too large."
         }
@@ -434,5 +464,39 @@ public enum Base64URL {
             padded += String(repeating: "=", count: 4 - remainder)
         }
         return Data(base64Encoded: padded)
+    }
+}
+
+/// In-app pairing help. The public script name is accurate. An operator alias is not invented here.
+public enum PairingHelpCopy {
+    public static let publicCommand = "watch-remote-pair"
+    public static let headline = "On the computer, run your pair command (see host setup)."
+    public static let leaveOpen = "Leave that window open until this phone says Connected."
+    public static let aliasNote = "The script in this repository is watch-remote-pair. An alias on the computer runs the same script."
+    public static let scan = "Scan the QR that your pair command prints, or paste the pairing text."
+
+    public static func instructions(displayedCommand: String? = nil) -> String {
+        var lines = [headline, leaveOpen, aliasNote]
+        if let name = normalizeCommand(displayedCommand), name != publicCommand {
+            lines.append("This code says to leave \(name) open.")
+        }
+        return lines.joined(separator: " ")
+    }
+
+    public static func leaveOpenLine(command: String?) -> String {
+        if let name = normalizeCommand(command) {
+            return "Leave \(name) open on the computer until this phone says Connected."
+        }
+        return leaveOpen
+    }
+
+    /// A display name: letters, digits, dot, underscore, hyphen. Not a user, address, or path.
+    public static func normalizeCommand(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (1...64).contains(trimmed.count) else { return nil }
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+        guard trimmed.allSatisfy({ allowed.contains($0) }) else { return nil }
+        return trimmed
     }
 }

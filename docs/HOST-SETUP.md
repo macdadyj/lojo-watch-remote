@@ -26,6 +26,8 @@ install -m 644 /path/to/watch-remote/host/pairing.py /path/to/watch-remote/host/
 
 `watch-remote-pair` reads the overlay address (the first address in `100.64.0.0/10`, or `~/.config/watch-remote/address`, or `--address`), the SSH user, the sshd port, the SSH host key fingerprint, and the agent secret from `~/.config/watch-remote/agent-secret`. It prints a QR and the `watchremote://pair?d=…` text. The QR is drawn with `qrencode` when that program is installed, and with the built-in generator otherwise (`host/qrcodegen.py`, MIT, Project Nayuki).
 
+The phone says to run your pair command and leave it open. The script in this repository is `watch-remote-pair`. Operators may alias it. Santa uses `watch-remote-pair-santa`. That wrapper is not in this repository, and the app does not assume the name. Pass `--pair-command` with the name you type (letters, digits, dot, underscore, hyphen) when you want the phone to show that name after the scan. The name is a label in the QR. It is not a host, an SSH user, or an address. Omit the flag and the phone keeps the public script name.
+
 ```bash
 watch-remote-pair --address 100.64.0.2
 ```

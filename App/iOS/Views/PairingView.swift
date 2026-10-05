@@ -14,7 +14,7 @@ struct PairingImportView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text("Scan the QR that watch-remote-pair prints on the computer, or paste the pairing text.")
+                    Text(PairingHelpCopy.scan)
                         .font(.subheadline)
                         .foregroundStyle(LojoTheme.secondaryText)
                     Text("The code can contain the agent secret. It is stored in the Keychain on this iPhone. The address has to be inside 100.64.0.0/10.")
