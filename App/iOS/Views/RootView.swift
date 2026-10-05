@@ -118,6 +118,7 @@ struct SessionsView: View {
                     .foregroundStyle(LojoTheme.danger)
             }
         }
+        .lojoCard()
     }
 
     private var empty: some View {

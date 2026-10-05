@@ -116,6 +116,14 @@ enum ConnectionTest: Equatable {
     case failed(String)
 }
 
+enum PairingMoment: Equatable {
+    case none
+    case ask
+    case working
+    case ready
+    case problem(String)
+}
+
 enum PairingBanner: Equatable {
     case notPaired
     case waiting
@@ -150,6 +158,8 @@ final class RemoteStore: ObservableObject {
     @Published var showPairing = false
     @Published var launchScanner = false
     @Published var connectionTest: ConnectionTest = .idle
+    @Published var offer: PairingPayload?
+    @Published var pairingMoment: PairingMoment = .none
     @Published var pairingNotice: PairingNotice?
     @Published var trustPrompt: TrustPrompt?
     @Published var showCompose = false
@@ -339,16 +349,72 @@ final class RemoteStore: ObservableObject {
         pairingNotice = nil
     }
 
-    /// Fills the active computer from a scanned or pasted pairing code. The secret goes to the Keychain.
+    /// Stages a scanned code and asks "Is this your computer?" before anything is saved.
     func importPairing(_ text: String) -> String? {
-        let payload: PairingPayload
         do {
-            payload = try PairingPayload.decode(text)
+            offer = try PairingPayload.decode(text)
         } catch let error as LocalizedError {
             return error.errorDescription ?? "That pairing code could not be read."
         } catch {
             return "That pairing code could not be read."
         }
+        pairingMoment = .ask
+        showPairing = false
+        return nil
+    }
+
+    func dismissMoment() {
+        guard pairingMoment != .working else { return }
+        if pairingMoment == .ask { offer = nil }
+        pairingMoment = .none
+    }
+
+    func acceptOffer() async {
+        guard !holdsLaunchFixture, let payload = offer else { return }
+        pairingMoment = .working
+        if keys.key == nil {
+            do {
+                try keys.generateEd25519()
+            } catch {
+                pairingMoment = .problem("A key could not be created on this iPhone.")
+                return
+            }
+        }
+        guard let publicKey = keys.key?.publicKey else {
+            pairingMoment = .problem("A key could not be created on this iPhone.")
+            return
+        }
+        let saved = commitOffer(payload)
+        if saved == nil {
+            pairingMoment = .problem("The computer was saved, but the agent secret was not stored in the Keychain.")
+            return
+        }
+        if let ticket = payload.ticket {
+            let port = payload.enrollPort ?? PairingPayload.defaultEnrollPort
+            if let failure = await HostEnroll.submit(address: payload.address, port: port, ticket: ticket, publicKey: publicKey) {
+                pairingMoment = .problem(failure)
+                return
+            }
+        }
+        setMode(.ssh)
+        await testConnection()
+        if connectionTest == .connected {
+            pairingMoment = .ready
+            return
+        }
+        if payload.ticket == nil {
+            pairingMoment = .problem("This code cannot authorize the iPhone by itself. Open Advanced and copy the authorize command.")
+            return
+        }
+        if case .failed(let message) = connectionTest {
+            pairingMoment = .problem(message)
+        } else {
+            pairingMoment = .problem("The computer did not connect.")
+        }
+    }
+
+    /// Saves the staged computer. Returns nil when the agent secret could not be stored.
+    private func commitOffer(_ payload: PairingPayload) -> SavedHost? {
         let existing = computers.first {
             $0.address == payload.address && $0.port == payload.port && $0.username == payload.user
         }
@@ -386,7 +452,7 @@ final class RemoteStore: ObservableObject {
                 if changed { disconnectForHostChange() }
                 showPairing = false
                 publish()
-                return "The computer was saved, but the agent secret was not stored in the Keychain."
+                return nil
             }
         }
         refreshSecretFlag()
@@ -396,7 +462,7 @@ final class RemoteStore: ObservableObject {
         banner = storedSecret ? "Paired \(saved.label). The agent secret is in the Keychain." : "Paired \(saved.label)."
         showPairing = false
         publish()
-        return nil
+        return saved
     }
 
     func updateHost(label: String, address: String, portText: String, username: String) -> String? {
@@ -1020,6 +1086,23 @@ final class RemoteStore: ObservableObject {
             banner = nil
             connectionTest = .connected
             showPairing = false
+            pairingMoment = .ready
+        case "ask":
+            tab = .computer
+            mode = .ssh
+            link = .needsPairing
+            host = .placeholder
+            computers = [.placeholder]
+            statusLine = "Not paired"
+            showPairing = false
+            offer = try? PairingPayload(
+                label: OverlayPolicy.exampleLabel,
+                address: OverlayPolicy.exampleAddress,
+                user: OverlayPolicy.exampleUser,
+                port: OverlayPolicy.examplePort,
+                fingerprint: "SHA256:" + String(repeating: "A", count: 43)
+            )
+            pairingMoment = .ask
         case "pair":
             tab = .computer
             let primary = SavedHost(
