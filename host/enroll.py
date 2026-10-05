@@ -52,12 +52,15 @@ def serve_enroll(
     timeout: float = TTL_SECONDS,
     ready: threading.Event | None = None,
     socket_timeout: float = SOCKET_TIMEOUT,
+    bound: dict[str, int] | None = None,
 ) -> str:
     if not ticket or pairing.normalize_token(ticket) != ticket:
         raise EnrollError("The one-time pairing ticket is not usable.")
     if address not in {"127.0.0.1", "localhost"} and not pairing.in_overlay(address):
         raise EnrollError("The pairing channel only listens on the private overlay.")
-    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+    # Port 0 asks the kernel for an ephemeral port. Tests use that so they do not rebind a just-closed socket.
+    ephemeral = port == 0 and address in {"127.0.0.1", "localhost"}
+    if isinstance(port, bool) or not isinstance(port, int) or not (ephemeral or 1 <= port <= 65535):
         raise EnrollError("The pairing channel port is not usable.")
 
     outcome = {"value": "expired"}
@@ -136,8 +139,20 @@ def serve_enroll(
         allow_reuse_address = True
         daemon_threads = True
 
+        def server_bind(self) -> None:
+            # HTTPServer.server_bind calls getfqdn, which can stall on a reverse lookup.
+            # The phone is already waiting. Bind, then use the address we asked for.
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.socket.bind(self.server_address)
+            self.server_address = self.socket.getsockname()
+            host, chosen = self.server_address[:2]
+            self.server_name = host
+            self.server_port = chosen
+
     server = EnrollServer((address, port), Handler)
     server.timeout = 0.5
+    if bound is not None:
+        bound["port"] = int(server.server_address[1])
     if ready is not None:
         ready.set()
     deadline = time.monotonic() + timeout

@@ -185,24 +185,24 @@ class PairingTests(unittest.TestCase):
         self.assertIn("This iPhone can authorize itself.", summary)
         self.assertNotIn(ticket, summary)
         public = "ssh-ed25519 AAAAB3NzaC1lZDI1NTE5AAAAIExamplePublicKeyPlaceholderOnly watch-remote@iphone"
-        probe = socket.socket()
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-        probe.close()
         with tempfile.TemporaryDirectory() as directory:
             keys = Path(directory) / "authorized_keys"
             result: dict[str, str] = {}
             ready = threading.Event()
+            bound: dict[str, int] = {}
 
             def run() -> None:
                 try:
-                    result["value"] = enroll.serve_enroll("127.0.0.1", port, ticket, keys, timeout=30, ready=ready)
+                    result["value"] = enroll.serve_enroll(
+                        "127.0.0.1", 0, ticket, keys, timeout=30, ready=ready, bound=bound
+                    )
                 except Exception as exc:  # noqa: BLE001 — the assertion below reports it
                     result["error"] = f"{type(exc).__name__}: {exc}"
 
             worker = threading.Thread(target=run, daemon=True)
             worker.start()
-            self.assertTrue(ready.wait(15), "listener did not become ready")
+            self.assertTrue(ready.wait(15), result.get("error", "listener did not become ready"))
+            port = bound["port"]
             bad = urllib.request.Request(
                 f"http://127.0.0.1:{port}/v1/enroll",
                 data=public.encode("utf-8"),
@@ -242,24 +242,24 @@ class PairingTests(unittest.TestCase):
 
     def test_non_ascii_bearer_counts_toward_the_failure_limit(self) -> None:
         ticket = "roomtokenvalue0001"
-        probe = socket.socket()
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-        probe.close()
         with tempfile.TemporaryDirectory() as directory:
             keys = Path(directory) / "authorized_keys"
             result: dict[str, str] = {}
             ready = threading.Event()
+            bound: dict[str, int] = {}
 
             def run() -> None:
                 try:
-                    result["value"] = enroll.serve_enroll("127.0.0.1", port, ticket, keys, timeout=20, ready=ready)
+                    result["value"] = enroll.serve_enroll(
+                        "127.0.0.1", 0, ticket, keys, timeout=20, ready=ready, bound=bound
+                    )
                 except Exception as exc:  # noqa: BLE001 — the assertion below reports it
                     result["error"] = f"{type(exc).__name__}: {exc}"
 
             worker = threading.Thread(target=run, daemon=True)
             worker.start()
-            self.assertTrue(ready.wait(15), "listener did not become ready")
+            self.assertTrue(ready.wait(15), result.get("error", "listener did not become ready"))
+            port = bound["port"]
             for _ in range(enroll.MAX_FAILURES):
                 request = urllib.request.Request(
                     f"http://127.0.0.1:{port}/v1/enroll",
@@ -279,29 +279,28 @@ class PairingTests(unittest.TestCase):
     def test_stalled_enroll_client_cannot_hold_the_listener(self) -> None:
         self.assertEqual(enroll.SOCKET_TIMEOUT, 10)
         ticket = "roomtokenvalue0001"
-        probe = socket.socket()
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-        probe.close()
         with tempfile.TemporaryDirectory() as directory:
             keys = Path(directory) / "authorized_keys"
             result: dict[str, str] = {}
             ready = threading.Event()
+            bound: dict[str, int] = {}
 
             def run() -> None:
                 result["value"] = enroll.serve_enroll(
                     "127.0.0.1",
-                    port,
+                    0,
                     ticket,
                     keys,
                     timeout=8,
                     ready=ready,
                     socket_timeout=1,
+                    bound=bound,
                 )
 
             worker = threading.Thread(target=run, daemon=True)
             worker.start()
             self.assertTrue(ready.wait(15), "listener did not become ready")
+            port = bound["port"]
             stalled = socket.create_connection(("127.0.0.1", port), timeout=5)
             stalled.sendall(b"POST /v1/enroll HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 50\r\n\r\n")
             started = time.monotonic()
