@@ -278,7 +278,7 @@ def _proxy(client: socket.socket, upstream: tuple[str, int], secret: str) -> boo
                     opcode, payload, size = parsed
                     original = pending[:size]
                     pending = pending[size:]
-                    rewritten = _rewrite_cwd(opcode, payload)
+                    rewritten = _rewrite_outbound(opcode, payload)
                     if rewritten is None:
                         remote.sendall(original)
                     else:
@@ -297,19 +297,38 @@ def _proxy(client: socket.socket, upstream: tuple[str, int], secret: str) -> boo
             pass
 
 
-def _rewrite_cwd(opcode: int, payload: bytes) -> bytes | None:
+# Grok's ACP dispatcher requires the leading underscore. The bare name is "Method not found".
+_GROK_METHOD = {
+    "x.ai/session/list": "_x.ai/session/list",
+    "x.ai/session/usage": "_x.ai/session/usage",
+}
+
+
+def _rewrite_outbound(opcode: int, payload: bytes) -> bytes | None:
+    """Rename extension methods and resolve cwd before the frame is proxied to grok."""
     if opcode != 1:
         return None
     try:
         obj = json.loads(payload)
     except (UnicodeError, json.JSONDecodeError):
         return None
-    if not isinstance(obj, dict) or obj.get("method") not in {"session/new", "session/load"}:
+    if not isinstance(obj, dict):
         return None
-    params = obj.get("params")
-    if not isinstance(params, dict) or "cwd" not in params:
+    changed = False
+    method = obj.get("method")
+    if isinstance(method, str) and method in _GROK_METHOD:
+        obj["method"] = _GROK_METHOD[method]
+        method = obj["method"]
+        changed = True
+    if method in {"session/new", "session/load"}:
+        params = obj.get("params")
+        if isinstance(params, dict) and "cwd" in params:
+            resolved = resolve_cwd(str(params.get("cwd") or ""))
+            if params.get("cwd") != resolved:
+                params["cwd"] = resolved
+                changed = True
+    if not changed:
         return None
-    params["cwd"] = resolve_cwd(str(params.get("cwd") or ""))
     return json.dumps(obj, separators=(",", ":")).encode("utf-8")
 
 
@@ -426,7 +445,7 @@ def _handle(
             session.status = "stopped"
             session.stop_reason = "cancelled"
         return None
-    if method == "x.ai/session/list":
+    if method in {"x.ai/session/list", "_x.ai/session/list"}:
         rows = []
         for session_id, session in sessions.items():
             rows.append({
@@ -438,7 +457,7 @@ def _handle(
             })
         _send_json(client, {"jsonrpc": "2.0", "id": ident, "result": {"sessions": rows}})
         return None
-    if method == "x.ai/session/usage":
+    if method in {"x.ai/session/usage", "_x.ai/session/usage"}:
         session_id = str(params.get("sessionId") or "")
         _send_json(client, {"jsonrpc": "2.0", "id": ident, "result": _usage(binary, session_id)})
         return None

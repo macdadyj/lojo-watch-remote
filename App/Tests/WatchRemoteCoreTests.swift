@@ -136,6 +136,29 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertFalse(ACPCodec.approvalsAvailable(inResultJSON: headless))
     }
 
+    func testSessionListUsesGrokExtensionNameAndUnwrapsTheResult() {
+        var codec = ACPCodec()
+        let (_, listJSON) = codec.listSessions()
+        let listObject = try? JSONSerialization.jsonObject(with: Data(listJSON.utf8)) as? [String: Any]
+        XCTAssertEqual(listObject?["method"] as? String, "_x.ai/session/list")
+        let (_, legacyJSON) = codec.listSessionsLegacy()
+        let legacyObject = try? JSONSerialization.jsonObject(with: Data(legacyJSON.utf8)) as? [String: Any]
+        XCTAssertEqual(legacyObject?["method"] as? String, "x.ai/session/list")
+        let (_, usageJSON) = codec.sessionUsage(sessionID: "abc")
+        let usageObject = try? JSONSerialization.jsonObject(with: Data(usageJSON.utf8)) as? [String: Any]
+        XCTAssertEqual(usageObject?["method"] as? String, "_x.ai/session/usage")
+        let wrapped = #"{"jsonrpc":"2.0","id":2,"result":{"result":{"sessions":[{"sessionId":"abc","title":"Logs","summary":"Reading","status":"running"}]}}}"#
+        let sessions = ACPCodec.sessions(inResultJSON: wrapped)
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertEqual(sessions[0].id, "abc")
+        XCTAssertEqual(sessions[0].title, "Logs")
+        XCTAssertEqual(sessions[0].status, .running)
+        let flat = #"{"jsonrpc":"2.0","id":2,"result":{"sessions":[{"sessionId":"def","title":"Door","status":"idle"}]}}"#
+        XCTAssertEqual(ACPCodec.sessions(inResultJSON: flat).first?.title, "Door")
+        let usage = #"{"jsonrpc":"2.0","id":3,"result":{"result":{"usage":{"inputTokens":3,"outputTokens":4}}}}"#
+        XCTAssertEqual(GrokOutput.parseUsage(usage), "3 in · 4 out")
+    }
+
     func testWebSocketFramesAndUpgrade() {
         let header = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n"
         XCTAssertTrue(WebSocketFramer.acceptsUpgrade(header))
