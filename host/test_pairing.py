@@ -31,6 +31,13 @@ GOLDEN = (
 BARE = "eyJhZGRyZXNzIjoiMTAwLjY0LjAuMSIsImxhYmVsIjoiZXhhbXBsZS1ob3N0IiwicG9ydCI6MjIsInVzZXIiOiJ1c2VyIiwidiI6MX0"
 
 
+
+def _direct_urlopen(request: urllib.request.Request, timeout: float):
+    # macOS runners send urllib through a system proxy. That never reaches this listener.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(request, timeout=timeout)
+
+
 class PairingTests(unittest.TestCase):
     def test_round_trip_matches_the_phone_token(self) -> None:
         payload = pairing.build_payload(
@@ -213,7 +220,7 @@ class PairingTests(unittest.TestCase):
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline and not refused:
                 try:
-                    urllib.request.urlopen(bad, timeout=10)
+                    _direct_urlopen(bad, timeout=10)
                 except urllib.error.HTTPError as error:
                     self.assertEqual(error.code, 401)
                     refused = True
@@ -226,7 +233,7 @@ class PairingTests(unittest.TestCase):
                 headers={"Authorization": f"Bearer {ticket}"},
                 method="POST",
             )
-            with urllib.request.urlopen(good, timeout=10) as response:
+            with _direct_urlopen(good, timeout=10) as response:
                 self.assertEqual(response.status, 200)
                 self.assertIn(b'"ok":true', response.read())
             body = keys.read_text(encoding="utf-8")
@@ -268,7 +275,7 @@ class PairingTests(unittest.TestCase):
                     method="POST",
                 )
                 with self.assertRaises(urllib.error.HTTPError) as caught:
-                    urllib.request.urlopen(request, timeout=10)
+                    _direct_urlopen(request, timeout=10)
                 self.assertEqual(caught.exception.code, 401)
             worker.join(timeout=15)
             self.assertFalse(worker.is_alive())

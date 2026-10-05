@@ -134,6 +134,8 @@ if [[ "${WATCHREMOTE_SCREENSHOTS:-full}" == "dispatch" ]]; then
   shoot "${PHONE_UDID}" com.lojo.WatchRemote ask dark iphone-ask-dark.png
   shoot "${PHONE_UDID}" com.lojo.WatchRemote compose dark iphone-compose-dark.png
   shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp compose dark watch-compose.png
+  shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp mic dark watch-mic.png
+  shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp dictate dark watch-dictate.png
   shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp sessions dark watch-sessions.png
   shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp session dark watch-session.png
   shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp direct dark watch-direct.png
@@ -163,6 +165,8 @@ xcrun simctl ui "${PHONE_UDID}" content_size large || true
 # Compose is the launch the Watch simulator refuses after the other shots.
 # Take it first, while the device is freshly booted.
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp compose dark watch-compose.png
+shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp mic dark watch-mic.png
+shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp dictate dark watch-dictate.png
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp sessions dark watch-sessions.png
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp session dark watch-session.png
 shoot "${WATCH_UDID}" com.lojo.WatchRemote.watchkitapp direct dark watch-direct.png

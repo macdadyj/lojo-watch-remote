@@ -21,7 +21,7 @@ Watch Remote is a client for your own computer. The iPhone stores the SSH key an
 
 - `Core/` — shared models, overlay policy, ACP and streaming-json codecs, demo data, LOJO theme. No networking.
 - `App/iOS/` — SwiftUI phone app, SSH (swift-nio-ssh), Keychain keys, WatchConnectivity.
-- `App/Watch/` — SwiftUI watch app. WatchConnectivity, and a direct `wss` path when a relay was paired.
+- `App/Watch/` — SwiftUI watch app. WatchConnectivity, a direct `wss` path when a relay was paired, dictation, and the Ask Grok shortcut.
 - `relay/` — optional Python HTTP relay for the iPhone (`watchremote_relay`). `relay/outbound/` is the separate ciphertext forwarder for the Watch.
 - `docs/outbound-relay.md` — how to host that forwarder. This repo does not deploy it.
 - `host/` — user systemd units, the agent wrapper, and `watch-remote-pair` / `watch-remote-authorize`.
@@ -37,6 +37,14 @@ Watch Remote is a client for your own computer. The iPhone stores the SSH key an
 Approvals (Allow, Deny, Stop) go through the agent server inside the SSH tunnel. The phone key can only forward to `127.0.0.1:2419`. It cannot run a command. If `grok agent serve` is down, the computer runs headless `grok -p` itself and tasks cannot ask for approval. Interactive TUIs already open on the computer stay untouched.
 
 The design follows LOJO Networks: system fonts, grouped backgrounds, 18pt cards, a 0.06 hairline, and the teal `#0F8C94` / indigo `#262E78` gradient on icon tiles and primary buttons.
+
+## Watch voice
+
+The Watch home keeps a microphone button on screen. Tapping it starts a voice conversation. Speak a task and it goes to the active computer. The Watch speaks a short status or result and keeps listening, so a follow-up, an approval, or the next command stays in the same flow. Read-aloud is on for that conversation. The **Read results aloud** toggle stays off until you turn it on, and then it also speaks results outside a conversation. **Auto-send** stays off until you turn it on. **New task** still opens the task screen and sends when you tap Start.
+
+Say allow. The Watch reads the action back, on screen and out loud, and asks you to say yes. Say yes or confirm to approve. Tap Yes if you prefer. Deny and stop send on the first word. List sessions, status, stop session, and switch computer work in the same conversation.
+
+Siri on the Watch takes “Ask Grok”, then asks what to do. A free-form task cannot sit inside the shortcut phrase. The task goes through the iPhone when it is nearby, and through the direct relay when it is not.
 
 ## Generate and test
 
