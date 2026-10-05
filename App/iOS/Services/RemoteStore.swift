@@ -479,9 +479,6 @@ final class RemoteStore: ObservableObject {
             if let id = command.sessionID { stop(id) }
         case .selectComputer:
             if let id = command.computerID { selectComputer(id: id) }
-        default:
-            let unknown: Never = command.kind
-            return unknown
         }
     }
 
@@ -622,9 +619,6 @@ final class RemoteStore: ObservableObject {
             return await askTrust(key: key, previous: matches ? host.pinnedFingerprint : nil, changed: false, matchesPin: matches)
         case .changed(let previous, _):
             return await askTrust(key: key, previous: previous, changed: true, matchesPin: false)
-        default:
-            let unknown: Never = verdict
-            return unknown
         }
     }
 
