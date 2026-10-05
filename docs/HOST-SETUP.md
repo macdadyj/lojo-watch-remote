@@ -32,6 +32,8 @@ watch-remote-pair --address 100.64.0.2
 
 The QR contains the agent secret when that file exists, and a one-time pairing ticket. Scan it once with the iPhone’s **Computer** screen. Do not share it, copy it into chat, or take a screenshot. Leave `watch-remote-pair` running. The phone asks “Is this your computer?”, creates a key if needed, and posts the public key to the overlay address on port `2478`. That listener checks the ticket, adds the key to `~/.ssh/authorized_keys` with the restricted forward, and exits. The ticket works once and expires after 10 minutes. The listener does not log the ticket or the key. It refuses any address outside `100.64.0.0/10`.
 
+That post is cleartext HTTP to the overlay address. App Transport Security’s local-network allowance covers RFC 1918, so a `URLSession` load to `100.64.0.0/10` is blocked. The phone sends `POST /v1/enroll` on one TCP connection to the address in the QR. Cleartext stays limited to that pairing request. The iPhone Info.plist already includes `NSLocalNetworkUsageDescription` for the local-network prompt.
+
 The phone stores the agent secret in the Keychain and pins the host key fingerprint when the code includes one. The first SSH connection asks again before the key is trusted. A later key that does not match the pin is refused. When the phone says **Connected**, the Watch is ready.
 
 If the window expires, use **Advanced** on the iPhone and run the authorize command by hand:
@@ -39,6 +41,8 @@ If the window expires, use **Advanced** on the iPhone and run the authorize comm
 ```bash
 watch-remote-authorize 'ssh-ed25519 AAAA… watch-remote@iphone'
 ```
+
+Copy that from the button. It is one line. The blob is standard OpenSSH base64 (`+` and `/`), with the comment on that same line. `ssh-keygen -lf` accepts it. A hyphen inside the blob means the line was wrapped or passed through URL-safe base64; copy the button text again.
 
 That appends one line to `~/.ssh/authorized_keys`:
 

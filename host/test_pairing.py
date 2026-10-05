@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -130,6 +131,30 @@ class PairingTests(unittest.TestCase):
             self.assertEqual(replaced.count("AAAAB3NzaC1lZDI1NTE5AAAAIExamplePublicKeyPlaceholderOnly"), 1)
         with self.assertRaises(pairing.PairingError):
             pairing.parse_public_key("-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n")
+
+    def test_authorize_command_is_accepted_by_ssh_keygen(self) -> None:
+        # Fixed ed25519 vector. The blob keeps '+' and '/' and has no wrap hyphen.
+        public = (
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4 "
+            "watch-remote@iphone"
+        )
+        blob = public.split()[1]
+        self.assertNotIn("-", blob)
+        self.assertNotIn("_", blob)
+        self.assertIn("+", blob)
+        self.assertIn("/", blob)
+        self.assertFalse(public.endswith("/"))
+        command = f"watch-remote-authorize '{public}'"
+        self.assertEqual(pairing.parse_public_key(command), public)
+        partial = public.replace("zzhC+", "zzhC-")
+        self.assertEqual(pairing.parse_public_key(partial), public)
+        self.assertIn("zzhC+HXDd", pairing.parse_public_key(partial))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "iphone.pub"
+            path.write_text(pairing.parse_public_key(command) + "\n", encoding="utf-8")
+            output = subprocess.check_output(["ssh-keygen", "-lf", str(path)], text=True)
+        self.assertIn("(ED25519)", output)
+        self.assertIn("SHA256:lbmsoA0yIEcEiVDRnMWuzm+nV+3ZEEpVIURqFoeSspg", output)
 
     def test_builtin_qr_has_a_finder(self) -> None:
         url = pairing.url_for(
