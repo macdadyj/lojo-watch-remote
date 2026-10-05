@@ -353,7 +353,8 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertThrowsError(try RelayBox.open(frame: second, key: key, expecting: .watchToHost, replay: &restored))
         let third = try RelayBox.seal(plaintext: Data("third".utf8), key: key, direction: .watchToHost, counter: 3)
         XCTAssertEqual(try RelayBox.open(frame: third, key: key, expecting: .watchToHost, replay: &restored), Data("third".utf8))
-        XCTAssertThrowsError(try RelayBox.open(frame: third, key: key, expecting: .hostToWatch, replay: &RelayReplay())) { error in
+        var wrongDirection = RelayReplay()
+        XCTAssertThrowsError(try RelayBox.open(frame: third, key: key, expecting: .hostToWatch, replay: &wrongDirection)) { error in
             XCTAssertEqual(error as? RelayBoxError, .wrongDirection)
         }
         var fresh = RelayReplay()
