@@ -11,6 +11,12 @@ struct WatchRemoteApp: App {
                 .environmentObject(store)
                 .preferredColorScheme(store.appearance.colorScheme)
                 .tint(LojoTheme.accent)
+                .onOpenURL { url in
+                    store.tab = .computer
+                    if let error = store.importPairing(url.absoluteString) {
+                        store.banner = error
+                    }
+                }
         }
     }
 }

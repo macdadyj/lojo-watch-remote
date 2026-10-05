@@ -9,7 +9,7 @@ SSH is the primary path, in the same shape as the Terminal feature in [lojo-priv
 | iOS | `com.lojo.WatchRemote` |
 | watchOS | `com.lojo.WatchRemote.watchkitapp` |
 | Team | `DEVELOPMENT_TEAM` GitHub secret, injected when archiving |
-| SSH | the address, user, and port you save on **Computer** |
+| SSH | scan a pairing QR, or save the address, user, and port on **Computer** |
 | Placeholder | `user@100.64.0.2` port `22` (not a real computer) |
 | Agent server | `127.0.0.1:2419` on the computer, through an SSH local forward |
 
@@ -23,7 +23,7 @@ Watch Remote is a client for your own computer. The iPhone stores the SSH key an
 - `App/iOS/` — SwiftUI phone app, SSH (swift-nio-ssh), Keychain keys, WatchConnectivity.
 - `App/Watch/` — SwiftUI watch app. WatchConnectivity only.
 - `relay/` — optional Python relay. Adapters: `acp`, `cli`, `mock`.
-- `host/` — user systemd units and the agent wrapper.
+- `host/` — user systemd units, the agent wrapper, and `watch-remote-pair` / `watch-remote-authorize`.
 - `Config/` — xcconfig placeholders. `Local.xcconfig` is gitignored.
 - `docs/SETUP.md` — Apple Developer, App Store Connect, and GitHub secrets.
 - `docs/HOST-SETUP.md` — sshd, the agent server, and why loopback is the bind address.
@@ -31,7 +31,7 @@ Watch Remote is a client for your own computer. The iPhone stores the SSH key an
 
 ## Phone
 
-**Sessions** lists recent tasks, with status as a shape and a word. **Computer** is where you enter the overlay address and the iPhone key. **Settings** chooses SSH, Relay, or Demo, the working directory, and the agent secret.
+**Sessions** lists recent tasks, with status as a shape and a word. **Computer** scans a pairing QR (or takes a paste) and keeps a list of saved computers. **Settings** chooses SSH, Relay, or Demo, the working directory, and the agent secret for the active computer.
 
 Approvals (Allow, Deny, Stop) go through `grok agent serve` inside the SSH tunnel. If that server is not running, the phone runs headless `grok -p … --output-format streaming-json` and cannot approve a tool. Interactive TUIs already open on the computer stay untouched.
 

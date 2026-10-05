@@ -75,6 +75,12 @@ final class WatchModel: ObservableObject {
         send(PhoneCommand(kind: .stop, sessionID: session.id))
     }
 
+    func selectComputer(_ id: String) {
+        guard forcedScreen == nil else { return }
+        let queued = bridge.send(PhoneCommand(kind: .selectComputer, computerID: id))
+        banner = queued ? nil : "The iPhone app is closed."
+    }
+
     private func send(_ command: PhoneCommand) {
         guard forcedScreen == nil else { return }
         if bridge.send(command) {

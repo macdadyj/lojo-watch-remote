@@ -8,6 +8,7 @@ struct SavedHost: Codable, Equatable, Identifiable, Sendable {
     var address: String
     var port: Int
     var username: String
+    var pinnedFingerprint: String? = nil
 
     static var placeholder: SavedHost {
         SavedHost(
@@ -34,12 +35,20 @@ enum HostDefaults {
     }
 }
 
+struct PairingNotice: Identifiable, Equatable {
+    var id = UUID()
+    var label: String
+    var fingerprint: String?
+    var storedSecret: Bool
+}
+
 struct TrustPrompt: Identifiable, Equatable {
     var id = UUID()
     var host: SavedHost
     var key: PresentedHostKey
     var previousFingerprint: String?
     var changed: Bool
+    var matchesPin: Bool
 }
 
 enum AppTab: String, Hashable {
@@ -59,6 +68,9 @@ final class RemoteStore: ObservableObject {
     @Published var cwd: String
     @Published var relayURL: String
     @Published var host: SavedHost
+    @Published var computers: [SavedHost]
+    @Published var showPairing = false
+    @Published var pairingNotice: PairingNotice?
     @Published var trustPrompt: TrustPrompt?
     @Published var showCompose = false
     @Published var selectedSessionID: String?
@@ -87,9 +99,17 @@ final class RemoteStore: ObservableObject {
         appearance = AppearanceChoice(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         cwd = defaults.string(forKey: "cwd") ?? ""
         relayURL = defaults.string(forKey: "relayURL") ?? ""
-        if let data = defaults.data(forKey: "host"), let saved = try? JSONDecoder().decode(SavedHost.self, from: data) {
+        if let data = defaults.data(forKey: "computers"),
+           let saved = try? JSONDecoder().decode([SavedHost].self, from: data),
+           !saved.isEmpty {
+            computers = saved
+            let activeID = defaults.string(forKey: "activeComputerID")
+            host = saved.first { $0.id == activeID } ?? saved[0]
+        } else if let data = defaults.data(forKey: "host"), let saved = try? JSONDecoder().decode(SavedHost.self, from: data) {
+            computers = [saved]
             host = saved
         } else {
+            computers = [.placeholder]
             host = .placeholder
         }
         if let text = try? String(contentsOf: support.appendingPathComponent("known_hosts"), encoding: .utf8) {
@@ -97,7 +117,8 @@ final class RemoteStore: ObservableObject {
         } else {
             knownHosts = KnownHosts()
         }
-        hasAgentSecret = keys.secret(account: "agent-secret") != nil
+        migrateLegacySecret()
+        hasAgentSecret = keys.secret(account: agentAccount(host.id)) != nil
         hasRelayToken = keys.secret(account: "relay-token") != nil
         hasRelayPin = keys.secret(account: "relay-pin") != nil
         live = LiveLink(
@@ -133,8 +154,115 @@ final class RemoteStore: ObservableObject {
             sessions: sessions,
             banner: banner,
             approvalsAvailable: approvalsAvailable,
-            hostLabel: host.label
+            hostLabel: host.label,
+            computers: computers.map { ComputerSummary(id: $0.id, label: $0.label) },
+            activeComputerID: host.id
         )
+    }
+
+    func selectComputer(id: String) {
+        guard let next = computers.first(where: { $0.id == id }), next.id != host.id else { return }
+        host = next
+        persistComputers()
+        disconnectForHostChange()
+        refreshSecretFlag()
+        publish()
+    }
+
+    func addComputer() {
+        let created = SavedHost(
+            id: UUID().uuidString.lowercased(),
+            label: "Computer",
+            address: OverlayPolicy.exampleAddress,
+            port: OverlayPolicy.examplePort,
+            username: OverlayPolicy.exampleUser
+        )
+        computers.append(created)
+        host = created
+        persistComputers()
+        disconnectForHostChange()
+        refreshSecretFlag()
+        publish()
+    }
+
+    func removeActiveComputer() {
+        let removed = host
+        keys.forgetSecret(account: agentAccount(removed.id))
+        knownHosts.forget(host: removed.address, port: removed.port)
+        persistKnownHosts()
+        computers.removeAll { $0.id == removed.id }
+        if computers.isEmpty {
+            computers = [.placeholder]
+        }
+        host = computers[0]
+        pairingNotice = nil
+        persistComputers()
+        disconnectForHostChange()
+        refreshSecretFlag()
+        banner = "Removed \(removed.label)."
+        publish()
+    }
+
+    func dismissPairingNotice() {
+        pairingNotice = nil
+    }
+
+    /// Fills the active computer from a scanned or pasted pairing code. The secret goes to the Keychain.
+    func importPairing(_ text: String) -> String? {
+        let payload: PairingPayload
+        do {
+            payload = try PairingPayload.decode(text)
+        } catch let error as LocalizedError {
+            return error.errorDescription ?? "That pairing code could not be read."
+        } catch {
+            return "That pairing code could not be read."
+        }
+        let existing = computers.first {
+            $0.address == payload.address && $0.port == payload.port && $0.username == payload.user
+        }
+        let untouched = computers.count == 1 && computers[0] == .placeholder && keys.secret(account: agentAccount(computers[0].id)) == nil
+        let id = existing?.id ?? UUID().uuidString.lowercased()
+        let saved = SavedHost(
+            id: id,
+            label: payload.label,
+            address: payload.address,
+            port: payload.port,
+            username: payload.user,
+            pinnedFingerprint: payload.fingerprint ?? existing?.pinnedFingerprint
+        )
+        if untouched && existing == nil {
+            knownHosts.forget(host: computers[0].address, port: computers[0].port)
+            persistKnownHosts()
+            computers = [saved]
+        } else if let index = computers.firstIndex(where: { $0.id == id }) {
+            computers[index] = saved
+        } else {
+            computers.append(saved)
+        }
+        let changed = host.id != saved.id || host.address != saved.address || host.port != saved.port || host.username != saved.username
+        host = saved
+        persistComputers()
+        var storedSecret = false
+        if let secret = payload.secret {
+            do {
+                try keys.saveSecret(secret, account: agentAccount(id))
+                storedSecret = true
+            } catch {
+                refreshSecretFlag()
+                pairingNotice = PairingNotice(label: saved.label, fingerprint: saved.pinnedFingerprint, storedSecret: false)
+                if changed { disconnectForHostChange() }
+                showPairing = false
+                publish()
+                return "The computer was saved, but the agent secret was not stored in the Keychain."
+            }
+        }
+        refreshSecretFlag()
+        pairingNotice = PairingNotice(label: saved.label, fingerprint: saved.pinnedFingerprint, storedSecret: storedSecret)
+        if changed { disconnectForHostChange() }
+        banner = storedSecret ? "Paired \(saved.label). The agent secret is in the Keychain." : "Paired \(saved.label)."
+        showPairing = false
+        publish()
+        return nil
     }
 
     func updateHost(label: String, address: String, portText: String, username: String) -> String? {
@@ -151,21 +279,27 @@ final class RemoteStore: ObservableObject {
         }
         let name = label.trimmingCharacters(in: .whitespacesAndNewlines)
         let changed = host.address != canonical || host.port != port || host.username != user
-        host = SavedHost(
+        let pin = changed ? nil : host.pinnedFingerprint
+        let updated = SavedHost(
             id: host.id,
             label: name.isEmpty ? OverlayPolicy.exampleLabel : name,
             address: canonical,
             port: port,
-            username: user
+            username: user,
+            pinnedFingerprint: pin
         )
-        if let data = try? JSONEncoder().encode(host) {
-            UserDefaults.standard.set(data, forKey: "host")
+        if computers.contains(where: { $0.id != updated.id && $0.address == canonical && $0.port == port && $0.username == user }) {
+            return "That computer is already in the list."
         }
+        host = updated
+        if let index = computers.firstIndex(where: { $0.id == updated.id }) {
+            computers[index] = updated
+        } else {
+            computers.append(updated)
+        }
+        persistComputers()
         if changed {
-            live?.disconnect()
-            link = .offline
-            approvalsAvailable = false
-            statusLine = "Not connected"
+            disconnectForHostChange()
             publish()
         }
         return nil
@@ -209,7 +343,7 @@ final class RemoteStore: ObservableObject {
     func saveAgentSecret(_ secret: String) {
         let trimmed = secret.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        try? keys.saveSecret(trimmed, account: "agent-secret")
+        try? keys.saveSecret(trimmed, account: agentAccount(host.id))
         hasAgentSecret = true
         banner = "Agent secret saved in the Keychain."
         publish()
@@ -315,9 +449,19 @@ final class RemoteStore: ObservableObject {
     }
 
     func forgetHostKey() {
+        let hadPin = host.pinnedFingerprint != nil
         knownHosts.forget(host: host.address, port: host.port)
         persistKnownHosts()
-        banner = "Saved host key forgotten. The next connection asks again."
+        if hadPin {
+            host.pinnedFingerprint = nil
+            if let index = computers.firstIndex(where: { $0.id == host.id }) {
+                computers[index].pinnedFingerprint = nil
+            }
+            persistComputers()
+        }
+        banner = hadPin
+            ? "Saved host key forgotten, including the fingerprint from pairing. The next connection asks again."
+            : "Saved host key forgotten. The next connection asks again."
         publish()
     }
 
@@ -333,6 +477,11 @@ final class RemoteStore: ObservableObject {
             if let id = command.sessionID { deny(id) }
         case .stop:
             if let id = command.sessionID { stop(id) }
+        case .selectComputer:
+            if let id = command.computerID { selectComputer(id: id) }
+        default:
+            let unknown: Never = command.kind
+            return unknown
         }
     }
 
@@ -432,7 +581,7 @@ final class RemoteStore: ObservableObject {
             link = .needsPairing
             throw SSHClientError.authenticationFailed("Generate a key on this iPhone, then authorize it on the computer.")
         }
-        let secret = keys.secret(account: "agent-secret")
+        let secret = keys.secret(account: agentAccount(host.id))
         if live.matches(host: host), live.isSessionActive {
             if secret != nil, !live.agentIsReady {
                 try await live.openAgent(secret: secret)
@@ -450,7 +599,7 @@ final class RemoteStore: ObservableObject {
         })
         if host.address != requested.address || host.port != requested.port || host.username != requested.username {
             live.disconnect()
-            let again = keys.secret(account: "agent-secret")
+            let again = keys.secret(account: agentAccount(host.id))
             try await live.connect(host: host, privateKey: privateKey, agentSecret: again, verify: { [weak self] key in
                 await self?.verify(key) ?? false
             })
@@ -461,21 +610,28 @@ final class RemoteStore: ObservableObject {
     }
 
     private func verify(_ key: PresentedHostKey) async -> Bool {
+        if let pinned = host.pinnedFingerprint, pinned != key.fingerprint {
+            return await askTrust(key: key, previous: pinned, changed: true, matchesPin: false)
+        }
         let verdict = knownHosts.verdict(host: host.address, port: host.port, keyType: key.type, base64: key.base64)
         switch verdict {
         case .trusted:
             return true
         case .firstUse:
-            return await askTrust(key: key, previous: nil, changed: false)
+            let matches = host.pinnedFingerprint == key.fingerprint
+            return await askTrust(key: key, previous: matches ? host.pinnedFingerprint : nil, changed: false, matchesPin: matches)
         case .changed(let previous, _):
-            return await askTrust(key: key, previous: previous, changed: true)
+            return await askTrust(key: key, previous: previous, changed: true, matchesPin: false)
+        default:
+            let unknown: Never = verdict
+            return unknown
         }
     }
 
-    private func askTrust(key: PresentedHostKey, previous: String?, changed: Bool) async -> Bool {
+    private func askTrust(key: PresentedHostKey, previous: String?, changed: Bool, matchesPin: Bool) async -> Bool {
         await withCheckedContinuation { continuation in
             trustContinuation = continuation
-            trustPrompt = TrustPrompt(host: host, key: key, previousFingerprint: previous, changed: changed)
+            trustPrompt = TrustPrompt(host: host, key: key, previousFingerprint: previous, changed: changed, matchesPin: matchesPin)
         }
     }
 
@@ -603,6 +759,44 @@ final class RemoteStore: ObservableObject {
         try? knownHosts.text().write(to: support.appendingPathComponent("known_hosts"), atomically: true, encoding: .utf8)
     }
 
+    private func agentAccount(_ id: String) -> String {
+        "agent-secret." + id
+    }
+
+    private func refreshSecretFlag() {
+        hasAgentSecret = keys.secret(account: agentAccount(host.id)) != nil
+    }
+
+    private func migrateLegacySecret() {
+        let account = agentAccount(host.id)
+        guard keys.secret(account: account) == nil, let legacy = keys.secret(account: "agent-secret") else { return }
+        do {
+            try keys.saveSecret(legacy, account: account)
+            keys.forgetSecret(account: "agent-secret")
+        } catch {
+            return
+        }
+    }
+
+    private func persistComputers() {
+        let defaults = UserDefaults.standard
+        if let data = try? JSONEncoder().encode(computers) {
+            defaults.set(data, forKey: "computers")
+        }
+        if let data = try? JSONEncoder().encode(host) {
+            defaults.set(data, forKey: "host")
+        }
+        defaults.set(host.id, forKey: "activeComputerID")
+    }
+
+    private func disconnectForHostChange() {
+        live?.disconnect()
+        guard mode == .ssh else { return }
+        link = .offline
+        approvalsAvailable = false
+        statusLine = "Not connected"
+    }
+
     private func publish() {
         bridge.push(snapshot)
     }
@@ -647,6 +841,26 @@ final class RemoteStore: ObservableObject {
         switch screen {
         case "hosts", "keys":
             tab = .computer
+        case "pair":
+            tab = .computer
+            let primary = SavedHost(
+                id: "computer",
+                label: "example-host",
+                address: OverlayPolicy.exampleAddress,
+                port: OverlayPolicy.examplePort,
+                username: OverlayPolicy.exampleUser,
+                pinnedFingerprint: "SHA256:" + String(repeating: "A", count: 43)
+            )
+            let secondary = SavedHost(
+                id: "computer-2",
+                label: "example-host-2",
+                address: "100.64.0.1",
+                port: OverlayPolicy.examplePort,
+                username: OverlayPolicy.exampleUser
+            )
+            computers = [primary, secondary]
+            host = primary
+            showPairing = true
         case "settings":
             tab = .settings
         case "compose":

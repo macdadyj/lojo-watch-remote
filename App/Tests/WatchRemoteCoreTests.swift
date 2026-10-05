@@ -154,8 +154,9 @@ final class WatchRemoteCoreTests: XCTestCase {
             XCTFail("expected a changed key")
         }
         let command = AuthorizeCommand.text(publicKey: "ssh-ed25519 AAAA watch-remote@iphone")
-        XCTAssertTrue(command.contains("authorized_keys"))
+        XCTAssertEqual(command, "watch-remote-authorize 'ssh-ed25519 AAAA watch-remote@iphone'")
         XCTAssertFalse(command.contains("PRIVATE"))
+        XCTAssertFalse(command.contains("authorized_keys"))
         XCTAssertEqual(SSHFingerprint.sha256Base64(of: Data()), "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU")
     }
 
@@ -171,6 +172,80 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(engine.deny(sessionID: session.id)?.status, .stopped)
         let again = engine.start(prompt: "Read logs", cwd: nil)
         XCTAssertEqual(engine.stop(sessionID: again.id)?.summary, "Stopped from the watch.")
+    }
+
+    func testPairingPayloadRoundTripAndValidation() throws {
+        let fingerprint = "SHA256:" + String(repeating: "A", count: 43)
+        let payload = try PairingPayload(
+            label: "example-host",
+            address: "100.64.0.2",
+            user: "user",
+            port: 22,
+            secret: "example-secret",
+            fingerprint: "sha256:" + String(repeating: "A", count: 43) + "="
+        )
+        XCTAssertEqual(payload.fingerprint, fingerprint)
+        XCTAssertEqual(payload.address, "100.64.0.2")
+        let url = try payload.urlString()
+        XCTAssertTrue(url.hasPrefix("watchremote://pair?d="))
+        let decoded = try PairingPayload.decode("  \(url)\n")
+        XCTAssertEqual(decoded, payload)
+        XCTAssertFalse(decoded.summary.contains("example-secret"))
+        XCTAssertTrue(decoded.summary.contains("Agent secret included."))
+        XCTAssertTrue(decoded.summary.contains(fingerprint))
+        let golden = "eyJhZGRyZXNzIjoiMTAwLjY0LjAuMiIsImZpbmdlcnByaW50IjoiU0hBMjU2OkFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEiLCJsYWJlbCI6ImV4YW1wbGUtaG9zdCIsInBvcnQiOjIyLCJzZWNyZXQiOiJleGFtcGxlLXNlY3JldCIsInVzZXIiOiJ1c2VyIiwidiI6MX0"
+        XCTAssertEqual(try payload.token(), golden)
+        XCTAssertEqual(try PairingPayload.decode(golden).secret, "example-secret")
+
+        let bare = try PairingPayload(label: " example-host ", address: "100.64.0.1", user: "user", port: 22)
+        XCTAssertNil(bare.secret)
+        XCTAssertNil(bare.fingerprint)
+        XCTAssertEqual(
+            try bare.token(),
+            "eyJhZGRyZXNzIjoiMTAwLjY0LjAuMSIsImxhYmVsIjoiZXhhbXBsZS1ob3N0IiwicG9ydCI6MjIsInVzZXIiOiJ1c2VyIiwidiI6MX0"
+        )
+        let json = #"{"v":1,"user":"user","port":22,"address":"100.127.255.254","label":"example-host"}"#
+        XCTAssertEqual(try PairingPayload.decode(json).address, "100.127.255.254")
+
+        XCTAssertThrowsError(try PairingPayload(label: "example-host", address: "8.8.8.8", user: "user", port: 22)) { error in
+            XCTAssertEqual(error as? PairingError, .addressOutsideOverlay)
+        }
+        for refused in ["10.0.0.1", "127.0.0.1", "192.168.1.1", "example-host", "100.64.0.2.9", "100.064.0.1", "100.128.0.1"] {
+            XCTAssertThrowsError(try PairingPayload(label: "example-host", address: refused, user: "user", port: 22))
+        }
+        XCTAssertThrowsError(try PairingPayload(label: "example-host", address: "100.64.0.2", user: "bad user", port: 22))
+        XCTAssertThrowsError(try PairingPayload(label: "example-host", address: "100.64.0.2", user: "user", port: 0))
+        XCTAssertThrowsError(try PairingPayload(label: "example-host", address: "100.64.0.2", user: "user", port: 22, secret: "short"))
+        XCTAssertThrowsError(try PairingPayload(label: "example-host", address: "100.64.0.2", user: "user", port: 22, fingerprint: "MD5:abcd"))
+        XCTAssertThrowsError(try PairingPayload.decode(#"{"v":2,"label":"example-host","address":"100.64.0.2","user":"user","port":22}"#)) { error in
+            XCTAssertEqual(error as? PairingError, .unsupportedVersion(2))
+        }
+        XCTAssertThrowsError(try PairingPayload.decode("")) { error in
+            XCTAssertEqual(error as? PairingError, .empty)
+        }
+        XCTAssertThrowsError(try PairingPayload.decode("watchremote://pair"))
+        XCTAssertFalse(try PairingPayload.decode(url).summary.contains("example-secret"))
+    }
+
+    func testSnapshotCarriesTheComputerList() throws {
+        var snapshot = DemoCatalog.snapshot()
+        snapshot.computers = [
+            ComputerSummary(id: "computer", label: "example-host"),
+            ComputerSummary(id: "computer-2", label: "example-host-2"),
+        ]
+        snapshot.activeComputerID = "computer"
+        let text = try XCTUnwrap(LinkCodec.encodeSnapshot(snapshot))
+        let decoded = try XCTUnwrap(LinkCodec.decodeSnapshot(text))
+        XCTAssertEqual(decoded.computers.map(\.id), ["computer", "computer-2"])
+        XCTAssertEqual(decoded.activeComputerID, "computer")
+        let legacy = #"{"mode":"demo","link":"demo","sessions":[],"approvalsAvailable":true,"hostLabel":"example-host"}"#
+        let older = try XCTUnwrap(LinkCodec.decodeSnapshot(legacy))
+        XCTAssertEqual(older.hostLabel, "example-host")
+        XCTAssertTrue(older.computers.isEmpty)
+        XCTAssertEqual(older.activeComputerID, "")
+        let command = PhoneCommand(kind: .selectComputer, computerID: "computer-2")
+        let encoded = try XCTUnwrap(LinkCodec.encodeCommand(command))
+        XCTAssertEqual(LinkCodec.decodeCommand(encoded), command)
     }
 
     func testRelayPinAndSnapshotRoundTrip() {

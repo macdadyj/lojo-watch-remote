@@ -27,10 +27,10 @@ The workflow runs on `macos-26` and selects Xcode 26 (`Xcode_26.6.app`, then `Xc
 ## What you do on the iPhone
 
 1. Install the TestFlight build (or run the `WatchRemote` scheme from Xcode onto the phone). The watch app is embedded in the iPhone app.
-2. Open **Computer**, generate an Ed25519 key (or a Secure Enclave key). The private key stays in the iPhone Keychain.
-3. On **Computer**, save the overlay address, SSH user, and port. The shipped values (`user`, `100.64.0.2`, port `22`) are placeholders. Copy the authorize command, or scan its QR code, and run it on that computer as that user. It adds the public key to `~/.ssh/authorized_keys`. The command is idempotent. It does not contain the private key or the agent secret.
-4. Connect once and compare the host-key fingerprint with the computer (`ssh-keygen -lf` on the host key sshd presents). Trust it only if it matches. A changed key is refused.
-5. In **Settings**, choose **SSH**. Paste the agent-server secret from the computer. The field clears after save. The secret is stored in the Keychain and is sent only inside the SSH tunnel.
+2. On the computer, run `watch-remote-pair` (see [HOST-SETUP.md](HOST-SETUP.md)). On the iPhone, open **Computer** and scan that QR, or paste the pairing text. The shipped values (`user`, `100.64.0.2`, port `22`, label `example-host`) are placeholders. The phone keeps several computers and the Watch can switch the active one. Demo mode is unchanged.
+3. Open **Computer** and generate an Ed25519 key (or a Secure Enclave key) if this iPhone does not have one. The private key stays in the iPhone Keychain. Copy the public key, or the `watch-remote-authorize` command, and run it on that computer as that user. It adds the public key to `~/.ssh/authorized_keys` with forwarding limited to `127.0.0.1:2419`. The command is idempotent. It does not contain the private key.
+4. Connect once. If the pairing code pinned a host key, the phone shows that fingerprint and asks you to confirm it. Trust it only if it matches. A different key is refused.
+5. A pairing code that includes the agent secret stores it in the Keychain for that computer. Otherwise, in **Settings**, choose **SSH** and paste the secret. The field clears after save. The secret is sent only inside the SSH tunnel.
 
 Demo mode is the default until you switch to SSH. It does not open a socket and does not read the Keychain for a connection.
 

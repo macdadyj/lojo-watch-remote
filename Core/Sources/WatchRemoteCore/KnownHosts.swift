@@ -72,8 +72,9 @@ public struct KnownHosts: Equatable, Sendable {
 }
 
 public enum AuthorizeCommand {
+    /// Run on the computer. `watch-remote-authorize` writes the restricted `authorized_keys` line.
     public static func text(publicKey: String) -> String {
         let key = ShellQuoting.singleQuote(publicKey.trimmingCharacters(in: .whitespacesAndNewlines))
-        return "mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF \(key) ~/.ssh/authorized_keys 2>/dev/null || echo \(key) >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys"
+        return "watch-remote-authorize \(key)"
     }
 }

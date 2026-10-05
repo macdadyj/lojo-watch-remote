@@ -114,6 +114,16 @@ public struct GrokSession: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct ComputerSummary: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var label: String
+
+    public init(id: String, label: String) {
+        self.id = id
+        self.label = label
+    }
+}
+
 public struct PhoneSnapshot: Codable, Equatable, Sendable {
     public var mode: ConnectionMode
     public var link: LinkState
@@ -121,6 +131,8 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
     public var banner: String?
     public var approvalsAvailable: Bool
     public var hostLabel: String
+    public var computers: [ComputerSummary]
+    public var activeComputerID: String
 
     public init(
         mode: ConnectionMode,
@@ -128,7 +140,9 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         sessions: [GrokSession],
         banner: String?,
         approvalsAvailable: Bool,
-        hostLabel: String
+        hostLabel: String,
+        computers: [ComputerSummary] = [],
+        activeComputerID: String = ""
     ) {
         self.mode = mode
         self.link = link
@@ -136,6 +150,43 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         self.banner = banner
         self.approvalsAvailable = approvalsAvailable
         self.hostLabel = hostLabel
+        self.computers = computers
+        self.activeComputerID = activeComputerID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case link
+        case sessions
+        case banner
+        case approvalsAvailable
+        case hostLabel
+        case computers
+        case activeComputerID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try container.decode(ConnectionMode.self, forKey: .mode)
+        link = try container.decode(LinkState.self, forKey: .link)
+        sessions = try container.decode([GrokSession].self, forKey: .sessions)
+        banner = try container.decodeIfPresent(String.self, forKey: .banner)
+        approvalsAvailable = try container.decode(Bool.self, forKey: .approvalsAvailable)
+        hostLabel = try container.decode(String.self, forKey: .hostLabel)
+        computers = try container.decodeIfPresent([ComputerSummary].self, forKey: .computers) ?? []
+        activeComputerID = try container.decodeIfPresent(String.self, forKey: .activeComputerID) ?? ""
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mode, forKey: .mode)
+        try container.encode(link, forKey: .link)
+        try container.encode(sessions, forKey: .sessions)
+        try container.encodeIfPresent(banner, forKey: .banner)
+        try container.encode(approvalsAvailable, forKey: .approvalsAvailable)
+        try container.encode(hostLabel, forKey: .hostLabel)
+        try container.encode(computers, forKey: .computers)
+        try container.encode(activeComputerID, forKey: .activeComputerID)
     }
 
     /// WatchConnectivity application context is small. Keep the payload short.
@@ -152,6 +203,9 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         }
         if let banner {
             copy.banner = Self.clip(banner, limit: 180)
+        }
+        copy.computers = Array(computers.prefix(12)).map { computer in
+            ComputerSummary(id: computer.id, label: Self.clip(computer.label, limit: 40))
         }
         return copy
     }
@@ -170,6 +224,7 @@ public struct PhoneCommand: Codable, Equatable, Sendable {
         case approve
         case deny
         case stop
+        case selectComputer
     }
 
     public var kind: Kind
@@ -177,19 +232,22 @@ public struct PhoneCommand: Codable, Equatable, Sendable {
     public var sessionID: String?
     public var permissionID: String?
     public var cwd: String?
+    public var computerID: String?
 
     public init(
         kind: Kind,
         prompt: String? = nil,
         sessionID: String? = nil,
         permissionID: String? = nil,
-        cwd: String? = nil
+        cwd: String? = nil,
+        computerID: String? = nil
     ) {
         self.kind = kind
         self.prompt = prompt
         self.sessionID = sessionID
         self.permissionID = permissionID
         self.cwd = cwd
+        self.computerID = computerID
     }
 }
 

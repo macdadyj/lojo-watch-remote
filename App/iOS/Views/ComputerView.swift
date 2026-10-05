@@ -10,6 +10,7 @@ struct ComputerView: View {
     @State private var username = ""
     @State private var port = ""
     @State private var hostError: String?
+    @State private var confirmRemove = false
 
     var body: some View {
         NavigationStack {
@@ -17,6 +18,10 @@ struct ComputerView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if store.keys.key == nil {
                         firstRunCard
+                    }
+                    computersCard
+                    if let notice = store.pairingNotice {
+                        pairingNoticeCard(notice)
                     }
                     hostCard
                     keyCard
@@ -34,7 +39,7 @@ struct ComputerView: View {
                     }
                     .buttonStyle(.plain)
                     .lojoCard()
-                    Text("The Watch reaches the computer through this iPhone. Enter the overlay address, then pair the key.")
+                    Text("The Watch reaches the active computer through this iPhone. Scan the pairing QR from that computer, then authorize this iPhone’s key.")
                         .font(.footnote)
                         .foregroundStyle(LojoTheme.secondaryText)
                         .padding(.bottom, 12)
@@ -44,7 +49,86 @@ struct ComputerView: View {
             .background(LojoTheme.pageBackground)
             .navigationTitle("Computer")
             .onAppear(perform: syncHostFields)
+            .onChange(of: store.host) { _, _ in syncHostFields() }
+            .sheet(isPresented: $store.showPairing) {
+                PairingImportView()
+                    .presentationDetents([.large])
+            }
+            .confirmationDialog("Remove this computer?", isPresented: $confirmRemove, titleVisibility: .visible) {
+                Button("Remove", role: .destructive) { store.removeActiveComputer() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The saved host key and the agent secret for this computer are removed from this iPhone.")
+            }
         }
+    }
+
+    private var computersCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Saved computers")
+                .font(.headline)
+            ForEach(store.computers) { computer in
+                Button {
+                    store.selectComputer(id: computer.id)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: computer.id == store.host.id ? "checkmark.circle.fill" : "circle")
+                            .foregroundStyle(computer.id == store.host.id ? LojoTheme.accent : LojoTheme.secondaryText)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(computer.label)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            Text("\(computer.username)@\(computer.address)")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(LojoTheme.secondaryText)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(computer.id == store.host.id ? "\(computer.label), active" : computer.label)
+            }
+            Button("Scan pairing QR") { store.showPairing = true }
+                .buttonStyle(PrimaryButtonStyle())
+            Button("Paste pairing code") { store.showPairing = true }
+                .buttonStyle(QuietButtonStyle())
+            Button("Add computer") { store.addComputer() }
+                .buttonStyle(QuietButtonStyle())
+            if canRemove {
+                Button("Remove this computer") { confirmRemove = true }
+                    .buttonStyle(DestructiveButtonStyle())
+            }
+        }
+        .lojoCard()
+    }
+
+    private var canRemove: Bool {
+        store.computers.count > 1 || store.host != .placeholder
+    }
+
+    private func pairingNoticeCard(_ notice: PairingNotice) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Confirm \(notice.label)")
+                .font(.headline)
+            if let fingerprint = notice.fingerprint {
+                Text("Pinned host key. The next connection still shows this fingerprint before it is trusted.")
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.secondaryText)
+                Text(fingerprint)
+                    .font(.footnote.monospaced())
+                    .textSelection(.enabled)
+            } else {
+                Text("No host key fingerprint was in the pairing code. The next connection asks you to check the one the computer presents.")
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.secondaryText)
+            }
+            Text(notice.storedSecret ? "Agent secret saved in the Keychain." : "No agent secret was in the code. You can save one in Settings.")
+                .font(.footnote)
+                .foregroundStyle(LojoTheme.secondaryText)
+            Button("Fingerprint noted") { store.dismissPairingNotice() }
+                .buttonStyle(QuietButtonStyle())
+        }
+        .lojoCard()
     }
 
     private var hostCard: some View {
@@ -62,6 +146,9 @@ struct ComputerView: View {
                         .foregroundStyle(LojoTheme.secondaryText)
                 }
             }
+            Text("Name")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(LojoTheme.secondaryText)
             TextField("example-host", text: $label)
                 .textFieldStyle(.roundedBorder)
                 .textInputAutocapitalization(.never)
@@ -78,6 +165,17 @@ struct ComputerView: View {
             TextField("22", text: $port)
                 .textFieldStyle(.roundedBorder)
                 .keyboardType(.numberPad)
+            if let fingerprint = store.host.pinnedFingerprint {
+                Text("Pinned host key")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(LojoTheme.secondaryText)
+                Text(fingerprint)
+                    .font(.footnote.monospaced())
+                    .textSelection(.enabled)
+                Text("Connecting still shows this fingerprint so you can confirm it.")
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.secondaryText)
+            }
             Text("Only an address in 100.64.0.0/10 is contacted. The values above are placeholders until you save the computer you paired.")
                 .font(.footnote)
                 .foregroundStyle(LojoTheme.secondaryText)
@@ -109,7 +207,7 @@ struct ComputerView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Pair this iPhone")
                 .font(.headline)
-            Text("Save the computer, generate a key, then run the authorize command on that computer.")
+            Text("Scan the pairing QR, generate a key, then run watch-remote-authorize on that computer.")
                 .font(.footnote)
                 .foregroundStyle(LojoTheme.secondaryText)
         }
@@ -151,20 +249,27 @@ struct KeyView: View {
                             .textSelection(.enabled)
                     }
                     .lojoCard()
-                    if let image = QRCode.image(AuthorizeCommand.text(publicKey: key.publicKey)) {
+                    if let image = QRCode.image(key.publicKey) {
                         Image(uiImage: image)
                             .interpolation(.none)
                             .resizable()
                             .scaledToFit()
                             .frame(maxWidth: 220)
                             .frame(maxWidth: .infinity)
-                            .accessibilityLabel("QR code of the authorize command")
+                            .accessibilityLabel("QR code of the public key")
                     }
+                    Button("Copy public key") {
+                        UIPasteboard.general.string = key.publicKey
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
                     Button("Copy authorize command") {
                         UIPasteboard.general.string = AuthorizeCommand.text(publicKey: key.publicKey)
                     }
-                    .buttonStyle(PrimaryButtonStyle())
-                    Text("On the computer, as \(store.host.username), paste that command once. It adds this key to authorized_keys and does not print the private key.")
+                    .buttonStyle(QuietButtonStyle())
+                    Text(AuthorizeCommand.text(publicKey: key.publicKey))
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                    Text("On the computer, as \(store.host.username), run that command once. It adds this public key and does not print the private key.")
                         .font(.footnote)
                         .foregroundStyle(LojoTheme.secondaryText)
                 } else {
@@ -229,12 +334,10 @@ struct TrustView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack(spacing: 8) {
                         StatusMark(status: prompt.changed ? .failed : .unknown, size: 14)
-                        Text(prompt.changed ? "Host key changed" : "New host key")
+                        Text(prompt.changed ? "Host key changed" : (prompt.matchesPin ? "Host key from pairing" : "New host key"))
                             .font(.title3.weight(.semibold))
                     }
-                    Text(prompt.changed
-                         ? "The computer’s key does not match the one this iPhone saved. The connection is refused."
-                         : "Check this fingerprint against the computer before trusting it.")
+                    Text(trustCopy)
                         .font(.subheadline)
                         .foregroundStyle(LojoTheme.secondaryText)
                     Text(prompt.key.fingerprint)
@@ -265,5 +368,18 @@ struct TrustView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .interactiveDismissDisabled(prompt.changed)
+    }
+
+    private var trustCopy: String {
+        if prompt.changed {
+            if let pinned = prompt.host.pinnedFingerprint, prompt.previousFingerprint == pinned {
+                return "This is not the host key from the pairing code. The connection is refused."
+            }
+            return "The computer’s key does not match the one this iPhone saved. The connection is refused."
+        }
+        if prompt.matchesPin {
+            return "This fingerprint matches the pairing code. Confirm it before connecting."
+        }
+        return "Check this fingerprint against the computer before trusting it."
     }
 }

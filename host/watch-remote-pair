@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Print a one-scan pairing QR for Watch Remote.
+# The QR can contain the agent secret. Scan it once. Do not share it or take a screenshot.
+set -euo pipefail
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required. See docs/HOST-SETUP.md." >&2
+  exit 1
+fi
+
+root="$(cd "$(dirname "$0")" && pwd)"
+if [[ "${1:-}" == "--self-test" ]]; then
+  exec python3 "${root}/test_pairing.py"
+fi
+exec python3 "${root}/pairing.py" pair "$@"

@@ -130,6 +130,7 @@ fi
 shoot "${PHONE_UDID}" com.lojo.WatchRemote sessions dark iphone-sessions-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote session dark iphone-session-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote hosts dark iphone-hosts-dark.png
+shoot "${PHONE_UDID}" com.lojo.WatchRemote pair dark iphone-pair-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote compose dark iphone-compose-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote settings dark iphone-settings-dark.png
 shoot "${PHONE_UDID}" com.lojo.WatchRemote sessions light iphone-sessions-light.png
