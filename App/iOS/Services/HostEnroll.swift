@@ -2,7 +2,7 @@ import Foundation
 import Network
 import WatchRemoteCore
 
-/// Posts this iPhone's public key to the computer that is waiting after `watch-remote-pair`.
+/// Posts this iPhone's public key to the computer that is waiting after the pair command.
 ///
 /// The post is cleartext HTTP on the overlay (`100.64.0.0/10`). App Transport Security does not
 /// treat that range as local, and an exception domain cannot name the prefix. `URLSession` is
@@ -23,7 +23,7 @@ enum HostEnroll {
             }
             return nil
         } catch {
-            return "The computer did not answer. Leave watch-remote-pair open, then scan again."
+            return "The computer did not answer. \(PairingHelpCopy.leaveOpen)"
         }
     }
 }

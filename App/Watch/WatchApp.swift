@@ -31,12 +31,14 @@ final class WatchModel: ObservableObject {
     @Published var voiceLine = ""
     @Published var voiceStatus = ""
     @Published var voiceLog: [String] = []
+    @Published var dictationOffered = false
     var heldVoiceTask: String?
     let capture = WatchVoiceCapture()
     var prepareID: String?
     var expectID: String?
     var speakingReply = false
     var dictationPresented = false
+    var missedTurns = 0
     var appIsActive = false
     var hasLiveSnapshot = false
     var declinedVoicePermissionID: String?
@@ -57,6 +59,14 @@ final class WatchModel: ObservableObject {
             snapshot = DemoCatalog.preview(named: forcedScreen ?? "") ?? DemoCatalog.snapshot()
             if forcedScreen == "session" || forcedScreen == "long" { selectedID = DemoCatalog.approvalID }
             pathTitle = Self.pathTitle(for: forcedScreen, snapshot: snapshot, reachable: false, direct: false)
+            if forcedScreen == "voice-chat" || forcedScreen == "voice-loop" {
+                voiceStatus = "Listening"
+                voiceLine = VoiceSpeechCopy.listeningHint
+                voiceLog = forcedScreen == "voice-chat" ? VoiceConversationFixture.history : []
+                if forcedScreen == "voice-chat" {
+                    pendingAllowSessionID = DemoCatalog.approvalID
+                }
+            }
         }
         direct.restore()
         direct.onBanner = { [weak self] text in
@@ -109,7 +119,7 @@ final class WatchModel: ObservableObject {
             self?.voiceStatus = text
         }
         capture.onFailed = { [weak self] in
-            self?.fallBackToDictation(VoiceSpeechCopy.micUnavailable)
+            self?.offerDictation(VoiceSpeechCopy.micUnavailable)
         }
         if forcedScreen == nil, let pending = VoiceHandoff.takePending() {
             submitSpokenTask(pending)

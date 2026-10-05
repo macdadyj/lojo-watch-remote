@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Hands-free watch speech.
@@ -16,12 +17,144 @@ public enum VoiceSpeechCopy {
     public static let unavailable = "Speech recognition is unavailable on the iPhone."
     public static let phoneAway = "Hands-free needs the iPhone app open. Tap Done after you speak."
     public static let micDenied = "Allow the microphone in Settings on the Watch."
-    public static let micUnavailable = "Microphone is unavailable. Tap Done after you speak."
+    public static let micUnavailable = "Microphone is unavailable. Tap Dictate if you need the keyboard."
     public static let waiting = "Allow speech recognition on the iPhone, then speak again."
+    public static let waitingForPhone = "Waiting for the iPhone app. A pause will send."
     public static let missed = "Didn't catch that."
     public static let listeningHint = "Listening. A pause sends what you said."
     public static let handsFreeRule = "Hands-free. A pause sends. Done is not used."
     public static let approvalRule = "Deny and stop send on the first word. Allow waits for yes."
+    public static let pauseSends = "Pause sends"
+}
+
+/// Where the next utterance is transcribed.
+///
+/// watchOS has no `SFSpeechRecognizer` and no `SpeechAnalyzer` / `SpeechTranscriber`
+/// (WWDC25: every platform except watchOS). The dictation sheet is the only on-watch
+/// transcriber, and it always requires Done. It is not the path when the iPhone app is open.
+public enum VoiceInputRoute: Equatable, Sendable {
+    /// Record on the Watch. Silence ends the turn. The iPhone transcribes.
+    case handsFree
+    /// The iPhone app can take a moment to become reachable. Stay on the conversation screen.
+    case waitForPhone
+    /// Show Dictate. Do not cover history with the system sheet.
+    case offerDictation
+    /// The iPhone app stayed unreachable. The system sheet is the only transcriber, and it needs Done.
+    case presentDictation
+}
+
+public enum VoiceListenPolicy {
+    /// Reachability often flips true just after the Watch app is frontmost.
+    public static let phoneWaitAttempts = 6
+    public static let phoneWaitSpacing: TimeInterval = 0.35
+
+    /// A zero sample rate means the microphone never opened. That is not a successful listen.
+    public static func captureFormatIsUsable(sampleRate: Double, channelCount: Int) -> Bool {
+        sampleRate > 0 && channelCount > 0
+    }
+
+    /// Dictation is the fallback after the iPhone stays unreachable.
+    /// A reachable iPhone stays on pause-to-send, including while speech permission is still on screen.
+    /// Recognition or microphone trouble offers Dictate without presenting the sheet.
+    public static func route(
+        phoneReachable: Bool,
+        attempt: Int,
+        recognitionRefused: Bool,
+        captureFailed: Bool
+    ) -> VoiceInputRoute {
+        if !phoneReachable {
+            if attempt < phoneWaitAttempts {
+                return .waitForPhone
+            }
+            return .presentDictation
+        }
+        if recognitionRefused || captureFailed || attempt >= phoneWaitAttempts {
+            return .offerDictation
+        }
+        return .handsFree
+    }
+
+    /// Same-module switch. A new route fails this build until it is named.
+    public static func name(_ route: VoiceInputRoute) -> String {
+        switch route {
+        case .handsFree:
+            return "handsFree"
+        case .waitForPhone:
+            return "waitForPhone"
+        case .presentDictation:
+            return "presentDictation"
+        case .offerDictation:
+            return "offerDictation"
+        }
+    }
+}
+
+public enum VoiceFailureKind: Equatable, Sendable {
+    /// Listen again. This is not the keyboard.
+    case missed
+    /// Speech recognition cannot run. Offer Dictate.
+    case refused
+}
+
+public enum VoiceFailureClassifier {
+    /// `kAFAssistantErrorDomain` 1110 is "No speech detected". 203 is retry, 216 and 301 are cancellation.
+    /// Those fire when an utterance ends quietly. They are not a reason to open the dictation sheet.
+    public static func kind(domain: String, code: Int) -> VoiceFailureKind {
+        if domain == "kAFAssistantErrorDomain" && (code == 1110 || code == 203 || code == 216 || code == 301) {
+            return .missed
+        }
+        return .refused
+    }
+}
+
+/// The conversation chrome stays short so session history remains on screen.
+public enum VoiceChromeMetrics {
+    /// Taller than this covers the list on a 40 mm watch.
+    public static let maxSpeakBarHeight: CGFloat = 44
+    public static let speakVerticalPadding: CGFloat = 4
+
+    public static func speakBarCoversContent(barHeight: CGFloat, contentHeight: CGFloat) -> Bool {
+        guard contentHeight > 0 else { return true }
+        if barHeight > maxSpeakBarHeight { return true }
+        return barHeight > contentHeight * 0.45
+    }
+}
+
+public struct VoiceChromeSpec: Equatable, Sendable {
+    public var showsHistory: Bool
+    public var speakCoversContent: Bool
+    public var showsEnd: Bool
+    public var secondaryActions: [String]
+
+    public init(showsHistory: Bool, speakCoversContent: Bool, showsEnd: Bool, secondaryActions: [String]) {
+        self.showsHistory = showsHistory
+        self.speakCoversContent = speakCoversContent
+        self.showsEnd = showsEnd
+        self.secondaryActions = secondaryActions
+    }
+
+    public static let home = VoiceChromeSpec(
+        showsHistory: true,
+        speakCoversContent: false,
+        showsEnd: false,
+        secondaryActions: ["New task"]
+    )
+
+    public static let conversation = VoiceChromeSpec(
+        showsHistory: true,
+        speakCoversContent: false,
+        showsEnd: true,
+        secondaryActions: ["Yes", "New task", "Dictate"]
+    )
+}
+
+public enum VoiceConversationFixture {
+    public static let history = [
+        "You: list sessions",
+        "Read the build logs is running.",
+        "You: allow",
+        "Say yes to allow the edit.",
+    ]
 }
 
 public enum VoicePCM {

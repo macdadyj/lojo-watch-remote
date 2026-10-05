@@ -10,14 +10,25 @@ Tap Speak once. The Watch records with `AVAudioEngine` and decides the utterance
 
 Spoken allow still waits for a second word (yes or confirm). Deny and stop send on the first word. The on-screen Allow, Deny, Stop, and Yes buttons remain for when speech misses.
 
+## Why a TestFlight build still opened the dictation sheet
+
+The pause-to-send path records on the Watch and transcribes on the iPhone. Three faults in that path presented `presentTextInputController` (the system sheet, which always needs Done) even when the iPhone app was open:
+
+- `AVAudioSession` category `.playAndRecord` can fail on watchOS, and `outputFormat(forBus:)` can report a 0 Hz sample rate. Either one was treated as “microphone failed” and opened the sheet immediately.
+- `WCSession.isReachable` is often false for a moment after the Watch app becomes frontmost, even with the iPhone app open. The old check did not wait, so Speak went straight to the sheet.
+- `SFSpeechRecognizer` errors such as “No speech detected” (`kAFAssistantErrorDomain` 1110), and `requiresOnDeviceRecognition` when the on-device asset is missing, were sent back as a hard failure. The Watch opened the sheet instead of listening again.
+
+A build installed before this path existed still uses the sheet, because that Watch binary’s Speak button calls the dictation controller. The Watch app is inside the iPhone archive. After the new TestFlight build is installed, open Watch Remote on the Watch once. The home screen shows a short **Speak** control and the words **Pause sends**. A microphone that covers the session list is the previous binary.
+
 ## Why recognition is on the iPhone
 
-Checked against the Xcode 26 Speech SDK:
+Checked against Apple’s Speech documentation and WWDC25 session 277 (“Bring advanced speech-to-text to your app with SpeechAnalyzer”):
 
 - `SFSpeechRecognizer` is available on iOS, macOS, and tvOS. It is not available on watchOS.
-- `SpeechAnalyzer` and `SpeechTranscriber` (the iOS 26 speech API) are available on iOS, macOS, tvOS, and visionOS. Apple’s WWDC25 session says `SpeechTranscriber` is not available on watchOS.
-- The Watch can record with `AVAudioEngine`. That is the silence detector. It does not produce text.
-- The system dictation sheet (`TextFieldLink` / `presentTextInputController`) is the only on-watch transcriber. It always requires Done, so it is only the fallback when the iPhone app is not reachable.
+- `SpeechAnalyzer` and `SpeechTranscriber` are the iOS 26 speech API. WWDC25 describes them for the platforms that gained that model. They are not available on watchOS. `DictationTranscriber` is likewise absent from watchOS.
+- There is no separate watchOS conversation API that returns text without the system dictation sheet.
+- The Watch can record with `AVAudioEngine`. Silence detection is local. It does not produce text.
+- The system dictation sheet (`TextFieldLink` / `presentTextInputController`) is the only on-watch transcriber. It always requires Done. It opens only after the iPhone app stays unreachable. If the iPhone is reachable and recognition or the microphone fails, the conversation stays up and **Dictate** is a button.
 
 ## Automated checks
 
@@ -27,18 +38,26 @@ Unit tests cover the silence detector, the “send when speech ends” rule, the
 xcodegen generate
 ```
 
-Then run the `WatchRemote` scheme tests on an iPhone simulator, the same way the iOS workflow does. `testHandsFreeSilenceSendsWithoutDoneAndSpokenApprovalsStayTwoStep` is the check. CI runs it with the rest of `WatchRemoteTests`.
+Then run the `WatchRemote` scheme tests on an iPhone simulator, the same way the iOS workflow does. `testHandsFreeSilenceSendsWithoutDoneAndSpokenApprovalsStayTwoStep`, `testOpenPhoneStaysOnPauseToSendAndSpeakStaysOffTheHistory`, and `testPairHelpNamesThePublicCommandAndAcceptsAnAliasFromTheCode` are the checks. CI runs them with the rest of `WatchRemoteTests`.
+
+```bash
+scripts/watch-ui-checklist.sh
+```
+
+That script checks the pair-help copy, the short Speak bar, and that the dictation sheet is not the Speak button. After screenshots exist, `scripts/watch-ui-checklist.sh --screenshots build/screenshots` checks the PNGs. CI uploads them as the `screenshots` artifact.
 
 ## Simulator
 
-The Watch simulator has no microphone, so it cannot run the live loop. Launch the scripted voice loop instead. It shows what a conversation would say, including that a pause sends and Done is not used.
+The Watch simulator has no microphone, so it cannot run the live loop. Two scripted screens keep the microphone off:
 
 ```bash
+xcrun simctl launch booted com.lojo.WatchRemote.watchkitapp \
+  -WatchRemoteScreen voice-chat -WatchRemoteAppearance dark
 xcrun simctl launch booted com.lojo.WatchRemote.watchkitapp \
   -WatchRemoteScreen voice-loop -WatchRemoteAppearance dark
 ```
 
-Pull requests capture that screen as `watch-voice-loop.png`. The microphone stays off.
+`voice-chat` shows a short history, Yes, New task, and a one-line Speak / End bar. `voice-loop` shows the scripted turns in that same chrome, including that a pause sends and Done is not used. Pull requests capture `watch-voice-chat.png`, `watch-voice-loop.png`, and `watch-mic.png` (session list with the short Speak bar). `scripts/watch-ui-checklist.sh` checks the copy and the chrome, and checks those PNGs when a screenshot directory is passed.
 
 ## Once on a Watch and iPhone
 
@@ -50,5 +69,6 @@ The live microphone cannot be checked in CI.
 4. With a task waiting for approval, say “allow”, pause, and after the read-back say “yes”. It should approve without tapping Allow.
 5. On another approval, say “deny” once. It should deny without a second confirm.
 6. While a task is running, say “stop”. It should stop.
-7. Force-quit the iPhone app, tap Speak, and confirm the Watch explains that hands-free needs the iPhone and opens the dictation sheet. That sheet still needs Done.
-8. Tap End. The microphone should stop. Raising the wrist should not approve anything by itself.
+7. With the iPhone app still open, tap Speak. The conversation stays on screen (history, End, New task). It should not open the keyboard. Say a phrase and pause. Done is not part of that turn.
+8. Force-quit the iPhone app, tap Speak, and wait a couple of seconds. The Watch explains that hands-free needs the iPhone and opens the dictation sheet. That sheet still needs Done.
+9. Tap End. The microphone should stop. Raising the wrist should not approve anything by itself.

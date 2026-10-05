@@ -158,6 +158,20 @@ def direct_fields(relay: str | None, token: str | None, e2e: str | None) -> dict
     return {"e2e": key, "relay": url, "token": room}
 
 
+def normalize_pair_command(raw: str | None) -> str | None:
+    """Display name the operator types. Not a user, address, or path."""
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise PairingError("The pair command name is not usable.")
+    text = raw.strip()
+    if not text:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", text):
+        raise PairingError("The pair command name is not usable.")
+    return text
+
+
 def build_payload(
     label: str,
     address: str,
@@ -170,6 +184,7 @@ def build_payload(
     e2e: str | None = None,
     ticket: str | None = None,
     enroll: int | None = None,
+    command: str | None = None,
 ) -> dict:
     if not USER_RE.fullmatch(user.strip() if isinstance(user, str) else ""):
         raise PairingError("The pairing code has an SSH user Watch Remote cannot use.")
@@ -197,6 +212,9 @@ def build_payload(
         payload["fingerprint"] = resolved_fingerprint
     payload.update(direct_fields(relay, token, e2e))
     attach_enroll(payload, ticket, enroll)
+    shown = normalize_pair_command(command)
+    if shown is not None:
+        payload["cmd"] = shown
     return payload
 
 
@@ -259,6 +277,8 @@ def decode_text(text: str) -> dict:
         port = raw["port"]
         if isinstance(port, str) and port.isdigit():
             port = int(port)
+        if "cmd" in raw and not isinstance(raw.get("cmd"), str):
+            raise PairingError("The pair command name is not usable.")
         return build_payload(
             str(raw.get("label", "")),
             str(raw.get("address", "")),
@@ -271,6 +291,7 @@ def decode_text(text: str) -> dict:
             raw.get("e2e") if isinstance(raw.get("e2e"), str) else None,
             raw.get("ticket") if isinstance(raw.get("ticket"), str) else None,
             enroll_port(raw.get("enroll")),
+            raw.get("cmd") if isinstance(raw.get("cmd"), str) else None,
         )
     except KeyError as error:
         raise PairingError("That pairing code could not be read.") from error
@@ -324,6 +345,8 @@ def summary_lines(payload: dict) -> list[str]:
         lines.append("No direct connection in this code.")
     if "ticket" in payload:
         lines.append("This iPhone can authorize itself.")
+    if payload.get("cmd"):
+        lines.append(f"Pair command {payload['cmd']}.")
     return lines
 
 
@@ -695,6 +718,7 @@ def command_pair(args: argparse.Namespace) -> int:
     import enroll
 
     ticket = secrets.token_urlsafe(32)
+    shown = (getattr(args, "pair_command", None) or os.environ.get("WATCHREMOTE_PAIR_COMMAND") or "").strip()
     payload = build_payload(
         label=sanitized_label(args.label),
         address=address,
@@ -707,6 +731,7 @@ def command_pair(args: argparse.Namespace) -> int:
         e2e=e2e,
         ticket=ticket,
         enroll=enroll.DEFAULT_PORT,
+        command=shown or None,
     )
     url = url_for(payload)
     print(warning_text("secret" in payload, "relay" in payload, "ticket" in payload))
@@ -767,6 +792,10 @@ def build_parser() -> argparse.ArgumentParser:
     pair.add_argument("--label")
     pair.add_argument("--secret-file")
     pair.add_argument("--relay-url", help="wss address of your outbound relay. There is no default.")
+    pair.add_argument(
+        "--pair-command",
+        help="Name you type for this script, if it is aliased. The phone can show it. Default is watch-remote-pair.",
+    )
     pair.add_argument("--authorized-keys")
     pair.set_defaults(func=command_pair)
 

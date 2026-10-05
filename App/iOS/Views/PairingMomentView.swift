@@ -36,6 +36,10 @@ struct PairingMomentView: View {
                 .font(.title.weight(.bold))
             Text(store.offer?.label ?? "Computer")
                 .font(.title2.weight(.semibold))
+            Text(PairingHelpCopy.leaveOpenLine(command: store.offer?.pairCommand))
+                .font(.subheadline)
+                .foregroundStyle(LojoTheme.secondaryText)
+                .accessibilityIdentifier("pair.command")
             if let fingerprint = store.offer?.fingerprint {
                 Text("Confirm this host key before connecting.")
                     .font(.subheadline)
