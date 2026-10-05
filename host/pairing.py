@@ -12,10 +12,12 @@ import base64
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -26,7 +28,10 @@ URL_PREFIX = "watchremote://pair?d="
 OVERLAY_NETWORK = (100 << 24) | (64 << 16)
 OVERLAY_PREFIX = 10
 AGENT_PORT = "127.0.0.1:2419"
-AUTHORIZE_OPTIONS = f'restrict,port-forwarding,permitopen="{AGENT_PORT}"'
+# restrict drops PTY, agent forwarding, and user rc. port-forwarding turns the
+# forward back on, and permitopen keeps it on the agent port. command and no-pty
+# refuse ssh host '<cmd>' so this key can only open that forward.
+AUTHORIZE_OPTIONS = f'restrict,port-forwarding,permitopen="{AGENT_PORT}",command="/bin/false",no-pty'
 KEY_RE = re.compile(
     r"(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|"
     r"sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)"
@@ -35,6 +40,7 @@ KEY_RE = re.compile(
 )
 USER_RE = re.compile(r"[A-Za-z0-9._-]{1,32}$")
 FINGERPRINT_BODY = re.compile(r"[A-Za-z0-9+/]{43}$")
+TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{16,128}$")
 
 
 class PairingError(ValueError):
@@ -90,6 +96,41 @@ def normalize_secret(secret: str | None) -> str | None:
     return trimmed
 
 
+def normalize_relay_url(text: str) -> str | None:
+    trimmed = text.strip()
+    if not 12 <= len(trimmed) <= 300 or any(char.isspace() for char in trimmed):
+        return None
+    parts = urlsplit(trimmed)
+    if parts.scheme.lower() != "wss" or not parts.hostname:
+        return None
+    if parts.username or parts.password or parts.query or parts.fragment:
+        return None
+    if len(parts.hostname) > 253:
+        return None
+    return trimmed
+
+
+def normalize_token(text: str) -> str | None:
+    trimmed = text.strip()
+    if TOKEN_RE.fullmatch(trimmed) is None:
+        return None
+    return trimmed
+
+
+def normalize_e2e(text: str) -> str | None:
+    trimmed = text.strip().replace("=", "")
+    if not trimmed or any(char.isspace() for char in trimmed):
+        return None
+    padding = "=" * ((4 - len(trimmed) % 4) % 4)
+    try:
+        data = base64.urlsafe_b64decode(trimmed + padding)
+    except Exception:
+        return None
+    if len(data) != 32:
+        return None
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
 def normalize_label(label: str) -> str:
     trimmed = label.strip()
     if not trimmed:
@@ -99,6 +140,24 @@ def normalize_label(label: str) -> str:
     return trimmed
 
 
+def direct_fields(relay: str | None, token: str | None, e2e: str | None) -> dict:
+    relay_text = (relay or "").strip()
+    token_text = (token or "").strip()
+    key_text = (e2e or "").strip()
+    if not relay_text and not token_text and not key_text:
+        return {}
+    url = normalize_relay_url(relay_text)
+    if url is None:
+        raise PairingError("The direct relay address in the pairing code is not a wss address.")
+    room = normalize_token(token_text)
+    if room is None:
+        raise PairingError("The direct relay token in the pairing code is not usable.")
+    key = normalize_e2e(key_text)
+    if key is None:
+        raise PairingError("The direct connection key in the pairing code is not usable.")
+    return {"e2e": key, "relay": url, "token": room}
+
+
 def build_payload(
     label: str,
     address: str,
@@ -106,6 +165,11 @@ def build_payload(
     port: int,
     secret: str | None = None,
     fingerprint: str | None = None,
+    relay: str | None = None,
+    token: str | None = None,
+    e2e: str | None = None,
+    ticket: str | None = None,
+    enroll: int | None = None,
 ) -> dict:
     if not USER_RE.fullmatch(user.strip() if isinstance(user, str) else ""):
         raise PairingError("The pairing code has an SSH user Watch Remote cannot use.")
@@ -131,7 +195,25 @@ def build_payload(
         payload["secret"] = resolved_secret
     if resolved_fingerprint is not None:
         payload["fingerprint"] = resolved_fingerprint
+    payload.update(direct_fields(relay, token, e2e))
+    attach_enroll(payload, ticket, enroll)
     return payload
+
+
+def attach_enroll(payload: dict, ticket: str | None, enroll: int | None) -> None:
+    ticket_text = ticket.strip() if isinstance(ticket, str) else ""
+    if not ticket_text and enroll is None:
+        return
+    room = normalize_token(ticket_text)
+    if room is None:
+        raise PairingError("The one-time pairing ticket is not usable.")
+    if isinstance(enroll, bool):
+        raise PairingError("The pairing channel port is not usable.")
+    port = 2478 if enroll is None else enroll
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise PairingError("The pairing channel port is not usable.")
+    payload["ticket"] = room
+    payload["enroll"] = port
 
 
 def dumps_payload(payload: dict) -> str:
@@ -184,6 +266,11 @@ def decode_text(text: str) -> dict:
             port,
             raw.get("secret") if isinstance(raw.get("secret"), str) else None,
             raw.get("fingerprint") if isinstance(raw.get("fingerprint"), str) else None,
+            raw.get("relay") if isinstance(raw.get("relay"), str) else None,
+            raw.get("token") if isinstance(raw.get("token"), str) else None,
+            raw.get("e2e") if isinstance(raw.get("e2e"), str) else None,
+            raw.get("ticket") if isinstance(raw.get("ticket"), str) else None,
+            enroll_port(raw.get("enroll")),
         )
     except KeyError as error:
         raise PairingError("That pairing code could not be read.") from error
@@ -212,6 +299,14 @@ def token_text(text: str) -> str:
     return token
 
 
+def enroll_port(value: object) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PairingError("The pairing channel port is not usable.")
+    return value
+
+
 def summary_lines(payload: dict) -> list[str]:
     lines = [
         f"{payload['label']} · {payload['user']}@{payload['address']}:{payload['port']}",
@@ -223,13 +318,32 @@ def summary_lines(payload: dict) -> list[str]:
         lines.append("Agent secret included.")
     else:
         lines.append("No agent secret in this code.")
+    if "relay" in payload:
+        lines.append("Direct connection included.")
+    else:
+        lines.append("No direct connection in this code.")
+    if "ticket" in payload:
+        lines.append("This iPhone can authorize itself.")
     return lines
 
 
-def warning_text(has_secret: bool) -> str:
+def warning_text(has_secret: bool, has_direct: bool = False, has_ticket: bool = False) -> str:
+    pieces = []
     if has_secret:
+        pieces.append("the agent secret")
+    if has_direct:
+        pieces.append("the direct-connection key")
+    if has_ticket:
+        pieces.append("a one-time pairing ticket that expires in 10 minutes")
+    if pieces:
+        if len(pieces) == 1:
+            what = pieces[0]
+        elif len(pieces) == 2:
+            what = f"{pieces[0]} and {pieces[1]}"
+        else:
+            what = f"{pieces[0]}, {pieces[1]}, and {pieces[2]}"
         return (
-            "WARNING: This QR contains the agent secret. "
+            f"WARNING: This QR contains {what}. "
             "Scan it once with Watch Remote on the iPhone. "
             "Do not share it, copy it into chat, or take a screenshot."
         )
@@ -240,11 +354,38 @@ def warning_text(has_secret: bool) -> str:
     )
 
 
+def write_outbound_file(relay: str, token: str, e2e: str, directory: Path | None = None) -> Path:
+    root = directory or (Path.home() / ".config" / "watch-remote")
+    root.mkdir(parents=True, exist_ok=True)
+    root.chmod(0o700)
+    path = root / "outbound.json"
+    body = json.dumps({"e2e": e2e, "relay": relay, "token": token}, separators=(",", ":"), sort_keys=True)
+    temporary = path.with_name("outbound.json.tmp")
+    temporary.write_text(body, encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+    path.chmod(0o600)
+    counters = root / "outbound-counters.json"
+    counters.write_text('{"recv":0,"send":0}', encoding="utf-8")
+    counters.chmod(0o600)
+    return path
+
+
+def new_direct_material(relay_url: str) -> tuple[str, str, str]:
+    relay = normalize_relay_url(relay_url)
+    if relay is None:
+        raise PairingError("Pass a wss relay URL with no token in the URL. The token is generated here.")
+    token = secrets.token_urlsafe(32)
+    e2e = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode("ascii")
+    return relay, token, e2e
+
+
 def authorize_hint() -> str:
     return (
-        "On the iPhone, open Computer and scan the QR. Generate a key if this iPhone does not have one.\n"
-        "The iPhone shows its public key. On this computer, run:\n"
-        "  watch-remote-authorize '<public key>'"
+        "Leave this window open. On the iPhone, open Computer and scan the QR.\n"
+        "Confirm the computer. This window adds the iPhone key and then exits.\n"
+        "The ticket works once and expires in 10 minutes.\n"
+        "If it expires, use Advanced on the iPhone and run watch-remote-authorize with the public key."
     )
 
 
@@ -298,6 +439,23 @@ def parse_public_key(text: str) -> str:
     if comment is None:
         comment = "watch-remote@iphone"
     return f"{key_type} {blob} {comment}"
+
+
+def exec_is_refused(line: str) -> bool:
+    """True when this authorized_keys line cannot run a command supplied by the client."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    options = stripped.split(None, 1)[0]
+    parts = options.split(",")
+    required = (
+        "restrict",
+        "port-forwarding",
+        'permitopen="127.0.0.1:2419"',
+        'command="/bin/false"',
+        "no-pty",
+    )
+    return all(part in parts for part in required)
 
 
 def authorize_key(text: str, path: Path) -> str:
@@ -487,6 +645,15 @@ def command_pair(args: argparse.Namespace) -> int:
     if secret_warning and secret is None and secret_path.is_file():
         print(secret_warning, file=sys.stderr)
         return 1
+    relay_arg = (args.relay_url or os.environ.get("WATCHREMOTE_RELAY_URL") or "").strip()
+    relay = token = e2e = None
+    if relay_arg:
+        relay, token, e2e = new_direct_material(relay_arg)
+        write_outbound_file(relay, token, e2e)
+    # enroll imports this module, so it is loaded here to avoid a cycle at import time.
+    import enroll
+
+    ticket = secrets.token_urlsafe(32)
     payload = build_payload(
         label=sanitized_label(args.label),
         address=address,
@@ -494,9 +661,14 @@ def command_pair(args: argparse.Namespace) -> int:
         port=port,
         secret=secret,
         fingerprint=host_fingerprint(),
+        relay=relay,
+        token=token,
+        e2e=e2e,
+        ticket=ticket,
+        enroll=enroll.DEFAULT_PORT,
     )
     url = url_for(payload)
-    print(warning_text("secret" in payload))
+    print(warning_text("secret" in payload, "relay" in payload, "ticket" in payload))
     print()
     if secret_warning:
         print(secret_warning)
@@ -509,6 +681,23 @@ def command_pair(args: argparse.Namespace) -> int:
         print(line)
     print()
     print(authorize_hint())
+    if "relay" in payload:
+        print()
+        print("Direct connection included. Restart watch-remote-outbound so the Watch can connect without the iPhone.")
+    print()
+    keys = Path(args.authorized_keys).expanduser() if getattr(args, "authorized_keys", None) else Path.home() / ".ssh" / "authorized_keys"
+    try:
+        result = enroll.serve_enroll(address, enroll.DEFAULT_PORT, ticket, keys)
+    except OSError:
+        print("The pairing channel could not listen. Use Advanced on the iPhone and watch-remote-authorize.", file=sys.stderr)
+        return 0
+    except enroll.EnrollError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    if result == "enrolled":
+        print("This iPhone is authorized. You can close this window.")
+        return 0
+    print("The iPhone did not finish. Use Advanced on the iPhone and watch-remote-authorize.")
     return 0
 
 
@@ -536,6 +725,8 @@ def build_parser() -> argparse.ArgumentParser:
     pair.add_argument("--port", type=int)
     pair.add_argument("--label")
     pair.add_argument("--secret-file")
+    pair.add_argument("--relay-url", help="wss address of your outbound relay. There is no default.")
+    pair.add_argument("--authorized-keys")
     pair.set_defaults(func=command_pair)
 
     authorize = sub.add_parser("authorize")

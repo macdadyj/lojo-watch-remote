@@ -5,6 +5,7 @@ import WatchRemoteCore
 struct WatchRootView: View {
     @EnvironmentObject private var model: WatchModel
     @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     private var scheme: ColorScheme {
         model.appearance.colorScheme ?? systemScheme
@@ -28,6 +29,10 @@ struct WatchRootView: View {
         .tint(LojoTheme.accent)
         .environment(\.colorScheme, scheme)
         .preferredColorScheme(model.appearance.colorScheme)
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            model.wake()
+        }
     }
 }
 
@@ -51,6 +56,10 @@ struct WatchListView: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityLabel(headerTitle)
+                    Text(model.pathTitle)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(pathColor)
+                        .accessibilityLabel("Path \(model.pathTitle)")
                     if model.snapshot.computers.count > 1 {
                         computerSwitcher
                     }
@@ -62,7 +71,8 @@ struct WatchListView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .padding(.top, 10)
+                .lojoCard(padding: 12)
+                .padding(.top, 8)
                 if let banner = model.banner ?? model.snapshot.banner {
                     Text(banner)
                         .font(.caption2)
@@ -87,7 +97,7 @@ struct WatchListView: View {
                 NavigationLink {
                     WatchComposeView()
                 } label: {
-                    Text("New task")
+                    Label("New task", systemImage: "plus")
                 }
                 .buttonStyle(PrimaryButtonStyle(compact: true))
                 .accessibilityLabel("New task")
@@ -132,7 +142,13 @@ struct WatchListView: View {
     }
 
     private var headerTitle: String {
-        phoneAway ? LinkState.phoneAway.title : model.snapshot.link.title
+        if model.pathTitle == "Pair on iPhone first" { return "Pair on iPhone first" }
+        if phoneAway && model.pathTitle != "direct" { return LinkState.phoneAway.title }
+        return model.snapshot.link.title
+    }
+
+    private var pathColor: Color {
+        model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readableSecondary(scheme)
     }
 
     private var headerMark: SessionStatus {
@@ -158,9 +174,11 @@ struct WatchListView: View {
         case .offline:
             return "Not connected. Open the iPhone app and check the computer."
         case .needsPairing:
-            return "Pair the computer in the iPhone app, then come back."
+            return "Pair on iPhone first."
         case .phoneAway:
-            return "Open Watch Remote on the iPhone. The Watch cannot reach the computer alone."
+            return model.pathTitle == "direct"
+                ? "The iPhone is away. This Watch is connected directly. The link pauses when the app is not open."
+                : "Pair on iPhone first."
         case .demo:
             return "No sessions. Start one with the button below."
         case .connected:
@@ -212,8 +230,8 @@ struct WatchDetailView: View {
                 Text(current.title)
                     .font(.headline)
                     .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 14)
+                    .lineLimit(2)
+                    .padding(.top, 4)
                 HStack(spacing: 6) {
                     StatusMark(status: current.status, size: 10)
                     Text(current.status.title)
@@ -221,6 +239,7 @@ struct WatchDetailView: View {
                         .foregroundStyle(LojoTheme.readablePrimary(scheme))
                 }
                 .accessibilityElement(children: .combine)
+                watchActions
                 Text(current.summary)
                     .font(.caption)
                     .foregroundStyle(LojoTheme.readablePrimary(scheme))
@@ -243,7 +262,6 @@ struct WatchDetailView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                watchActions
             }
             .padding(.horizontal, 6)
             .padding(.bottom, 16)
@@ -334,7 +352,7 @@ struct WatchComposeView: View {
                     }
                 }
                 .buttonStyle(PrimaryButtonStyle(compact: true))
-                .accessibilityHint("Sends the task to the iPhone")
+                .accessibilityHint("Sends the task to the computer")
                 if let banner = model.banner {
                     Text(banner)
                         .font(.caption2)

@@ -177,12 +177,7 @@ class ACPAdapter:
         try:
             sock = socket.create_connection((self.host, self.port), timeout=8)
             key = base64.b64encode(os.urandom(16)).decode()
-            request = (
-                f"GET /ws?server-key={_quote(secret)} HTTP/1.1\r\n"
-                f"Host: {self.host}:{self.port}\r\n"
-                "Upgrade: websocket\r\nConnection: Upgrade\r\n"
-                f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
-            )
+            request = handshake_request(secret, self.host, self.port, key)
             sock.sendall(request.encode())
             header = b""
             while b"\r\n\r\n" not in header:
@@ -297,5 +292,14 @@ def pop_server_frame(buffer: bytes) -> tuple[str | None, bytes]:
     return payload.decode(errors="replace"), buffer[offset + length:]
 
 
-def _quote(text: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in "-._~" else "%%%02X" % ord(ch) for ch in text)
+def handshake_request(secret: str, host: str, port: int, key: str) -> str:
+    """WebSocket upgrade. The agent secret is a header, never a query parameter."""
+    if not secret or any(ord(char) < 0x21 or ord(char) > 0x7E for char in secret):
+        raise RuntimeError("The agent secret is not usable.")
+    return (
+        "GET /ws HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+        f"Authorization: Bearer {secret}\r\n"
+        f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    )

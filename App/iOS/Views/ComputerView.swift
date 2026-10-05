@@ -11,38 +11,20 @@ struct ComputerView: View {
     @State private var port = ""
     @State private var hostError: String?
     @State private var confirmRemove = false
+    @State private var showAdvanced = false
+    @State private var copyNote: String?
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if store.keys.key == nil {
-                        firstRunCard
+                    statusBanner
+                    if store.host.paired {
+                        pairedContent
+                    } else {
+                        firstComputer
                     }
-                    computersCard
-                    if let notice = store.pairingNotice {
-                        pairingNoticeCard(notice)
-                    }
-                    hostCard
-                    keyCard
-                    NavigationLink {
-                        KeyView()
-                    } label: {
-                        HStack {
-                            Text("Key and authorize command")
-                                .font(.body.weight(.semibold))
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(LojoTheme.secondaryText)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .lojoCard()
-                    Text("The Watch reaches the active computer through this iPhone. Scan the pairing QR from that computer, then authorize this iPhone’s key.")
-                        .font(.footnote)
-                        .foregroundStyle(LojoTheme.secondaryText)
-                        .padding(.bottom, 12)
+                    advancedSection
                 }
                 .padding(20)
             }
@@ -54,6 +36,13 @@ struct ComputerView: View {
                 PairingImportView()
                     .presentationDetents([.large])
             }
+            .fullScreenCover(isPresented: Binding(
+                get: { store.pairingMoment != .none },
+                set: { if !$0 { store.dismissMoment() } }
+            )) {
+                PairingMomentView()
+                    .environmentObject(store)
+            }
             .confirmationDialog("Remove this computer?", isPresented: $confirmRemove, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) { store.removeActiveComputer() }
                 Button("Cancel", role: .cancel) {}
@@ -63,138 +52,292 @@ struct ComputerView: View {
         }
     }
 
-    private var computersCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Saved computers")
-                .font(.headline)
-            ForEach(store.computers) { computer in
-                Button {
-                    store.selectComputer(id: computer.id)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: computer.id == store.host.id ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(computer.id == store.host.id ? LojoTheme.accent : LojoTheme.secondaryText)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(computer.label)
-                                .font(.body.weight(.semibold))
-                                .foregroundStyle(.primary)
-                            Text("\(computer.username)@\(computer.address)")
-                                .font(.caption.monospaced())
-                                .foregroundStyle(LojoTheme.secondaryText)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(computer.id == store.host.id ? "\(computer.label), active" : computer.label)
+    private var statusBanner: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(bannerColor)
+                .frame(width: 12, height: 12)
+            Text(store.pairingBanner.title)
+                .font(.title3.weight(.bold))
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: LojoTheme.cornerRadius, style: .continuous)
+                .fill(bannerFill)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(store.pairingBanner.title)
+    }
+
+    private var bannerColor: Color {
+        switch store.pairingBanner {
+        case .notPaired:
+            return LojoTheme.warning
+        case .waiting:
+            return LojoTheme.warning
+        case .connected:
+            return LojoTheme.online
+        }
+    }
+
+    private var bannerFill: Color {
+        switch store.pairingBanner {
+        case .notPaired, .waiting:
+            return LojoTheme.warning.opacity(0.16)
+        case .connected:
+            return LojoTheme.online.opacity(0.18)
+        }
+    }
+
+    private var firstComputer: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Button {
+                store.beginScan()
+            } label: {
+                Label("Scan QR code", systemImage: "qrcode.viewfinder")
             }
-            Button("Scan pairing QR") { store.showPairing = true }
-                .buttonStyle(PrimaryButtonStyle())
-            Button("Paste pairing code") { store.showPairing = true }
-                .buttonStyle(QuietButtonStyle())
-            Button("Add computer") { store.addComputer() }
-                .buttonStyle(QuietButtonStyle())
-            if canRemove {
-                Button("Remove this computer") { confirmRemove = true }
-                    .buttonStyle(DestructiveButtonStyle())
+            .buttonStyle(PrimaryButtonStyle(prominent: true))
+            .accessibilityHint("Opens the camera to scan the pairing code from the computer")
+            Text("Pair your first computer")
+                .font(.title2.weight(.bold))
+            Text("One scan finishes the setup. Leave watch-remote-pair running on the computer until the phone says Connected.")
+                .font(.body)
+                .foregroundStyle(LojoTheme.secondaryText)
+            step(1, "On your computer, run this") {
+                Text("watch-remote-pair")
+                    .font(.body.monospaced().weight(.semibold))
+                    .textSelection(.enabled)
+                Text("Leave that window open. It authorizes this iPhone. Add --relay-url only if you host a direct relay. There is no built-in relay address.")
+                    .font(.subheadline)
+                    .foregroundStyle(LojoTheme.secondaryText)
+            }
+            step(2, "Scan the QR") {
+                Text("Use the Scan QR code button at the top of this screen.")
+                    .font(.subheadline)
+                    .foregroundStyle(LojoTheme.secondaryText)
+            }
+            step(3, "Confirm the computer") {
+                Text("The phone asks if it is your computer, then connects. The Watch is ready when you see Connected.")
+                    .font(.subheadline)
+                    .foregroundStyle(LojoTheme.secondaryText)
+            }
+        }
+    }
+
+    private var pairedContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(store.host.label)
+                .font(.title2.weight(.bold))
+            if store.computers.count > 1 {
+                ForEach(store.computers) { computer in
+                    Button {
+                        store.selectComputer(id: computer.id)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: computer.id == store.host.id ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(computer.id == store.host.id ? LojoTheme.accent : LojoTheme.secondaryText)
+                            Text(computer.label)
+                                .foregroundStyle(.primary)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            fingerprintBody
+            authorizeBody
+            testBody
+            if store.pairingBanner == .connected {
+                Text(store.snapshot.directReady ? "The Watch can connect on its own, or through this iPhone." : "The Watch uses this iPhone. A direct relay was not in the pairing QR.")
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.secondaryText)
             }
         }
         .lojoCard()
+    }
+
+    @ViewBuilder
+    private var fingerprintBody: some View {
+        if let fingerprint = store.host.pinnedFingerprint {
+            Text("Host key fingerprint. The next connection still asks you to confirm it.")
+                .font(.subheadline)
+                .foregroundStyle(LojoTheme.secondaryText)
+            Text(fingerprint)
+                .font(.footnote.monospaced())
+                .textSelection(.enabled)
+            if store.pairingNotice != nil {
+                Button("Confirm fingerprint") { store.dismissPairingNotice() }
+                    .buttonStyle(QuietButtonStyle())
+            }
+        } else if store.host.paired {
+            Text("No host key fingerprint was in the pairing code. The next connection shows the key the computer presents.")
+                .font(.subheadline)
+                .foregroundStyle(LojoTheme.secondaryText)
+        } else {
+            Text("After the scan, the fingerprint from the computer shows here. Confirm it before you connect.")
+                .font(.subheadline)
+                .foregroundStyle(LojoTheme.secondaryText)
+        }
+    }
+
+    private var authorizeBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button("Copy authorize command") { copyAuthorize() }
+                .buttonStyle(PrimaryButtonStyle(prominent: !store.host.paired))
+            Text("On the computer, paste that command into a terminal and run it. It adds this iPhone’s public key. It does not copy the private key.")
+                .font(.subheadline)
+                .foregroundStyle(LojoTheme.secondaryText)
+            if let key = store.keys.key {
+                Text(AuthorizeCommand.text(publicKey: key.publicKey))
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+            }
+            if let copyNote {
+                Text(copyNote)
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.secondaryText)
+            }
+        }
+    }
+
+    private var testBody: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(store.connectionTest == .running ? "Testing…" : "Test connection") {
+                Task { await store.testConnection() }
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(store.connectionTest == .running)
+            testResult
+        }
+    }
+
+    @ViewBuilder
+    private var testResult: some View {
+        switch store.connectionTest {
+        case .idle:
+            EmptyView()
+        case .running:
+            Text("Testing the connection.")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(LojoTheme.secondaryText)
+        case .connected:
+            Text("Connected")
+                .font(.title3.weight(.bold))
+                .foregroundStyle(LojoTheme.online)
+        case .failed(let message):
+            Text(message)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(LojoTheme.danger)
+        }
+    }
+
+    private var advancedSection: some View {
+        DisclosureGroup("Advanced", isExpanded: $showAdvanced) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Name, address, user, and port. Paste a code here if the camera is unavailable. If the pairing window expires, copy the authorize command and run it on the computer.")
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.secondaryText)
+                authorizeBody
+                Button("Scan QR code") { store.beginScan() }
+                    .buttonStyle(QuietButtonStyle())
+                Button("Paste pairing code") { store.showPairing = true }
+                    .buttonStyle(QuietButtonStyle())
+                Button("Add computer") { store.addComputer() }
+                    .buttonStyle(QuietButtonStyle())
+                TextField("example-host", text: $label)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("100.64.0.2", text: $address)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.numbersAndPunctuation)
+                TextField("user", text: $username)
+                    .textFieldStyle(.roundedBorder)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("22", text: $port)
+                    .textFieldStyle(.roundedBorder)
+                    .keyboardType(.numberPad)
+                Text("Only an address in 100.64.0.0/10 is contacted.")
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.secondaryText)
+                if let hostError {
+                    Text(hostError)
+                        .font(.footnote)
+                        .foregroundStyle(LojoTheme.danger)
+                }
+                Button("Save computer") {
+                    hostError = store.updateHost(label: label, address: address, portText: port, username: username)
+                }
+                .buttonStyle(QuietButtonStyle())
+                if canRemove {
+                    Button("Remove this computer") { confirmRemove = true }
+                        .buttonStyle(DestructiveButtonStyle())
+                }
+                NavigationLink {
+                    KeyView()
+                } label: {
+                    HStack {
+                        Text("Key details")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(LojoTheme.secondaryText)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 8)
+        }
+        .font(.headline)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: LojoTheme.cornerRadius, style: .continuous)
+                .fill(LojoTheme.cardBackground)
+        )
+    }
+
+    private func step<Content: View>(_ number: Int, _ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                Text("\(number)")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(LojoTheme.brandGradient))
+                Text(title)
+                    .font(.title3.weight(.semibold))
+            }
+            content()
+                .padding(.leading, 46)
+        }
+    }
+
+    private func copyAuthorize() {
+        if store.keys.key == nil {
+            do {
+                try store.keys.generateEd25519()
+            } catch {
+                copyNote = error.localizedDescription
+                return
+            }
+        }
+        guard let key = store.keys.key else {
+            copyNote = "A key could not be created on this iPhone."
+            return
+        }
+        UIPasteboard.general.string = AuthorizeCommand.text(publicKey: key.publicKey)
+        copyNote = "Copied. Paste it into a terminal on the computer and run it."
     }
 
     private var canRemove: Bool {
         store.computers.count > 1 || store.host != .placeholder
     }
 
-    private func pairingNoticeCard(_ notice: PairingNotice) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Confirm \(notice.label)")
-                .font(.headline)
-            if let fingerprint = notice.fingerprint {
-                Text("Pinned host key. The next connection still shows this fingerprint before it is trusted.")
-                    .font(.footnote)
-                    .foregroundStyle(LojoTheme.secondaryText)
-                Text(fingerprint)
-                    .font(.footnote.monospaced())
-                    .textSelection(.enabled)
-            } else {
-                Text("No host key fingerprint was in the pairing code. The next connection asks you to check the one the computer presents.")
-                    .font(.footnote)
-                    .foregroundStyle(LojoTheme.secondaryText)
-            }
-            Text(notice.storedSecret ? "Agent secret saved in the Keychain." : "No agent secret was in the code. You can save one in Settings.")
-                .font(.footnote)
-                .foregroundStyle(LojoTheme.secondaryText)
-            Button("Fingerprint noted") { store.dismissPairingNotice() }
-                .buttonStyle(QuietButtonStyle())
-        }
-        .lojoCard()
-    }
-
-    private var hostCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                IconTile(systemImage: "desktopcomputer", size: 44)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(store.host.label)
-                        .font(.headline)
-                    Text("\(store.host.username) · port \(store.host.port)")
-                        .font(.subheadline)
-                        .foregroundStyle(LojoTheme.secondaryText)
-                    Text(store.host.address)
-                        .font(.subheadline.monospaced())
-                        .foregroundStyle(LojoTheme.secondaryText)
-                }
-            }
-            Text("Name")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(LojoTheme.secondaryText)
-            TextField("example-host", text: $label)
-                .textFieldStyle(.roundedBorder)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            TextField("100.64.0.2", text: $address)
-                .textFieldStyle(.roundedBorder)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.numbersAndPunctuation)
-            TextField("user", text: $username)
-                .textFieldStyle(.roundedBorder)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            TextField("22", text: $port)
-                .textFieldStyle(.roundedBorder)
-                .keyboardType(.numberPad)
-            if let fingerprint = store.host.pinnedFingerprint {
-                Text("Pinned host key")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(LojoTheme.secondaryText)
-                Text(fingerprint)
-                    .font(.footnote.monospaced())
-                    .textSelection(.enabled)
-                Text("Connecting still shows this fingerprint so you can confirm it.")
-                    .font(.footnote)
-                    .foregroundStyle(LojoTheme.secondaryText)
-            }
-            Text("Only an address in 100.64.0.0/10 is contacted. The values above are placeholders until you save the computer you paired.")
-                .font(.footnote)
-                .foregroundStyle(LojoTheme.secondaryText)
-            if let hostError {
-                Text(hostError)
-                    .font(.footnote)
-                    .foregroundStyle(LojoTheme.danger)
-            }
-            Button("Save computer") {
-                hostError = store.updateHost(label: label, address: address, portText: port, username: username)
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            Button("Refresh sessions") {
-                Task { await store.refresh() }
-            }
-            .buttonStyle(QuietButtonStyle())
-        }
-        .lojoCard()
-    }
 
     private func syncHostFields() {
         label = store.host.label
@@ -203,31 +346,6 @@ struct ComputerView: View {
         port = String(store.host.port)
     }
 
-    private var firstRunCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Pair this iPhone")
-                .font(.headline)
-            Text("Scan the pairing QR, generate a key, then run watch-remote-authorize on that computer.")
-                .font(.footnote)
-                .foregroundStyle(LojoTheme.secondaryText)
-        }
-        .lojoCard()
-        .accessibilityElement(children: .combine)
-    }
-
-    private var keyCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                StatusMark(status: store.keys.key == nil ? .unknown : .idle)
-                Text(store.keys.key == nil ? "No key yet" : "Key in the Keychain")
-                    .font(.subheadline.weight(.semibold))
-            }
-            Text("The private key stays on this iPhone. The computer only receives the public half, through the authorize command you run there.")
-                .font(.footnote)
-                .foregroundStyle(LojoTheme.secondaryText)
-        }
-        .lojoCard()
-    }
 }
 
 struct KeyView: View {

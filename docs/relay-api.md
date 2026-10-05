@@ -10,7 +10,7 @@ The relay runs on that computer. `WATCHREMOTE_RELAY_BIND` has no default. It mus
 
 | Adapter | Behavior |
 | --- | --- |
-| `acp` (default) | Persistent WebSocket to `grok agent serve`. Approvals work. Secret is the WebSocket query, not an argv. |
+| `acp` (default) | Persistent WebSocket to `grok agent serve`. Approvals work. Secret is an `Authorization` header, not a URL and not an argv. |
 | `cli` | `grok -p … --output-format streaming-json --permission-mode dontAsk`. Stopping kills the process. `decide` returns an error. |
 | `mock` | In-memory sessions for tests. No Grok process. |
 

@@ -25,18 +25,27 @@ public struct WebSocketFramer {
 
     public init() {}
 
-    public static func upgradeRequest(host: String, path: String, webSocketKey: String) -> Data {
-        let text = [
+    public static func upgradeRequest(host: String, path: String, webSocketKey: String, authorization: String? = nil) -> Data {
+        var lines = [
             "GET \(path) HTTP/1.1",
             "Host: \(host)",
             "Upgrade: websocket",
             "Connection: Upgrade",
             "Sec-WebSocket-Key: \(webSocketKey)",
             "Sec-WebSocket-Version: 13",
-            "",
-            "",
-        ].joined(separator: "\r\n")
-        return Data(text.utf8)
+        ]
+        if let authorization, Self.isHeaderSafe(authorization) {
+            lines.append("Authorization: Bearer \(authorization)")
+        }
+        lines.append("")
+        lines.append("")
+        return Data(lines.joined(separator: "\r\n").utf8)
+    }
+
+    /// Printable ASCII with no spaces, so a secret cannot break the handshake or land in a URL.
+    private static func isHeaderSafe(_ text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        return text.unicodeScalars.allSatisfy { $0.value >= 0x21 && $0.value <= 0x7e }
     }
 
     public static func acceptsUpgrade(_ header: String) -> Bool {

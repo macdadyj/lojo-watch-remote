@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch Remote outbound connection
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/watch-remote-outbound
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

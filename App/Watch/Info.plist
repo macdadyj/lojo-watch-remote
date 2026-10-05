@@ -21,7 +21,7 @@
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>com.lojo.WatchRemote</string>
 	<key>WKRunsIndependentlyOfCompanionApp</key>
-	<false/>
+	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

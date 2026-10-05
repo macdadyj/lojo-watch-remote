@@ -1,5 +1,7 @@
 #!/bin/bash
-# Starts `grok agent serve` on the computer's loopback for Watch Remote.
+# Listens on 127.0.0.1:2419 for Watch Remote.
+# The phone key can only forward to that port. This process checks the agent
+# secret, then talks to grok. Headless prompts run here, not through SSH.
 # The secret is read from a mode-0600 file into the environment. It is not an argument.
 set -euo pipefail
 
@@ -15,9 +17,19 @@ if [[ -z "${GROK_AGENT_SECRET}" ]]; then
   exit 1
 fi
 
+root="$(cd "$(dirname "$0")" && pwd)"
 bin="${GROK_BIN:-${HOME}/.grok/bin/grok}"
 if [[ ! -x "${bin}" ]]; then
   bin="grok"
 fi
 
-exec "${bin}" agent serve --bind 127.0.0.1:2419
+# grok's own listener is on an internal port the phone key cannot forward to.
+# Its startup line includes the secret, so it is not written to the log.
+internal="${WATCHREMOTE_AGENT_INTERNAL:-127.0.0.1:2420}"
+if [[ -x "${bin}" ]] || command -v "${bin}" >/dev/null 2>&1; then
+  "${bin}" agent serve --bind "${internal}" >/dev/null 2>&1 &
+  child=$!
+  trap 'kill "${child}" >/dev/null 2>&1 || true' EXIT
+fi
+
+exec python3 "${root}/agentdoor.py"

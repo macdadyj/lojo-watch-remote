@@ -60,6 +60,29 @@ public struct ACPCodec: Sendable {
         request(method: "x.ai/session/list", params: [:])
     }
 
+    public mutating func loadSession(sessionID: String, cwd: String) -> (Int, String) {
+        request(method: "session/load", params: [
+            "sessionId": sessionID,
+            "cwd": cwd,
+            "mcpServers": [Any](),
+        ])
+    }
+
+    public mutating func sessionUsage(sessionID: String) -> (Int, String) {
+        request(method: "x.ai/session/usage", params: ["sessionId": sessionID])
+    }
+
+    /// Missing means the real agent server, which can ask for approval.
+    /// The host's headless fallback sets this to false.
+    public static func approvalsAvailable(inResultJSON text: String) -> Bool {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = object["result"] as? [String: Any],
+              let meta = result["_meta"] as? [String: Any],
+              let flag = meta["approvals"] as? Bool else { return true }
+        return flag
+    }
+
     public func permissionResponse(for request: PermissionRequest, allow: Bool) -> String {
         let outcome: [String: Any]
         if allow, let option = request.allowOptionID {

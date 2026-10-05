@@ -208,21 +208,26 @@ public struct PrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
     var compact: Bool
 
-    public init(compact: Bool = false) {
+    var prominent: Bool
+
+    public init(compact: Bool = false, prominent: Bool = false) {
         self.compact = compact
+        self.prominent = prominent
     }
 
     public func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(compact ? .footnote.weight(.semibold) : .body.weight(.semibold))
+            .font(prominent ? .title3.weight(.semibold) : (compact ? .footnote.weight(.semibold) : .body.weight(.semibold)))
             .frame(maxWidth: .infinity)
-            .padding(.vertical, compact ? 6 : 14)
+            .padding(.vertical, prominent ? 18 : (compact ? 6 : 14))
             .foregroundStyle(.white)
             .background(
                 RoundedRectangle(cornerRadius: compact ? 10 : 14, style: .continuous)
                     .fill(isEnabled ? AnyShapeStyle(LojoTheme.brandGradient) : AnyShapeStyle(Color.secondary.opacity(0.35)))
             )
             .opacity(configuration.isPressed ? 0.85 : 1)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
     }
 }
 
