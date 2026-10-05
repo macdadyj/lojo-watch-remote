@@ -653,7 +653,7 @@ final class WatchRemoteCoreTests: XCTestCase {
             onset: 0.1,
             silence: 0.5,
             minimumSpeech: 0.2,
-            maximumSpeech: 1
+            maximumSpeech: 10
         ))
         XCTAssertNil(detector.observe(rms: 0, at: 0.4))
         XCTAssertNil(detector.observe(rms: 0.01, at: 0.45))
