@@ -87,6 +87,20 @@ class PairingTests(unittest.TestCase):
         sample = f"256 {FINGERPRINT} example (ED25519)"
         self.assertEqual(pairing.fingerprint_from_ssh_keygen(sample), FINGERPRINT)
 
+    def test_parse_public_key_repairs_hyphen_ocr_of_plus(self) -> None:
+        # Screenshot OCR often turns '+' into '-' mid-blob; KEY_RE would truncate.
+        damaged = (
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINRDwz2yiYt8zryfT9By-X7IroYWhliTrimn/0U6enge "
+            "watch-remote@iphone"
+        )
+        repaired = pairing.parse_public_key(damaged)
+        self.assertIn("T9By+X7IroYWhliTrimn/0U6enge", repaired)
+        self.assertNotIn("T9By-X7", repaired)
+        with self.assertRaises(pairing.PairingError):
+            pairing.parse_public_key(
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINRDwz2yiYt8zryfT9By-XXXX watch-remote@iphone"
+            )
+
     def test_authorize_is_restricted_and_idempotent(self) -> None:
         public = "ssh-ed25519 AAAAB3NzaC1lZDI1NTE5AAAAIExamplePublicKeyPlaceholderOnly watch-remote@iphone"
         with tempfile.TemporaryDirectory() as directory:
