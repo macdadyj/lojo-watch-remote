@@ -107,26 +107,22 @@ final class PhoneChatUITests: XCTestCase {
         let field = composer(app, identifier: "chat.composer")
         XCTAssertTrue(field.waitForExistence(timeout: 6), "composer missing")
         field.tap()
+        if !app.keyboards.firstMatch.waitForExistence(timeout: 2) {
+            field.tap()
+        }
         field.typeText(text)
         let send = app.buttons["chat.send"]
-        let enabled = NSPredicate(format: "isEnabled == true")
-        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: enabled, object: send)], timeout: 4), .completed)
-        if !send.isHittable {
-            app.swipeUp()
-        }
+        let enabled = NSPredicate(format: "isEnabled == true AND isHittable == true")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: enabled, object: send)], timeout: 6), .completed)
         send.tap()
     }
 
     private func composer(_ app: XCUIApplication, identifier: String) -> XCUIElement {
-        let any = app.descendants(matching: .any)[identifier]
-        if any.waitForExistence(timeout: 2) { return any }
         let field = app.textFields[identifier]
-        if field.exists { return field }
+        if field.waitForExistence(timeout: 3) { return field }
         let view = app.textViews[identifier]
-        if view.exists { return view }
-        let placeholder = app.textViews["Message"]
-        if placeholder.exists { return placeholder }
-        return app.textFields["Message"]
+        if view.waitForExistence(timeout: 2) { return view }
+        return field
     }
 
     private func shot(_ app: XCUIApplication, _ name: String) {

@@ -209,7 +209,6 @@ struct ChatThreadView: View {
         .background(canvas)
         .navigationTitle(current?.title ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
-        .accessibilityIdentifier("chat.thread")
         .task(id: sessionID) {
             await store.resume(sessionID: sessionID)
         }
@@ -227,6 +226,7 @@ struct ChatThreadView: View {
                 Text(current.status.title)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(LojoTheme.secondaryText)
+                    .accessibilityIdentifier("chat.thread")
                 Spacer(minLength: 0)
                 Button("End chat") { store.endChat(current.id) }
                     .font(.caption.weight(.semibold))
@@ -292,11 +292,11 @@ struct ChatThreadView: View {
 
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 10) {
-            TextField("Message", text: $draft, axis: .vertical)
-                .lineLimit(1...6)
+            TextField("Message", text: $draft)
                 .textFieldStyle(.plain)
-                .padding(12)
-                .frame(minHeight: 48, alignment: .topLeading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(minHeight: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .fill(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05))
