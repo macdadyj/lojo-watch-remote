@@ -429,10 +429,12 @@ def _handle(
         return None
     if method == "session/load":
         session_id = str(params.get("sessionId") or "")
-        if not session_id:
-            _error(client, ident, "That session is not open.")
+        session = sessions.get(session_id)
+        if session is None:
+            _error(client, ident, "That chat is no longer on this computer.")
             return None
-        sessions[session_id] = _Session(resolve_cwd(str(params.get("cwd") or "")), session_id)
+        cwd = resolve_cwd(str(params.get("cwd") or "")) or session.cwd
+        session.cwd = cwd
         _send_json(client, {"jsonrpc": "2.0", "id": ident, "result": {"sessionId": session_id}})
         return None
     if method == "session/cancel":

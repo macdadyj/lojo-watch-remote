@@ -40,8 +40,7 @@ struct VoiceConversationBar: View {
         HStack(spacing: 8) {
             if showSpeak {
                 Button {
-                    guard model.forcedScreen == nil else { return }
-                    model.armListener()
+                    model.continueListening()
                 } label: {
                     Label("Speak", systemImage: "mic.fill")
                         .font(.footnote.weight(.semibold))
@@ -51,21 +50,20 @@ struct VoiceConversationBar: View {
                 .controlSize(.small)
                 .accessibilityIdentifier("voice.speak")
                 .accessibilityHint("Listens until you pause, then sends.")
-            } else {
-                Label(model.voiceStatus.isEmpty ? VoiceSpeechCopy.pauseSends : model.voiceStatus, systemImage: "mic.fill")
-                    .font(.caption2.weight(.semibold))
+            }
+            Button {
+                model.stopTalking()
+            } label: {
+                Text("I'm done")
+                    .font(.footnote.weight(.semibold))
                     .lineLimit(1)
-                    .accessibilityIdentifier("voice.speak")
+                    .frame(maxWidth: .infinity)
             }
-            Spacer(minLength: 4)
-            Button("End") {
-                guard model.forcedScreen == nil else { return }
-                model.endVoiceConversation()
-            }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .accessibilityIdentifier("voice.end")
-            .accessibilityHint("Leaves the voice conversation. The microphone stops.")
+            .accessibilityIdentifier("voice.done")
+            .accessibilityLabel("I'm done")
+            .accessibilityHint("Stops the microphone and sends what you said. The chat stays open.")
         }
         .padding(.horizontal, 6)
         .padding(.vertical, VoiceChromeMetrics.speakVerticalPadding)

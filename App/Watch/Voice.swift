@@ -295,6 +295,7 @@ struct VoiceChatView: View {
                     Text(model.voiceStatus)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(LojoTheme.accent)
+                        .accessibilityIdentifier("voice.status")
                         .accessibilityLabel("Voice status")
                         .accessibilityValue(model.voiceStatus)
                 }
@@ -344,12 +345,13 @@ struct VoiceChatView: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(LojoTheme.readableSecondary(scheme))
                     ForEach(model.snapshot.sessions) { session in
-                        NavigationLink {
-                            WatchDetailView(session: session)
+                        Button {
+                            model.openHistory(session)
                         } label: {
                             WatchRow(session: session)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("session.row.\(session.id)")
                     }
                 }
             }
@@ -397,11 +399,67 @@ extension WatchModel {
         handleVoiceTurn(transcript)
     }
 
+    /// Stops the microphone now and sends the audio or text captured so far.
+    /// The chat and the restored session stay open.
+    func stopTalking() {
+        guard forcedScreen == nil else { return }
+        voiceModeActive = true
+        VoiceSpeaker.shared.stop()
+        speakingReply = false
+        dictationPresented = false
+        if uiTest {
+            capture.stop()
+            prepareID = nil
+            expectID = nil
+            let transcript = VoiceTestClips.transcript(forClip: injectedClip)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !transcript.isEmpty {
+                remember("You: \(transcript)")
+                if uiPhoneOff {
+                    let reply = VoiceTestHost.reply(to: transcript)
+                    if !reply.isEmpty {
+                        remember(reply)
+                    }
+                }
+            }
+            voiceStatus = "Sent"
+            return
+        }
+        let partial = inProgressUtterance()
+        if !partial.isEmpty {
+            remember(partial)
+        }
+        prepareID = nil
+        if capture.finishEarly() {
+            voiceStatus = "Sending"
+            return
+        }
+        expectID = nil
+        if !partial.isEmpty {
+            handleVoiceTurn(partial)
+            return
+        }
+        voiceStatus = "Paused"
+    }
+
+    private func inProgressUtterance() -> String {
+        guard capture.isRunning || expectID != nil else { return "" }
+        let line = voiceLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.isEmpty || line == VoiceSpeechCopy.listeningHint || line == VoiceSpeechCopy.waitingForPhone {
+            return ""
+        }
+        if line == VoiceSpeechCopy.missed || line == VoiceSpeechCopy.phoneAway {
+            return ""
+        }
+        return line
+    }
+
     func endVoiceConversation() {
         declinedVoicePermissionID = pendingAllowSessionID.flatMap { id in
             snapshot.sessions.first { $0.id == id }?.permission?.id
         } ?? snapshot.sessions.first { $0.permission != nil }?.permission?.id
         voiceModeActive = false
+        resumedSessionID = nil
         pendingAllowSessionID = nil
         voiceNote = nil
         voiceNoteSessionID = nil
@@ -412,11 +470,57 @@ extension WatchModel {
         dictationOffered = false
         missedTurns = 0
         voiceStatus = ""
+        discardPendingHostAudio()
         capture.stop()
         VoiceSpeaker.shared.stop()
     }
 
+    func continueListening() {
+        if uiTest {
+            beginHandsFreeVoice()
+            return
+        }
+        guard forcedScreen == nil else { return }
+        armListener()
+    }
+
     func beginHandsFreeVoice() {
+        if uiTest {
+            voiceModeActive = true
+            if uiPhoneOff {
+                let route = VoiceListenPolicy.route(
+                    phoneReachable: false,
+                    attempt: uiHostReady ? 0 : VoiceListenPolicy.phoneWaitAttempts,
+                    recognitionRefused: false,
+                    captureFailed: false,
+                    hostReady: uiHostReady
+                )
+                switch route {
+                case .handsFree, .handsFreeHost:
+                    voiceStatus = "Listening"
+                    if voiceLog.isEmpty && voiceLine.isEmpty {
+                        voiceLine = VoiceSpeechCopy.listeningHint
+                        voiceLog = VoiceConversationFixture.history
+                    }
+                case .presentDictation:
+                    voiceLine = VoiceSpeechCopy.phoneAway
+                    voiceStatus = "Dictation"
+                    dictationOffered = true
+                case .waitForPhone, .offerDictation:
+                    offerDictation(VoiceSpeechCopy.phoneAway)
+                @unknown default:
+                    offerDictation(VoiceSpeechCopy.unavailable)
+                }
+                return
+            }
+            voiceStatus = "Listening"
+            if voiceLog.isEmpty && voiceLine.isEmpty {
+                voiceLine = VoiceSpeechCopy.listeningHint
+                voiceLog = VoiceConversationFixture.history
+            }
+            return
+        }
+        resumedSessionID = nil
         guard forcedScreen == nil else { return }
         appIsActive = true
         declinedVoicePermissionID = nil
@@ -440,7 +544,7 @@ extension WatchModel {
 
     func setActive(_ active: Bool) {
         appIsActive = active
-        guard forcedScreen == nil else { return }
+        guard forcedScreen == nil, !uiTest else { return }
         if !active {
             capture.stop()
             prepareID = nil
@@ -459,7 +563,7 @@ extension WatchModel {
 
     func flushHeldVoiceTask(announcingFailure: Bool = true) {
         guard forcedScreen == nil, let prompt = heldVoiceTask else { return }
-        if start(prompt, announcingFailure: announcingFailure) {
+        if start(prompt, announcingFailure: announcingFailure, continueRestored: resumedSessionID != nil) {
             heldVoiceTask = nil
             WatchFeedback.success()
         }
@@ -524,7 +628,8 @@ extension WatchModel {
             phoneReachable: phoneReachable,
             attempt: attempt,
             recognitionRefused: false,
-            captureFailed: false
+            captureFailed: false,
+            hostReady: hostIsReady
         )
         switch route {
         case .waitForPhone:
@@ -539,14 +644,17 @@ extension WatchModel {
             offerDictation(VoiceSpeechCopy.waiting)
         case .handsFree:
             beginCapture(attempt: attempt)
+        case .handsFreeHost:
+            beginHostCapture()
         @unknown default:
             offerDictation(VoiceSpeechCopy.unavailable)
         }
     }
 
     private func beginCapture(attempt: Int) {
+        voiceSink = .phone
         capture.requestPermission { [weak self] granted in
-            guard let self else { return }
+            guard let self, self.voiceSink == .phone else { return }
             guard granted else {
                 self.offerDictation(VoiceSpeechCopy.micDenied)
                 return
@@ -565,10 +673,11 @@ extension WatchModel {
                     phoneReachable: self.currentPhoneReachable(),
                     attempt: next,
                     recognitionRefused: false,
-                    captureFailed: false
+                    captureFailed: false,
+                    hostReady: self.hostIsReady
                 )
                 switch retry {
-                case .handsFree, .waitForPhone:
+                case .handsFree, .handsFreeHost, .waitForPhone:
                     self.armListener(attempt: next)
                 case .presentDictation:
                     self.fallBackToDictation(VoiceSpeechCopy.phoneAway, presentSheet: true)
@@ -596,6 +705,7 @@ extension WatchModel {
 
     func offerDictation(_ reason: String) {
         guard forcedScreen == nil else { return }
+        discardPendingHostAudio()
         capture.stop()
         prepareID = nil
         expectID = nil
@@ -609,6 +719,7 @@ extension WatchModel {
     func fallBackToDictation(_ reason: String, presentSheet: Bool = false) {
         guard forcedScreen == nil else { return }
         voiceModeActive = true
+        discardPendingHostAudio()
         capture.stop()
         prepareID = nil
         expectID = nil
@@ -804,6 +915,10 @@ extension WatchModel {
         DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
             guard let self, self.prepareID == id else { return }
             self.prepareID = nil
+            if self.hostIsReady {
+                self.beginHostCapture()
+                return
+            }
             if self.currentPhoneReachable() {
                 self.offerDictation(VoiceSpeechCopy.waiting)
             } else {
@@ -820,7 +935,7 @@ extension WatchModel {
         }
     }
 
-    private func remember(_ line: String) {
+    func remember(_ line: String) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         voiceLog.append(trimmed)
@@ -831,6 +946,7 @@ extension WatchModel {
 
     private func reply(_ text: String, listenAfter: Bool) {
         capture.stop()
+        discardPendingHostAudio()
         prepareID = nil
         expectID = nil
         voiceLine = text

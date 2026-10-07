@@ -585,9 +585,13 @@ final class RemoteStore: ObservableObject {
         publish()
     }
 
-    func start(prompt: String) async {
+    func start(prompt: String, sessionID: String? = nil) async {
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        if let sessionID, !sessionID.isEmpty {
+            await continueSession(sessionID, prompt: text)
+            return
+        }
         switch mode {
         case .demo:
             let session = engine.start(prompt: text, cwd: cwd)
@@ -603,6 +607,23 @@ final class RemoteStore: ObservableObject {
             await startRelay(prompt: text)
         }
         publish()
+    }
+
+    func resume(sessionID: String) async {
+        let id = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else {
+            banner = SessionResume.missingMessage
+            publish()
+            return
+        }
+        switch mode {
+        case .demo:
+            resumeDemo(id)
+        case .ssh:
+            await resumeSSH(id)
+        case .relay:
+            resumeRelay(id)
+        }
     }
 
     func allow(_ sessionID: String) {
@@ -671,7 +692,7 @@ final class RemoteStore: ObservableObject {
         case .refresh:
             Task { await refresh() }
         case .start:
-            Task { await start(prompt: command.prompt ?? "") }
+            Task { await start(prompt: command.prompt ?? "", sessionID: command.sessionID) }
         case .approve:
             if let id = command.sessionID { allow(id) }
         case .deny:
@@ -680,6 +701,13 @@ final class RemoteStore: ObservableObject {
             if let id = command.sessionID { stop(id) }
         case .selectComputer:
             if let id = command.computerID { selectComputer(id: id) }
+        case .resume:
+            if let id = command.sessionID {
+                Task { await resume(sessionID: id) }
+            } else {
+                banner = SessionResume.missingMessage
+                publish()
+            }
         }
     }
 
@@ -738,6 +766,143 @@ final class RemoteStore: ObservableObject {
             banner = error.localizedDescription
             statusLine = live.statusLine
         }
+    }
+
+    private func continueSession(_ sessionID: String, prompt: String) async {
+        switch mode {
+        case .demo:
+            guard engine.continueSession(sessionID: sessionID, prompt: prompt) else {
+                banner = SessionResume.missingMessage
+                publish()
+                return
+            }
+            sessions = engine.sessions
+            selectedSessionID = sessionID
+            banner = nil
+        case .ssh:
+            await continueSSH(sessionID: sessionID, prompt: prompt)
+        case .relay:
+            banner = sessions.contains(where: { $0.id == sessionID })
+                ? SessionResume.unsupportedMessage
+                : SessionResume.missingMessage
+        }
+        publish()
+    }
+
+    private func resumeDemo(_ sessionID: String) {
+        let source = sessions.first(where: { $0.id == sessionID }) ?? engine.sessions.first(where: { $0.id == sessionID })
+        guard let source else {
+            banner = SessionResume.missingMessage
+            publish()
+            return
+        }
+        let lines = SessionResume.displayLines(title: source.title, summary: source.summary, transcript: source.transcript ?? [])
+        if sessions.contains(where: { $0.id == sessionID }) {
+            update(sessionID) { $0.transcript = lines }
+        } else {
+            var copy = source
+            copy.transcript = lines
+            sessions.insert(copy, at: 0)
+        }
+        banner = nil
+        publish()
+    }
+
+    private func resumeRelay(_ sessionID: String) {
+        guard let source = sessions.first(where: { $0.id == sessionID }) else {
+            banner = SessionResume.missingMessage
+            publish()
+            return
+        }
+        let lines = SessionResume.displayLines(title: source.title, summary: source.summary, transcript: source.transcript ?? [])
+        update(sessionID) { $0.transcript = lines }
+        banner = nil
+        publish()
+    }
+
+    private func resumeSSH(_ sessionID: String) async {
+        guard let live else {
+            banner = SessionResume.missingMessage
+            publish()
+            return
+        }
+        do {
+            try await ensureSSH()
+            let listed = try await live.list(cwd: cwd.isEmpty ? nil : cwd)
+            guard let known = listed.first(where: { $0.id == sessionID }) else {
+                banner = SessionResume.missingMessage
+                publish()
+                return
+            }
+            let raw = try await live.loadSessionRaw(sessionID: sessionID, cwd: known.cwd ?? cwd)
+            let lines = SessionResume.displayLines(
+                title: known.title,
+                summary: known.summary,
+                transcript: SessionResume.transcriptLines(inLoadJSON: raw)
+            )
+            if sessions.contains(where: { $0.id == sessionID }) {
+                update(sessionID) { session in
+                    session.title = known.title
+                    session.summary = known.summary
+                    session.status = known.status
+                    session.cwd = known.cwd
+                    session.transcript = lines
+                }
+            } else {
+                var copy = known
+                copy.transcript = lines
+                sessions.insert(copy, at: 0)
+            }
+            link = .connected
+            approvalsAvailable = live.approvalsAvailable
+            statusLine = live.statusLine
+            banner = nil
+        } catch {
+            banner = error.localizedDescription
+            if link != .needsPairing, live.isSessionActive != true {
+                link = .offline
+            }
+            statusLine = live.statusLine
+        }
+        publish()
+    }
+
+    private func continueSSH(sessionID: String, prompt: String) async {
+        guard let live else {
+            banner = SessionResume.missingMessage
+            publish()
+            return
+        }
+        do {
+            try await ensureSSH()
+            let listed = try await live.list(cwd: cwd.isEmpty ? nil : cwd)
+            guard let known = listed.first(where: { $0.id == sessionID }) else {
+                banner = SessionResume.missingMessage
+                publish()
+                return
+            }
+            if !sessions.contains(where: { $0.id == sessionID }) {
+                sessions.insert(known, at: 0)
+            }
+            update(sessionID) { session in
+                session.status = .running
+                session.summary = "Continuing."
+            }
+            publish()
+            try await live.resumePrompt(sessionID: sessionID, prompt: prompt, cwd: known.cwd ?? cwd)
+            approvalsAvailable = live.approvalsAvailable
+            statusLine = live.statusLine
+            link = .connected
+            banner = nil
+        } catch {
+            if link != .needsPairing, live.isSessionActive != true {
+                link = .offline
+            }
+            approvalsAvailable = false
+            banner = error.localizedDescription
+            statusLine = live.statusLine
+        }
+        publish()
     }
 
     private func startSSH(prompt: String) async {

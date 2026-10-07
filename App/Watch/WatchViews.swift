@@ -42,6 +42,7 @@ struct WatchRootView: View {
         .preferredColorScheme(model.appearance.colorScheme)
         .onAppear {
             model.setActive(scenePhase == .active)
+            model.consumeUITestLaunch()
         }
         .onChange(of: scenePhase) { _, phase in
             model.setActive(phase == .active)
@@ -105,12 +106,13 @@ struct WatchListView: View {
                         .lojoCard(padding: 12)
                 }
                 ForEach(model.snapshot.sessions) { session in
-                    NavigationLink {
-                        WatchDetailView(session: session)
+                    Button {
+                        model.openHistory(session)
                     } label: {
                         WatchRow(session: session)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("session.row.\(session.id)")
                 }
                 NavigationLink {
                     WatchComposeView()
@@ -286,6 +288,7 @@ struct WatchDetailView: View {
             .padding(.horizontal, 6)
             .padding(.bottom, 16)
         }
+        .accessibilityIdentifier("session.detail")
         .watchPage()
         .contentMargins(.top, 8, for: .scrollContent)
         .navigationTitle("Task")

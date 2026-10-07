@@ -38,7 +38,7 @@ This repository does not deploy a relay and does not create any cloud resources.
 4. Install the outbound client next to the other host scripts and start it:
 
    ```bash
-   install -m 755 host/watch-remote-outbound host/outbound.py host/relaybox.py host/miniws.py ~/.local/bin/
+   install -m 755 host/watch-remote-outbound host/watch-remote-stt host/outbound.py host/relaybox.py host/miniws.py ~/.local/bin/
    cp host/watch-remote-outbound.service ~/.config/systemd/user/
    systemctl --user daemon-reload
    systemctl --user enable --now watch-remote-outbound.service
@@ -85,3 +85,48 @@ node relay/outbound/server.mjs
 Details and the other environment variables are in [relay/outbound/README.md](../relay/outbound/README.md).
 
 The older HTTP relay in [relay-api.md](relay-api.md) is a different program. It runs on the computer and is reached over the overlay by the iPhone. Leave it off unless you want that path. The outbound relay is the one the Watch uses when the iPhone is away.
+
+## Watch transcription
+
+When the iPhone app is closed, the Watch still records and sends one utterance as a `transcribe` frame (base64 PCM, 16 kHz, mono, 16-bit). `watch-remote-outbound` answers with `transcript`. `watch-remote-agent` does not see the audio. It only speaks ACP to grok on `127.0.0.1:2419`.
+
+Use whisper.cpp, not the Python `whisper` package and not faster-whisper. The CPU binary is `whisper-cli`. For short Watch commands the model is `ggml-base.en-q5_1` (English, about 57 MB). On a typical 4-core CPU a few seconds of speech comes back in well under two seconds. `ggml-tiny.en-q5_1` is faster and less reliable on one-word replies such as yes and no. `small` and larger models are too slow for this turn on CPU.
+
+The outbound unit sets `WATCHREMOTE_STT_COMMAND` to `~/.local/bin/watch-remote-stt`. That program is invoked as `[watch-remote-stt, wavpath]` with no shell, and the transcript is its only standard output. It runs `whisper-cli -m <model> -f <wav> -nt -l en -t 4`. The binary and the model file come from `WATCHREMOTE_WHISPER_CPP` and `WATCHREMOTE_WHISPER_CPP_MODEL`. When those are unset, the script uses `~/.local/bin/whisper-cli` and `~/.cache/watch-remote/ggml-base.en-q5_1.bin`.
+
+`~/.config/watch-remote/stt.env` is optional. The unit loads it with `EnvironmentFile=-` so a missing file is not an error, and values in that file replace the unit defaults. Do not point `WATCHREMOTE_WHISPER` at `whisper-cli`. That variable is only the fallback Python `whisper` command used when `WATCHREMOTE_STT_COMMAND` is unset. `WATCHREMOTE_WHISPER_MODEL` is that fallback's model name (`tiny` by default), not a ggml path.
+
+On the paired Linux computer:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake git curl
+git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git
+cmake -S whisper.cpp -B whisper.cpp/build -DGGML_NATIVE=ON
+cmake --build whisper.cpp/build -j --config Release
+install -m 755 whisper.cpp/build/bin/whisper-cli ~/.local/bin/whisper-cli
+install -d -m 700 ~/.cache/watch-remote ~/.config/watch-remote
+curl -L -o ~/.cache/watch-remote/ggml-base.en-q5_1.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin
+install -m 755 /path/to/watch-remote/host/watch-remote-stt ~/.local/bin/watch-remote-stt
+```
+
+Leave `stt.env` absent when those two files are in the default paths. To put them somewhere else, write the absolute paths. `%h` is not expanded in this file:
+
+```bash
+printf '%s\n' \
+  "WATCHREMOTE_WHISPER_CPP=${HOME}/.local/bin/whisper-cli" \
+  "WATCHREMOTE_WHISPER_CPP_MODEL=${HOME}/.cache/watch-remote/ggml-base.en-q5_1.bin" \
+  > ~/.config/watch-remote/stt.env
+```
+
+Copy the unit again so the `WATCHREMOTE_STT_COMMAND` line is installed, then restart the outbound service. Restarting `watch-remote-agent` does not pick this up.
+
+```bash
+cp /path/to/watch-remote/host/watch-remote-outbound.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user restart watch-remote-outbound.service
+systemctl --user show watch-remote-outbound.service -p Environment
+```
+
+`Environment` should include `WATCHREMOTE_STT_COMMAND` ending in `watch-remote-stt`. A missing binary or model makes that command exit non-zero, and the Watch shows the error. If `WATCHREMOTE_STT_COMMAND` is unset and no `whisper` program is on `PATH`, the Watch says "No transcriber is configured on this computer." and offers Dictate. Empty audio is rejected with "Nothing was recorded."

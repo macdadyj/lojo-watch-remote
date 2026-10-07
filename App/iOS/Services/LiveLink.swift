@@ -108,8 +108,12 @@ final class ACPPipe: @unchecked Sendable {
         return ACPCodec.approvalsAvailable(inResultJSON: raw)
     }
 
+    func loadSessionRaw(sessionID: String, cwd: String) async throws -> String {
+        try await roundTrip(timeout: true) { $0.loadSession(sessionID: sessionID, cwd: cwd) }
+    }
+
     func loadSession(sessionID: String, cwd: String) async throws {
-        _ = try await roundTrip(timeout: true) { $0.loadSession(sessionID: sessionID, cwd: cwd) }
+        _ = try await loadSessionRaw(sessionID: sessionID, cwd: cwd)
     }
 
     func sessionUsage(sessionID: String) async throws -> String? {
@@ -449,6 +453,17 @@ final class LiveLink {
             acpReady = false
             approvalsAvailable = false
             statusLine = "SSH connected. The agent server is not answering."
+        }
+    }
+
+    func loadSessionRaw(sessionID: String, cwd: String?) async throws -> String {
+        let pipe = try requirePipe()
+        let directory = agentCwd(cwd)
+        do {
+            return try await pipe.loadSessionRaw(sessionID: sessionID, cwd: directory)
+        } catch {
+            if pipe.isUsable == false { noteAgentClosed() }
+            throw error
         }
     }
 

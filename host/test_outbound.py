@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import socket
@@ -85,6 +86,102 @@ class HandleTests(unittest.TestCase):
         self.assertEqual(outbound.handle(agent, {"op": "ping", "id": "6"})["op"], "pong")
         down = outbound.handle(outbound.AgentDown(), {"op": "list", "id": "7"})
         self.assertIn("not answering", down["message"])
+
+    def test_resume_returns_lines_and_unknown_session_errors(self) -> None:
+        agent = outbound.MemoryAgent()
+        agent.rows = [{
+            "id": "s1",
+            "title": "Note the overlay route",
+            "summary": "Private overlay.",
+            "status": "idle",
+            "lines": ["You: note it", "Grok: noted"],
+        }]
+        restored = outbound.handle(agent, {"op": "resume", "id": "8", "sessionID": "s1"})
+        self.assertEqual(restored["op"], "restored")
+        self.assertEqual(restored["sessionID"], "s1")
+        self.assertEqual(restored["lines"], ["You: note it", "Grok: noted"])
+        missing = outbound.handle(agent, {"op": "resume", "id": "9", "sessionID": "gone"})
+        self.assertEqual(missing["op"], "error")
+        self.assertIn("no longer", missing["message"])
+        continued = outbound.handle(agent, {
+            "op": "start",
+            "id": "10",
+            "prompt": "add a line",
+            "sessionID": "s1",
+        })
+        self.assertEqual(continued["op"], "started")
+        self.assertEqual(continued["sessionID"], "s1")
+        self.assertEqual(agent.rows[0]["status"], "running")
+        self.assertEqual(len(agent.started), 1)
+        lines = outbound.transcript_lines({
+            "messages": [
+                {"role": "user", "content": "note the route"},
+                {"role": "assistant", "content": [{"type": "text", "text": "noted"}]},
+            ],
+        })
+        self.assertEqual(lines, ["You: note the route", "Grok: noted"])
+
+    def test_transcribe_returns_text_and_empty_audio_errors(self) -> None:
+        agent = outbound.MemoryAgent()
+        heard = outbound.handle(agent, {"op": "transcribe", "id": "u1", "audio": "aGVsbG8="})
+        self.assertEqual(heard["op"], "transcript")
+        self.assertEqual(heard["id"], "u1")
+        self.assertEqual(heard["message"], "list sessions")
+        empty = outbound.handle(agent, {"op": "transcribe", "id": "u2", "audio": "  "})
+        self.assertEqual(empty["op"], "error")
+        self.assertIn("Nothing was recorded", empty["message"])
+        missing = outbound.handle(agent, {"op": "transcribe", "id": "u3"})
+        self.assertEqual(missing["op"], "error")
+        self.assertIn("Nothing was recorded", missing["message"])
+        down = outbound.handle(outbound.AgentDown(), {"op": "transcribe", "id": "u4", "audio": "aGVsbG8="})
+        self.assertEqual(down["op"], "error")
+        self.assertIn("not answering", down["message"])
+
+        pcm = b"\x00\x00" * 8
+        audio = base64.b64encode(pcm).decode("ascii")
+        seen: dict[str, bytes] = {}
+
+        def run(argv, **kwargs):
+            self.assertFalse(kwargs.get("shell"))
+            self.assertEqual(argv[0], "/usr/bin/fake-stt")
+            self.assertEqual(len(argv), 2)
+            data = Path(argv[1]).read_bytes()
+            self.assertTrue(data.startswith(b"RIFF"))
+            seen["wav"] = data
+            return subprocess.CompletedProcess(argv, 0, stdout="yes\n", stderr="")
+
+        text = outbound.transcribe_audio(
+            audio,
+            environ={"WATCHREMOTE_STT_COMMAND": "/usr/bin/fake-stt"},
+            which=lambda _name: None,
+            run=run,
+        )
+        self.assertEqual(text, "yes")
+        self.assertGreater(len(seen["wav"]), 44)
+
+        def run_whisper(argv, **kwargs):
+            self.assertFalse(kwargs.get("shell"))
+            self.assertEqual(argv[0], "/usr/bin/whisper")
+            self.assertEqual(argv[argv.index("--model") + 1], "tiny")
+            self.assertEqual(argv[argv.index("--output_format") + 1], "txt")
+            out = Path(argv[argv.index("--output_dir") + 1]) / "utterance.txt"
+            out.write_text("list sessions\n", encoding="utf-8")
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        whispered = outbound.transcribe_audio(
+            audio,
+            environ={},
+            which=lambda _name: "/usr/bin/whisper",
+            run=run_whisper,
+        )
+        self.assertEqual(whispered, "list sessions")
+
+        with self.assertRaises(RuntimeError) as missing_tool:
+            outbound.transcribe_audio(audio, environ={}, which=lambda _name: None, run=run)
+        self.assertIn("No transcriber is configured on this computer.", str(missing_tool.exception))
+        with self.assertRaises(RuntimeError) as blank:
+            outbound.transcribe_audio("  ", environ={"WATCHREMOTE_STT_COMMAND": "/usr/bin/fake-stt"}, run=run)
+        self.assertIn("Nothing was recorded", str(blank.exception))
 
     def test_live_room_round_trip(self) -> None:
         probe = socket.socket()

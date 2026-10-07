@@ -434,6 +434,21 @@ final class WatchRemoteCoreTests: XCTestCase {
         let message = DirectMessage(op: .start, id: "2", prompt: "Read the build logs")
         let encoded = try XCTUnwrap(DirectMessage.encode(message))
         XCTAssertEqual(DirectMessage.decode(encoded), message)
+        let legacy = Data(#"{"id":"4","op":"restored","sessionID":"abc"}"#.utf8)
+        let decoded = DirectMessage.decode(legacy)
+        XCTAssertEqual(decoded?.op, .restored)
+        XCTAssertEqual(decoded?.sessionID, "abc")
+        XCTAssertNil(decoded?.lines)
+        XCTAssertNil(decoded?.audio)
+        let withLines = DirectMessage(op: .restored, id: "4", sessionID: "abc", lines: ["You: hi"])
+        let lineData = try XCTUnwrap(DirectMessage.encode(withLines))
+        XCTAssertEqual(DirectMessage.decode(lineData), withLines)
+        let heard = DirectMessage(op: .transcribe, id: "u1", audio: "aaaa")
+        let heardData = try XCTUnwrap(DirectMessage.encode(heard))
+        XCTAssertEqual(DirectMessage.decode(heardData), heard)
+        let spoken = DirectMessage(op: .transcript, id: "u1", message: "list sessions")
+        let spokenData = try XCTUnwrap(DirectMessage.encode(spoken))
+        XCTAssertEqual(DirectMessage.decode(spokenData)?.message, "list sessions")
     }
 
     func testRelayPinAndSnapshotRoundTrip() {
@@ -447,6 +462,10 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(decoded?.sessions.count, 3)
         XCTAssertEqual(decoded?.hostLabel, "example-host")
         let command = PhoneCommand(kind: .approve, sessionID: DemoCatalog.approvalID, permissionID: "perm-demo")
+        let resume = PhoneCommand(kind: .resume, sessionID: DemoCatalog.idleID)
+        let resumeText = try? XCTUnwrap(LinkCodec.encodeCommand(resume))
+        XCTAssertEqual(resumeText.flatMap(LinkCodec.decodeCommand)?.kind, .resume)
+        XCTAssertEqual(resumeText.flatMap(LinkCodec.decodeCommand)?.sessionID, DemoCatalog.idleID)
         let encoded = try? XCTUnwrap(LinkCodec.encodeCommand(command))
         XCTAssertEqual(encoded.flatMap(LinkCodec.decodeCommand), command)
     }
@@ -681,7 +700,8 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(limited.phase, .idle)
         XCTAssertNil(limited.observe(rms: 0, at: 1.2))
 
-        XCTAssertEqual(VoiceEndpointDetector.Configuration.handsFree.silence, 0.65)
+        XCTAssertEqual(VoiceEndpointDetector.Configuration.handsFree.silence, 1.5)
+        XCTAssertEqual(VoiceEndpointDetector.Configuration.handsFree.maximumSpeech, 12)
         XCTAssertNil(VoiceTranscriptGate.commandText("stop", isFinal: false))
         XCTAssertNil(VoiceTranscriptGate.commandText("   ", isFinal: true))
         XCTAssertEqual(VoiceTranscriptGate.commandText("  stop the task  ", isFinal: true), "stop the task")
@@ -692,6 +712,9 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(capture.finish(), [5, 6])
         var silent = VoiceCaptureBuffer(prerollFrames: 4, chunkFrames: 4)
         XCTAssertTrue(silent.append([9], hearingSpeech: false).isEmpty)
+        XCTAssertEqual(silent.finish(), [])
+        _ = silent.append([7, 8], hearingSpeech: false)
+        XCTAssertEqual(silent.takeAll(), [7, 8])
 
         let samples: [Int16] = [0, 16_384, -16_384]
         let packet = VoicePacket.audio(id: "utterance", sequence: 2, samples: samples, isLast: true)
@@ -754,7 +777,7 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertTrue(lines.contains { $0.contains("Allowed.") })
         XCTAssertTrue(lines.contains { $0.contains("Denied.") })
         XCTAssertTrue(lines.contains { $0.contains("Stopping") })
-        XCTAssertTrue(lines.contains { $0.contains("0.65s") })
+        XCTAssertTrue(lines.contains { $0.contains("1.50s") })
     }
 
     func testPairHelpNamesThePublicCommandAndAcceptsAnAliasFromTheCode() throws {
@@ -840,16 +863,111 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertFalse(VoiceChromeSpec.home.speakCoversContent)
         XCTAssertTrue(VoiceChromeSpec.home.showsHistory)
         XCTAssertFalse(VoiceChromeSpec.home.showsEnd)
+        XCTAssertFalse(VoiceChromeSpec.home.showsStopTalking)
         XCTAssertFalse(VoiceChromeSpec.conversation.speakCoversContent)
         XCTAssertTrue(VoiceChromeSpec.conversation.showsHistory)
-        XCTAssertTrue(VoiceChromeSpec.conversation.showsEnd)
+        XCTAssertFalse(VoiceChromeSpec.conversation.showsEnd)
+        XCTAssertTrue(VoiceChromeSpec.conversation.showsStopTalking)
         XCTAssertTrue(VoiceChromeSpec.conversation.secondaryActions.contains("End") == false)
         XCTAssertTrue(VoiceChromeSpec.conversation.secondaryActions.contains("Yes"))
         XCTAssertFalse(VoiceChromeMetrics.speakBarCoversContent(barHeight: 36, contentHeight: 180))
         XCTAssertTrue(VoiceChromeMetrics.speakBarCoversContent(barHeight: 160, contentHeight: 180))
         XCTAssertLessThanOrEqual(VoiceChromeMetrics.maxSpeakBarHeight, 44)
         XCTAssertFalse(VoiceConversationFixture.history.isEmpty)
+        XCTAssertEqual(
+            VoiceListenPolicy.route(
+                phoneReachable: false,
+                attempt: 0,
+                recognitionRefused: false,
+                captureFailed: false,
+                hostReady: true
+            ),
+            .handsFreeHost
+        )
+        XCTAssertEqual(
+            VoiceListenPolicy.route(
+                phoneReachable: true,
+                attempt: 3,
+                recognitionRefused: true,
+                captureFailed: false,
+                hostReady: true
+            ),
+            .handsFreeHost
+        )
+        XCTAssertEqual(
+            VoiceListenPolicy.route(
+                phoneReachable: true,
+                attempt: 0,
+                recognitionRefused: false,
+                captureFailed: false,
+                hostReady: true
+            ),
+            .handsFree
+        )
+        XCTAssertEqual(
+            VoiceListenPolicy.route(
+                phoneReachable: false,
+                attempt: 0,
+                recognitionRefused: false,
+                captureFailed: true,
+                hostReady: false
+            ),
+            .presentDictation
+        )
+        XCTAssertEqual(
+            VoiceListenPolicy.route(
+                phoneReachable: false,
+                attempt: 0,
+                recognitionRefused: false,
+                captureFailed: true,
+                hostReady: true
+            ),
+            .offerDictation
+        )
         XCTAssertEqual(VoiceListenPolicy.name(.handsFree), "handsFree")
+        XCTAssertEqual(VoiceListenPolicy.name(.handsFreeHost), "handsFreeHost")
         XCTAssertEqual(VoiceListenPolicy.name(.presentDictation), "presentDictation")
+    }
+
+    func testSessionResumeReadsLoadTranscriptAndNamesAMissingChat() {
+        let json = """
+        {"jsonrpc":"2.0","id":3,"result":{"sessionId":"abc","messages":[{"role":"user","content":"note the route"},{"role":"assistant","content":[{"type":"text","text":"noted"}]}]}}
+        """
+        XCTAssertEqual(
+            SessionResume.transcriptLines(inLoadJSON: json),
+            ["You: note the route", "Grok: noted"]
+        )
+        let idle = DemoCatalog.sessions().first { $0.id == DemoCatalog.idleID }
+        let lines = SessionResume.displayLines(title: idle?.title ?? "", summary: idle?.summary ?? "", transcript: [])
+        XCTAssertEqual(lines, [
+            "Note the overlay route",
+            "The computer is reachable only on the private overlay.",
+        ])
+        XCTAssertEqual(SessionResume.missingMessage, "That chat is no longer on this computer.")
+        XCTAssertFalse(SessionResume.unsupportedMessage.isEmpty)
+        var engine = MockEngine(preview: true)
+        XCTAssertTrue(engine.continueSession(sessionID: DemoCatalog.idleID, prompt: "add a note"))
+        XCTAssertEqual(engine.sessions.first { $0.id == DemoCatalog.idleID }?.summary, "add a note")
+        XCTAssertFalse(engine.continueSession(sessionID: "missing", prompt: "nope"))
+    }
+
+    func testSpeechFixturesDecodeAndTheMockHostAnswers() {
+        for name in [VoiceTestClips.yes, VoiceTestClips.no, VoiceTestClips.pauseTask, VoiceTestClips.noPause] {
+            let url = Bundle(for: WatchRemoteCoreTests.self).url(forResource: name, withExtension: "wav")
+            let data = url.flatMap { try? Data(contentsOf: $0) }
+            let samples = data.flatMap { VoiceWAV.monoFloats(data: $0) } ?? []
+            XCTAssertFalse(samples.isEmpty, name)
+            XCTAssertNotNil(VoiceTestClips.transcript(forClip: name), name)
+        }
+        let pauseURL = Bundle(for: WatchRemoteCoreTests.self).url(forResource: VoiceTestClips.pauseTask, withExtension: "wav")
+        let pause = pauseURL.flatMap { try? Data(contentsOf: $0) }.flatMap { VoiceWAV.monoFloats(data: $0) } ?? []
+        let tail = pause.suffix(8_000)
+        let tailLevel = VoicePCM.rms(Array(tail))
+        XCTAssertLessThan(tailLevel, 0.02)
+        XCTAssertEqual(VoiceTestClips.transcript(forClip: VoiceTestClips.yes), "yes")
+        XCTAssertEqual(VoiceTestHost.reply(to: "yes"), "Allowed.")
+        XCTAssertEqual(VoiceTestHost.reply(to: "no"), "Denied.")
+        XCTAssertEqual(VoiceTestHost.mode, "mock")
+        XCTAssertNil(VoiceWAV.monoFloats(data: Data("not a wav".utf8)))
     }
 }

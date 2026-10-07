@@ -187,6 +187,10 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         case error
         case update
         case pong
+        case resume
+        case restored
+        case transcribe
+        case transcript
     }
 
     public var op: Op
@@ -198,6 +202,10 @@ public struct DirectMessage: Codable, Equatable, Sendable {
     public var sessions: [GrokSession]?
     public var approvalsAvailable: Bool?
     public var message: String?
+    /// Transcript lines on a `restored` reply. Older frames omit this.
+    public var lines: [String]?
+    /// Base64 PCM int16 mono at 16 kHz on a `transcribe` request. Older frames omit this.
+    public var audio: String?
 
     public init(
         op: Op,
@@ -208,7 +216,9 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         permissionID: String? = nil,
         sessions: [GrokSession]? = nil,
         approvalsAvailable: Bool? = nil,
-        message: String? = nil
+        message: String? = nil,
+        lines: [String]? = nil,
+        audio: String? = nil
     ) {
         self.op = op
         self.id = id
@@ -219,6 +229,8 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         self.sessions = sessions
         self.approvalsAvailable = approvalsAvailable
         self.message = message
+        self.lines = lines
+        self.audio = audio
     }
 
     public static func encode(_ message: DirectMessage) -> Data? {

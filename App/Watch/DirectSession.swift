@@ -81,6 +81,9 @@ final class DirectSession: ObservableObject {
     @Published private(set) var approvalsAvailable = false
     var onChange: (() -> Void)?
     var onBanner: ((String?) -> Void)?
+    var onRestored: ((String, [String]) -> Void)?
+    var onTranscript: ((String, String) -> Void)?
+    var onUp: (() -> Void)?
 
     private(set) var pairing: DirectPairing?
     private var task: URLSessionWebSocketTask?
@@ -160,8 +163,17 @@ final class DirectSession: ObservableObject {
         send(DirectMessage(op: .list, id: freshID()))
     }
 
-    func start(_ prompt: String, cwd: String?) {
-        send(DirectMessage(op: .start, id: freshID(), prompt: prompt, cwd: cwd))
+    func start(_ prompt: String, cwd: String?, sessionID: String? = nil) {
+        send(DirectMessage(op: .start, id: freshID(), prompt: prompt, cwd: cwd, sessionID: sessionID))
+    }
+
+    func resume(_ sessionID: String) {
+        send(DirectMessage(op: .resume, id: freshID(), sessionID: sessionID))
+    }
+
+    func transcribe(pcm: Data, utteranceID: String) {
+        guard !pcm.isEmpty else { return }
+        send(DirectMessage(op: .transcribe, id: utteranceID, audio: pcm.base64EncodedString()))
     }
 
     func approve(_ session: GrokSession) {
@@ -227,6 +239,7 @@ final class DirectSession: ObservableObject {
                     authed = true
                     phase = .up
                     onBanner?(nil)
+                    onUp?()
                     send(DirectMessage(op: .list, id: freshID()))
                 }
                 receive(current)
@@ -266,9 +279,17 @@ final class DirectSession: ObservableObject {
             send(DirectMessage(op: .list, id: freshID()))
         case .ok, .pong:
             onChange?()
+        case .restored:
+            onRestored?(message.sessionID ?? "", message.lines ?? [])
+            onBanner?(nil)
+            onChange?()
+        case .transcript:
+            onTranscript?(message.id, message.message ?? "")
+            onBanner?(nil)
+            onChange?()
         case .error:
             onBanner?(message.message ?? "The computer could not do that.")
-        case .list, .start, .approve, .deny, .stop, .ping:
+        case .list, .start, .approve, .deny, .stop, .ping, .resume, .transcribe:
             break
         }
     }

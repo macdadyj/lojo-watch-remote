@@ -7,10 +7,15 @@ SSH from the iPhone is unchanged.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import select
+import shutil
+import struct
+import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -22,6 +27,9 @@ import relaybox  # noqa: E402
 
 
 AGENT_DOWN = "The agent server on this computer is not answering."
+MISSING_SESSION = "That chat is no longer on this computer."
+NOTHING_RECORDED = "Nothing was recorded."
+NO_TRANSCRIBER = "No transcriber is configured on this computer."
 
 
 def clip(text: str, limit: int = 160) -> str:
@@ -49,6 +57,15 @@ class AgentDown:
         raise RuntimeError(AGENT_DOWN)
 
     def stop(self, session_id: str) -> None:
+        raise RuntimeError(AGENT_DOWN)
+
+    def restore(self, session_id: str) -> list[str]:
+        raise RuntimeError(AGENT_DOWN)
+
+    def continue_session(self, session_id: str, prompt: str, cwd: str) -> str:
+        raise RuntimeError(AGENT_DOWN)
+
+    def transcribe(self, audio: object) -> str:
         raise RuntimeError(AGENT_DOWN)
 
     def take_update(self) -> dict | None:
@@ -97,8 +114,159 @@ class MemoryAgent:
                 row["summary"] = "Stopped."
                 row["permission"] = None
 
+    def restore(self, session_id: str) -> list[str]:
+        for row in self.rows:
+            if row.get("id") != session_id:
+                continue
+            stored = row.get("lines")
+            if isinstance(stored, list):
+                lines = [str(item).strip() for item in stored if str(item).strip()]
+                if lines:
+                    return lines
+            title = str(row.get("title") or "").strip()
+            summary = str(row.get("summary") or "").strip()
+            fallback = [part for part in (title, summary) if part]
+            return fallback or ["Session"]
+        raise RuntimeError(MISSING_SESSION)
+
+    def continue_session(self, session_id: str, prompt: str, cwd: str) -> str:
+        for row in self.rows:
+            if row.get("id") == session_id:
+                self.started.append(prompt)
+                row["status"] = "running"
+                row["summary"] = clip(prompt) or "Continuing."
+                if cwd:
+                    row["cwd"] = cwd
+                return session_id
+        raise RuntimeError(MISSING_SESSION)
+
+    def transcribe(self, audio: object) -> str:
+        raw = audio if isinstance(audio, str) else ""
+        if not raw.strip():
+            raise RuntimeError(NOTHING_RECORDED)
+        return "list sessions"
+
     def take_update(self) -> dict | None:
         return None
+
+
+def wav_bytes(pcm: bytes, sample_rate: int = 16000) -> bytes:
+    rate = sample_rate if sample_rate > 0 else 16000
+    channels = 1
+    bits = 16
+    block_align = channels * bits // 8
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + len(pcm),
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        channels,
+        rate,
+        rate * block_align,
+        block_align,
+        bits,
+        b"data",
+        len(pcm),
+    )
+    return header + pcm
+
+
+def transcribe_audio(
+    audio: object,
+    *,
+    environ: dict[str, str] | None = None,
+    which=None,
+    run=None,
+) -> str:
+    """Turn one Watch utterance into text.
+
+    `WATCHREMOTE_STT_COMMAND` is run as `[command, wavpath]` with no shell.
+    Otherwise a `whisper` binary is used when one is configured or on `PATH`.
+    """
+    env = os.environ if environ is None else environ
+    finder = shutil.which if which is None else which
+    runner = subprocess.run if run is None else run
+    raw = audio.strip() if isinstance(audio, str) else ""
+    if not raw:
+        raise RuntimeError(NOTHING_RECORDED)
+    try:
+        pcm = base64.b64decode(raw, validate=False)
+    except (ValueError, TypeError) as error:
+        raise RuntimeError("The recording could not be read.") from error
+    if not pcm:
+        raise RuntimeError(NOTHING_RECORDED)
+    wav = wav_bytes(pcm)
+    command = str(env.get("WATCHREMOTE_STT_COMMAND") or "").strip()
+    if command:
+        return _transcribe_with_command(command, wav, runner)
+    whisper = str(env.get("WATCHREMOTE_WHISPER") or "").strip()
+    if not whisper:
+        whisper = finder("whisper") or ""
+    if not whisper:
+        raise RuntimeError(NO_TRANSCRIBER)
+    model = str(env.get("WATCHREMOTE_WHISPER_MODEL") or "tiny").strip() or "tiny"
+    return _transcribe_with_whisper(whisper, model, wav, runner)
+
+
+def _transcribe_with_command(command: str, wav: bytes, runner) -> str:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "utterance.wav"
+        path.write_bytes(wav)
+        completed = runner(
+            [command, str(path)],
+            capture_output=True,
+            text=True,
+            shell=False,
+            check=False,
+        )
+        return _transcript_stdout(completed, "The transcriber did not return text.")
+
+
+def _transcribe_with_whisper(binary: str, model: str, wav: bytes, runner) -> str:
+    with tempfile.TemporaryDirectory() as directory:
+        folder = Path(directory)
+        path = folder / "utterance.wav"
+        path.write_bytes(wav)
+        completed = runner(
+            [
+                binary,
+                str(path),
+                "--model",
+                model,
+                "--output_format",
+                "txt",
+                "--output_dir",
+                str(folder),
+            ],
+            capture_output=True,
+            text=True,
+            shell=False,
+            check=False,
+        )
+        if getattr(completed, "returncode", 1) != 0:
+            detail = str(getattr(completed, "stderr", "") or "").strip()
+            raise RuntimeError(detail or "Whisper did not transcribe that audio.")
+        text_path = folder / "utterance.txt"
+        if text_path.is_file():
+            text = text_path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        text = str(getattr(completed, "stdout", "") or "").strip()
+        if text:
+            return text
+        raise RuntimeError("Whisper did not transcribe that audio.")
+
+
+def _transcript_stdout(completed: object, empty: str) -> str:
+    code = getattr(completed, "returncode", 1)
+    stdout = str(getattr(completed, "stdout", "") or "").strip()
+    stderr = str(getattr(completed, "stderr", "") or "").strip()
+    if code != 0 or not stdout:
+        raise RuntimeError(stderr or empty)
+    return stdout
 
 
 def handle(agent: object, message: dict) -> dict:
@@ -118,8 +286,16 @@ def handle(agent: object, message: dict) -> dict:
             prompt = str(message.get("prompt") or "").strip()
             if not prompt:
                 return {"op": "error", "id": ident, "message": "Say what the task should do."}
+            session_id = str(message.get("sessionID") or "").strip()
+            if session_id:
+                continued = agent.continue_session(session_id, prompt, str(message.get("cwd") or ""))
+                return {"op": "started", "id": ident, "sessionID": continued}
             session_id = agent.start(prompt, str(message.get("cwd") or ""))
             return {"op": "started", "id": ident, "sessionID": session_id}
+        if op == "resume":
+            session_id = str(message.get("sessionID") or "").strip()
+            lines = agent.restore(session_id)
+            return {"op": "restored", "id": ident, "sessionID": session_id, "lines": lines}
         if op == "approve":
             agent.decide(message.get("sessionID"), message.get("permissionID"), True)
             return {"op": "ok", "id": ident}
@@ -129,6 +305,11 @@ def handle(agent: object, message: dict) -> dict:
         if op == "stop":
             agent.stop(str(message.get("sessionID") or ""))
             return {"op": "ok", "id": ident}
+        if op == "transcribe":
+            text = str(agent.transcribe(message.get("audio")) or "").strip()
+            if not text:
+                return {"op": "error", "id": ident, "message": NOTHING_RECORDED}
+            return {"op": "transcript", "id": ident, "message": text}
         return {"op": "error", "id": ident, "message": "That command is not supported."}
     except RuntimeError as error:
         text = str(error).strip() or "The computer could not do that."
@@ -214,6 +395,41 @@ class ACPAgent:
                 row["status"] = "running" if allow else "stopped"
                 row["summary"] = "Allowed." if allow else "Denied."
 
+    def restore(self, session_id: str) -> list[str]:
+        if not session_id:
+            raise RuntimeError(MISSING_SESSION)
+        rows = self.list_sessions()
+        match = next((row for row in rows if row.get("id") == session_id), None)
+        if match is None:
+            raise RuntimeError(MISSING_SESSION)
+        directory = str(match.get("cwd") or Path.home())
+        loaded = self.request("session/load", {
+            "sessionId": session_id,
+            "cwd": directory,
+            "mcpServers": [],
+        })
+        lines = transcript_lines(loaded.get("result"))
+        if lines:
+            return lines
+        title = str(match.get("title") or "").strip()
+        summary = str(match.get("summary") or "").strip()
+        fallback = [part for part in (title, summary) if part]
+        return fallback or ["Session"]
+
+    def continue_session(self, session_id: str, prompt: str, cwd: str) -> str:
+        self.restore(session_id)
+        self._send(None, "session/prompt", {
+            "sessionId": session_id,
+            "prompt": [{"type": "text", "text": prompt}],
+        })
+        for row in self.rows:
+            if row.get("id") == session_id:
+                row["status"] = "running"
+                row["summary"] = "Continuing."
+                if cwd:
+                    row["cwd"] = cwd
+        return session_id
+
     def stop(self, session_id: str) -> None:
         self._send_raw({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session_id}})
         for row in self.rows:
@@ -221,6 +437,9 @@ class ACPAgent:
                 row["status"] = "stopped"
                 row["summary"] = "Stopped."
                 row.pop("permission", None)
+
+    def transcribe(self, audio: object) -> str:
+        return transcribe_audio(audio)
 
     def take_update(self) -> dict | None:
         if not self.pending_push:
@@ -378,6 +597,67 @@ def option_id(options: list, needle: str) -> str | None:
             if isinstance(value, str):
                 return value
     return None
+
+
+def transcript_lines(result: object) -> list[str]:
+    root = result
+    if isinstance(root, dict) and isinstance(root.get("result"), (dict, list)):
+        root = root["result"]
+    lines: list[str] = []
+    for row in _message_rows(root):
+        line = _transcript_line(row)
+        if line:
+            lines.append(line)
+    return lines[:8]
+
+
+def _message_rows(root: object) -> list:
+    if isinstance(root, list):
+        return root
+    if not isinstance(root, dict):
+        return []
+    for key in ("messages", "conversation", "transcript", "history"):
+        value = root.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict) and isinstance(value.get("messages"), list):
+            return value["messages"]
+    content = root.get("content")
+    if isinstance(content, list):
+        return content
+    return []
+
+
+def _transcript_line(row: object) -> str:
+    if isinstance(row, str):
+        return " ".join(row.split())
+    if not isinstance(row, dict):
+        return ""
+    role = str(row.get("role") or row.get("type") or "").lower()
+    body = _text_body(row.get("content")) or _text_body(row.get("text")) or _text_body(row.get("message"))
+    body = " ".join(body.split())
+    if not body:
+        return ""
+    if role in {"user", "human"}:
+        return f"You: {body}"
+    if role in {"assistant", "agent", "model"}:
+        return f"Grok: {body}"
+    if not role or role in {"text", "message"}:
+        return body
+    return f"{role}: {body}"
+
+
+def _text_body(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = [_text_body(item) for item in value]
+        return " ".join(part for part in parts if part)
+    if isinstance(value, dict):
+        if isinstance(value.get("text"), str):
+            return str(value["text"])
+        return _text_body(value.get("content"))
+    return ""
 
 
 def sessions_from(result: object) -> list[dict]:

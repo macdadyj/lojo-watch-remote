@@ -42,9 +42,11 @@ jobs:
           python3 host/test_relaybox.py
           python3 host/test_outbound.py
           python3 host/test_agentdoor.py
+          host/watch-remote-stt --self-test
           node --test relay/outbound/test.mjs
           scripts/privacy-scan.sh
           scripts/watch-ui-checklist.sh
+          scripts/watch-ui-test.sh --self-test
 
       - name: Archive script self-test
         run: scripts/archive-upload.sh --self-test
@@ -118,6 +120,13 @@ jobs:
       - name: Watch UI screenshot checklist
         run: scripts/watch-ui-checklist.sh --screenshots build/screenshots
 
+      - name: Score Watch screenshots
+        env:
+          WATCH_UI_VISION_API_KEY: ${{ secrets.WATCH_UI_VISION_API_KEY }}
+          WATCH_UI_VISION_MODEL: ${{ secrets.WATCH_UI_VISION_MODEL }}
+          WATCH_UI_VISION_URL: ${{ secrets.WATCH_UI_VISION_URL }}
+        run: python3 scripts/watch_ui_vision.py build/screenshots --watch-only
+
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         with:
@@ -125,10 +134,56 @@ jobs:
           path: build/screenshots
           if-no-files-found: error
 
-  # Upload does not wait for screenshots. A slow screenshot pass must not cancel a finished upload.
+  # Simulator taps on both Watch sizes. TestFlight waits for this job and does not wait for screenshots.
+  watch-ui:
+    runs-on: macos-26
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.6.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [[ -d /Applications/Xcode_26.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml', 'Core/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Watch UI tests
+        env:
+          WATCH_UI_VISION_API_KEY: ${{ secrets.WATCH_UI_VISION_API_KEY }}
+          WATCH_UI_VISION_MODEL: ${{ secrets.WATCH_UI_VISION_MODEL }}
+          WATCH_UI_VISION_URL: ${{ secrets.WATCH_UI_VISION_URL }}
+        run: scripts/watch-ui-test.sh
+
+      - name: Upload Watch UI screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: watch-ui-screenshots
+          path: build/watch-ui-screenshots
+          if-no-files-found: error
+
+  # Upload waits for the Watch UI tests. It still does not wait for the screenshot job.
   testflight:
+    needs: [watch-ui]
     if: github.event_name != 'pull_request'
-    # No `needs:` on purpose, so a manual or main run never waits for screenshots.
     # Runs queue one at a time: each one creates and revokes its own distribution certificate.
     concurrency:
       group: testflight-${{ github.repository }}
@@ -158,9 +213,11 @@ jobs:
           python3 host/test_relaybox.py
           python3 host/test_outbound.py
           python3 host/test_agentdoor.py
+          host/watch-remote-stt --self-test
           node --test relay/outbound/test.mjs
           scripts/privacy-scan.sh
           scripts/watch-ui-checklist.sh
+          scripts/watch-ui-test.sh --self-test
 
       - name: Archive script self-test
         run: scripts/archive-upload.sh --self-test

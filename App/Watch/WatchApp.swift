@@ -14,6 +14,11 @@ struct WatchRemoteWatchApp: App {
     }
 }
 
+enum VoiceSink: Equatable {
+    case phone
+    case host
+}
+
 @MainActor
 final class WatchModel: ObservableObject {
     @Published var snapshot = DemoCatalog.snapshot()
@@ -32,8 +37,23 @@ final class WatchModel: ObservableObject {
     @Published var voiceStatus = ""
     @Published var voiceLog: [String] = []
     @Published var dictationOffered = false
+    /// Set only for the watchOS UI tests. The microphone and the real host stay off.
+    private(set) var uiTest = false
+    /// UI test launch with the iPhone app treated as unreachable.
+    private(set) var uiPhoneOff = false
+    /// UI test launch where a direct pairing exists. False when `-WatchRemoteHostMissing` is set.
+    private(set) var uiHostReady = false
+    /// UI test launch that opens a session id the demo catalog does not have.
+    var uiOpenMissing = false
+    /// Clip name from `-WatchRemoteInjectClip`. Empty on a normal launch.
+    private(set) var injectedClip = ""
     var heldVoiceTask: String?
     let capture = WatchVoiceCapture()
+    /// Where the current listen sends audio. The iPhone path streams chunks. The host path keeps one utterance.
+    var voiceSink: VoiceSink = .phone
+    private var hostPCM = Data()
+    private var pendingHostPCM: Data?
+    private var pendingHostID: String?
     var prepareID: String?
     var expectID: String?
     var speakingReply = false
@@ -46,10 +66,39 @@ final class WatchModel: ObservableObject {
     private let bridge = WatchBridge()
     private let direct = DirectSession()
     private var pendingPrompt: String?
+    private var pendingContinues = false
+    private var pendingResumeID: String?
+    /// Set when a history row restored a chat. Later voice turns prompt that session.
+    var resumedSessionID: String?
 
     init() {
         let arguments = ProcessInfo.processInfo.arguments
         let environment = ProcessInfo.processInfo.environment
+        uiTest = Self.isUITest(arguments: arguments, environment: environment)
+        if uiTest {
+            snapshot = DemoCatalog.snapshot()
+            uiPhoneOff = arguments.contains("-WatchRemotePhoneOff") || environment["WATCHREMOTE_PHONE_OFF"] == "1"
+            let hostMissing = arguments.contains("-WatchRemoteHostMissing") || environment["WATCHREMOTE_HOST_MISSING"] == "1"
+            uiHostReady = uiPhoneOff && !hostMissing
+            uiOpenMissing = arguments.contains("-WatchRemoteMissingSession")
+            if uiPhoneOff && uiHostReady {
+                pathTitle = "direct"
+                snapshot.mode = .ssh
+                snapshot.link = .connected
+            } else if uiPhoneOff {
+                pathTitle = "Pair on iPhone first"
+                snapshot.mode = .ssh
+                snapshot.link = .needsPairing
+            } else {
+                pathTitle = "Demo"
+            }
+            let clip = Self.argument("-WatchRemoteInjectClip", arguments: arguments) ?? environment["WATCHREMOTE_INJECT_CLIP"] ?? ""
+            injectedClip = clip
+            if !clip.isEmpty, WatchAudioInjection.samples(named: clip) == nil {
+                banner = "Test clip missing."
+            }
+            return
+        }
         forcedScreen = Self.argument("-WatchRemoteScreen", arguments: arguments) ?? environment["WATCHREMOTE_SCREEN"]
         let appearanceName = Self.argument("-WatchRemoteAppearance", arguments: arguments) ?? environment["WATCHREMOTE_APPEARANCE"]
         if let appearanceName, let choice = AppearanceChoice(rawValue: appearanceName) {
@@ -70,10 +119,30 @@ final class WatchModel: ObservableObject {
         }
         direct.restore()
         direct.onBanner = { [weak self] text in
-            self?.banner = text
+            guard let self else { return }
+            self.banner = text
+            if text == SessionResume.missingMessage {
+                self.showMissingChat()
+                return
+            }
+            guard let text, self.voiceSink == .host, self.expectID != nil else { return }
+            if text == VoiceSpeechCopy.noTranscriber {
+                self.offerDictation(text)
+                return
+            }
+            self.giveUpOnHostTranscript(text)
         }
         direct.onChange = { [weak self] in
             self?.applyDirect()
+        }
+        direct.onRestored = { [weak self] id, lines in
+            self?.showRestored(id, lines: lines)
+        }
+        direct.onTranscript = { [weak self] id, text in
+            self?.acceptHostTranscript(id, text: text)
+        }
+        direct.onUp = { [weak self] in
+            self?.flushPendingHostAudio()
         }
         bridge.start { [weak self] snapshot, reachable, directText in
             guard let self, self.forcedScreen == nil else { return }
@@ -85,6 +154,7 @@ final class WatchModel: ObservableObject {
                 let arrived = Set(snapshot.sessions.compactMap(\.permission?.id)).subtracting(previous)
                 self.hasLiveSnapshot = true
                 self.snapshot = snapshot
+                self.noteResume(from: snapshot)
                 if !arrived.isEmpty { WatchFeedback.notification() }
             }
             self.reachable = reachable
@@ -98,16 +168,31 @@ final class WatchModel: ObservableObject {
         VoiceInbox.handler = { [weak self] text in
             self?.receiveVoice(text)
         }
-        capture.onPacket = { packet in
-            WatchVoiceLink.send(packet)
+        capture.onPacket = { [weak self] packet in
+            guard let self else { return }
+            switch self.voiceSink {
+            case .phone:
+                WatchVoiceLink.send(packet)
+            case .host:
+                self.appendHostAudio(packet)
+            }
         }
         capture.onBegan = { [weak self] id in
             self?.expectID = id
             self?.voiceStatus = "Hearing you"
+            if self?.voiceSink == .host {
+                self?.hostPCM.removeAll(keepingCapacity: true)
+            }
         }
         capture.onEnded = { [weak self] id in
-            self?.voiceStatus = "Sending"
-            self?.scheduleTranscriptTimeout(id)
+            guard let self else { return }
+            self.voiceStatus = "Sending"
+            switch self.voiceSink {
+            case .phone:
+                self.scheduleTranscriptTimeout(id)
+            case .host:
+                self.sendHostUtterance(id)
+            }
         }
         capture.onEmpty = { [weak self] in
             self?.voiceStatus = "Listening"
@@ -115,24 +200,51 @@ final class WatchModel: ObservableObject {
                 self?.armListener()
             }
         }
+        capture.onFinishedEmpty = { [weak self] in
+            guard let self, self.voiceModeActive else { return }
+            self.expectID = nil
+            self.discardPendingHostAudio()
+            self.voiceStatus = "Paused"
+        }
         capture.onPhase = { [weak self] text in
             self?.voiceStatus = text
         }
         capture.onFailed = { [weak self] in
-            self?.offerDictation(VoiceSpeechCopy.micUnavailable)
+            guard let self else { return }
+            let decision = VoiceListenPolicy.route(
+                phoneReachable: self.currentPhoneReachable(),
+                attempt: 0,
+                recognitionRefused: false,
+                captureFailed: true,
+                hostReady: self.hostIsReady
+            )
+            switch decision {
+            case .presentDictation:
+                self.fallBackToDictation(VoiceSpeechCopy.micUnavailable, presentSheet: true)
+            case .offerDictation, .handsFree, .handsFreeHost, .waitForPhone:
+                self.offerDictation(VoiceSpeechCopy.micUnavailable)
+            @unknown default:
+                self.offerDictation(VoiceSpeechCopy.micUnavailable)
+            }
         }
         if forcedScreen == nil, let pending = VoiceHandoff.takePending() {
             submitSpokenTask(pending)
         }
     }
 
+    func consumeUITestLaunch() {
+        guard uiOpenMissing else { return }
+        uiOpenMissing = false
+        openHistory(GrokSession(id: "missing-session", title: "Gone", summary: "Gone.", status: .idle))
+    }
+
     func wake() {
-        guard forcedScreen == nil else { return }
+        guard forcedScreen == nil, !uiTest else { return }
         route(waking: true)
     }
 
     func refresh() {
-        guard forcedScreen == nil else { return }
+        guard forcedScreen == nil, !uiTest else { return }
         if useDirect {
             direct.refresh()
             return
@@ -140,23 +252,112 @@ final class WatchModel: ObservableObject {
         _ = bridge.send(PhoneCommand(kind: .refresh))
     }
 
+    func openHistory(_ session: GrokSession) {
+        resumedSessionID = session.id
+        voiceModeActive = true
+        let lines = SessionResume.displayLines(
+            title: session.title,
+            summary: session.summary,
+            transcript: session.transcript ?? []
+        )
+        voiceStatus = "Restoring"
+        voiceLine = lines.first ?? session.title
+        voiceLog = Array(lines.dropFirst())
+        banner = nil
+        let known = snapshot.sessions.contains { $0.id == session.id }
+        if uiTest || forcedScreen != nil {
+            if known {
+                voiceStatus = "Restored"
+            } else {
+                showMissingChat()
+            }
+            return
+        }
+        guard known || snapshot.mode != .demo else {
+            showMissingChat()
+            return
+        }
+        if useDirect {
+            direct.resume(session.id)
+            return
+        }
+        if !reachable && direct.hasPairing {
+            pendingResumeID = session.id
+            direct.connectIfNeeded()
+            banner = "Connecting directly."
+            return
+        }
+        let queued = bridge.send(PhoneCommand(kind: .resume, sessionID: session.id))
+        if queued {
+            return
+        }
+        if direct.hasPairing {
+            pendingResumeID = session.id
+            direct.connectIfNeeded()
+            banner = "Connecting directly."
+        } else {
+            banner = "Pair on iPhone first."
+            voiceStatus = "Unavailable"
+        }
+    }
+
+    func showRestored(_ id: String, lines: [String]) {
+        let cleaned = lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return }
+        guard resumedSessionID == nil || resumedSessionID == id else { return }
+        resumedSessionID = id
+        voiceModeActive = true
+        voiceStatus = "Restored"
+        voiceLine = cleaned[0]
+        voiceLog = Array(cleaned.dropFirst())
+        banner = nil
+        if let index = snapshot.sessions.firstIndex(where: { $0.id == id }) {
+            snapshot.sessions[index].transcript = cleaned
+        }
+    }
+
+    func noteResume(from snapshot: PhoneSnapshot) {
+        guard let id = resumedSessionID else { return }
+        if snapshot.banner == SessionResume.missingMessage {
+            showMissingChat()
+            return
+        }
+        guard let session = snapshot.sessions.first(where: { $0.id == id }),
+              let lines = session.transcript, !lines.isEmpty else { return }
+        showRestored(id, lines: lines)
+    }
+
+    func showMissingChat() {
+        voiceModeActive = true
+        voiceStatus = "Unavailable"
+        voiceLine = SessionResume.missingMessage
+        voiceLog = []
+        banner = SessionResume.missingMessage
+    }
+
     @discardableResult
-    func start(_ prompt: String, announcingFailure: Bool = true) -> Bool {
+    func start(_ prompt: String, announcingFailure: Bool = true, continueRestored: Bool = false) -> Bool {
+        let sessionID = continueRestored ? resumedSessionID : nil
+        if !continueRestored {
+            resumedSessionID = nil
+            pendingResumeID = nil
+        }
         if forcedScreen != nil {
             return true
         }
         if useDirect {
-            direct.start(prompt, cwd: nil)
+            direct.start(prompt, cwd: nil, sessionID: sessionID)
             banner = nil
             return true
         }
         if !reachable && direct.hasPairing {
             pendingPrompt = prompt
+            pendingContinues = sessionID != nil
             direct.connectIfNeeded()
             banner = "Connecting directly."
             return true
         }
-        let queued = bridge.send(PhoneCommand(kind: .start, prompt: prompt))
+        let queued = bridge.send(PhoneCommand(kind: .start, prompt: prompt, sessionID: sessionID))
         if queued {
             banner = nil
         } else if announcingFailure {
@@ -172,8 +373,10 @@ final class WatchModel: ObservableObject {
 
     private func deliverPendingPromptIfPhoneIsBack() {
         guard reachable, let prompt = pendingPrompt else { return }
-        guard bridge.send(PhoneCommand(kind: .start, prompt: prompt)) else { return }
+        let sessionID = pendingContinues ? resumedSessionID : nil
+        guard bridge.send(PhoneCommand(kind: .start, prompt: prompt, sessionID: sessionID)) else { return }
         pendingPrompt = nil
+        pendingContinues = false
         banner = nil
     }
 
@@ -211,6 +414,94 @@ final class WatchModel: ObservableObject {
         banner = queued ? nil : "Pair on iPhone first."
     }
 
+    var hostIsReady: Bool { direct.hasPairing }
+
+    func discardPendingHostAudio() {
+        hostPCM.removeAll(keepingCapacity: true)
+        pendingHostPCM = nil
+        pendingHostID = nil
+    }
+
+    /// Records immediately. The utterance is sent when the direct socket is up.
+    func beginHostCapture() {
+        guard forcedScreen == nil, !uiTest else { return }
+        voiceSink = .host
+        hostPCM.removeAll(keepingCapacity: true)
+        capture.requestPermission { [weak self] granted in
+            guard let self, self.voiceSink == .host else { return }
+            guard granted else {
+                self.offerDictation(VoiceSpeechCopy.micDenied)
+                return
+            }
+            self.dictationOffered = false
+            self.voiceStatus = "Listening"
+            self.voiceLine = VoiceSpeechCopy.listeningHint
+            self.capture.start()
+        }
+    }
+
+    private func appendHostAudio(_ packet: VoicePacket) {
+        guard packet.kind == .audio, let data = Data(base64Encoded: packet.pcmBase64), !data.isEmpty else { return }
+        hostPCM.append(data)
+    }
+
+    private func sendHostUtterance(_ id: String) {
+        let pcm = hostPCM
+        hostPCM.removeAll(keepingCapacity: true)
+        guard !pcm.isEmpty else {
+            noteMissedUtterance()
+            return
+        }
+        expectID = id
+        voiceStatus = "Sending"
+        if direct.phase == .up {
+            direct.transcribe(pcm: pcm, utteranceID: id)
+            scheduleHostTranscriptTimeout(id)
+            return
+        }
+        pendingHostPCM = pcm
+        pendingHostID = id
+        scheduleHostConnectTimeout(id)
+        direct.connectIfNeeded()
+    }
+
+    private func flushPendingHostAudio() {
+        guard direct.phase == .up, let pcm = pendingHostPCM, let id = pendingHostID else { return }
+        pendingHostPCM = nil
+        pendingHostID = nil
+        direct.transcribe(pcm: pcm, utteranceID: id)
+        scheduleHostTranscriptTimeout(id)
+    }
+
+    private func scheduleHostConnectTimeout(_ id: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, self.expectID == id, self.pendingHostID == id else { return }
+            self.giveUpOnHostTranscript(VoiceSpeechCopy.hostUnheard)
+        }
+    }
+
+    private func scheduleHostTranscriptTimeout(_ id: String) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
+            guard let self, self.expectID == id else { return }
+            self.giveUpOnHostTranscript(VoiceSpeechCopy.hostUnheard)
+        }
+    }
+
+    private func giveUpOnHostTranscript(_ text: String) {
+        expectID = nil
+        pendingHostPCM = nil
+        pendingHostID = nil
+        voiceStatus = "Paused"
+        voiceLine = text
+        remember(text)
+    }
+
+    private func acceptHostTranscript(_ id: String, text: String) {
+        let packet = VoicePacket(kind: .transcript, utteranceID: id, isLast: true, text: text)
+        guard let raw = VoiceWire.encode(packet) else { return }
+        receiveVoice(raw)
+    }
+
     private var useDirect: Bool {
         forcedScreen == nil && !reachable && snapshot.mode != .demo && direct.phase == .up
     }
@@ -246,8 +537,15 @@ final class WatchModel: ObservableObject {
             snapshot.link = .connected
             if let prompt = pendingPrompt {
                 pendingPrompt = nil
-                direct.start(prompt, cwd: nil)
+                let sessionID = pendingContinues ? resumedSessionID : nil
+                pendingContinues = false
+                direct.start(prompt, cwd: nil, sessionID: sessionID)
             }
+            if let id = pendingResumeID {
+                pendingResumeID = nil
+                direct.resume(id)
+            }
+            flushPendingHostAudio()
             flushHeldVoiceTask()
         case .connecting:
             snapshot.link = .connecting
@@ -291,6 +589,10 @@ final class WatchModel: ObservableObject {
         if reachable { return "via iPhone" }
         if direct { return "direct" }
         return "Pair on iPhone first"
+    }
+
+    private static func isUITest(arguments: [String], environment: [String: String]) -> Bool {
+        arguments.contains("-WatchRemoteUITest") || environment["WATCHREMOTE_UI_TEST"] == "1"
     }
 
     private static func argument(_ name: String, arguments: [String]) -> String? {

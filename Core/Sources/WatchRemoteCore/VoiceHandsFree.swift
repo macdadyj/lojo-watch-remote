@@ -4,10 +4,10 @@ import Foundation
 /// Hands-free watch speech.
 ///
 /// watchOS does not ship `SFSpeechRecognizer` or `SpeechAnalyzer` / `SpeechTranscriber`
-/// (Xcode 26 availability: iOS, macOS, tvOS, visionOS — not watchOS). The system dictation
-/// sheet is the only on-watch transcriber, and it always waits for Done.
-/// The watch records with `AVAudioEngine`, this type decides when speech ended, and the
-/// iPhone transcribes the utterance.
+/// (Xcode 26 availability: iOS, macOS, tvOS, visionOS — not watchOS). The watch records
+/// with `AVAudioEngine` and this type decides when speech ended. A reachable iPhone
+/// transcribes. A paired computer transcribes when the iPhone is away. The system
+/// dictation sheet is the last resort, and it always waits for Done.
 public enum VoiceAudioFormat {
     public static let sampleRate = 16_000
 }
@@ -16,6 +16,8 @@ public enum VoiceSpeechCopy {
     public static let denied = "Speech recognition is off on the iPhone."
     public static let unavailable = "Speech recognition is unavailable on the iPhone."
     public static let phoneAway = "Hands-free needs the iPhone app open. Tap Done after you speak."
+    public static let noTranscriber = "No transcriber is configured on this computer."
+    public static let hostUnheard = "The computer did not transcribe that."
     public static let micDenied = "Allow the microphone in Settings on the Watch."
     public static let micUnavailable = "Microphone is unavailable. Tap Dictate if you need the keyboard."
     public static let waiting = "Allow speech recognition on the iPhone, then speak again."
@@ -30,16 +32,18 @@ public enum VoiceSpeechCopy {
 /// Where the next utterance is transcribed.
 ///
 /// watchOS has no `SFSpeechRecognizer` and no `SpeechAnalyzer` / `SpeechTranscriber`
-/// (WWDC25: every platform except watchOS). The dictation sheet is the only on-watch
-/// transcriber, and it always requires Done. It is not the path when the iPhone app is open.
+/// (WWDC25: every platform except watchOS). The Watch still records. The iPhone or the
+/// paired computer turns that audio into text. The dictation sheet always requires Done.
 public enum VoiceInputRoute: Equatable, Sendable {
     /// Record on the Watch. Silence ends the turn. The iPhone transcribes.
     case handsFree
+    /// Record on the Watch. Silence ends the turn. The paired computer transcribes.
+    case handsFreeHost
     /// The iPhone app can take a moment to become reachable. Stay on the conversation screen.
     case waitForPhone
     /// Show Dictate. Do not cover history with the system sheet.
     case offerDictation
-    /// The iPhone app stayed unreachable. The system sheet is the only transcriber, and it needs Done.
+    /// No iPhone and no paired computer. The system sheet is the last resort, and it needs Done.
     case presentDictation
 }
 
@@ -53,25 +57,36 @@ public enum VoiceListenPolicy {
         sampleRate > 0 && channelCount > 0
     }
 
-    /// Dictation is the fallback after the iPhone stays unreachable.
-    /// A reachable iPhone stays on pause-to-send, including while speech permission is still on screen.
-    /// Recognition or microphone trouble offers Dictate without presenting the sheet.
+    /// The Watch records whenever the microphone works.
+    /// A reachable iPhone transcribes, including while speech permission is still on screen.
+    /// A paired computer transcribes immediately when the iPhone is away or its recognizer refused.
+    /// Dictation is the last resort: nothing can take the audio, or the microphone cannot be used.
     public static func route(
         phoneReachable: Bool,
         attempt: Int,
         recognitionRefused: Bool,
-        captureFailed: Bool
+        captureFailed: Bool,
+        hostReady: Bool = false
     ) -> VoiceInputRoute {
-        if !phoneReachable {
-            if attempt < phoneWaitAttempts {
-                return .waitForPhone
+        if captureFailed {
+            if phoneReachable || hostReady {
+                return .offerDictation
             }
             return .presentDictation
         }
-        if recognitionRefused || captureFailed || attempt >= phoneWaitAttempts {
+        if phoneReachable && !recognitionRefused && attempt < phoneWaitAttempts {
+            return .handsFree
+        }
+        if hostReady {
+            return .handsFreeHost
+        }
+        if phoneReachable {
             return .offerDictation
         }
-        return .handsFree
+        if attempt < phoneWaitAttempts {
+            return .waitForPhone
+        }
+        return .presentDictation
     }
 
     /// Same-module switch. A new route fails this build until it is named.
@@ -79,6 +94,8 @@ public enum VoiceListenPolicy {
         switch route {
         case .handsFree:
             return "handsFree"
+        case .handsFreeHost:
+            return "handsFreeHost"
         case .waitForPhone:
             return "waitForPhone"
         case .presentDictation:
@@ -124,12 +141,21 @@ public struct VoiceChromeSpec: Equatable, Sendable {
     public var showsHistory: Bool
     public var speakCoversContent: Bool
     public var showsEnd: Bool
+    /// The conversation bar's stop control. It sends the utterance and leaves the chat open.
+    public var showsStopTalking: Bool
     public var secondaryActions: [String]
 
-    public init(showsHistory: Bool, speakCoversContent: Bool, showsEnd: Bool, secondaryActions: [String]) {
+    public init(
+        showsHistory: Bool,
+        speakCoversContent: Bool,
+        showsEnd: Bool,
+        showsStopTalking: Bool,
+        secondaryActions: [String]
+    ) {
         self.showsHistory = showsHistory
         self.speakCoversContent = speakCoversContent
         self.showsEnd = showsEnd
+        self.showsStopTalking = showsStopTalking
         self.secondaryActions = secondaryActions
     }
 
@@ -137,13 +163,15 @@ public struct VoiceChromeSpec: Equatable, Sendable {
         showsHistory: true,
         speakCoversContent: false,
         showsEnd: false,
+        showsStopTalking: false,
         secondaryActions: ["New task"]
     )
 
     public static let conversation = VoiceChromeSpec(
         showsHistory: true,
         speakCoversContent: false,
-        showsEnd: true,
+        showsEnd: false,
+        showsStopTalking: true,
         secondaryActions: ["Yes", "New task", "Dictate"]
     )
 }
@@ -260,7 +288,7 @@ public struct VoiceEndpointDetector: Equatable, Sendable {
         public static let handsFree = Configuration(
             threshold: 0.015,
             onset: 0.08,
-            silence: 0.65,
+            silence: 1.5,
             minimumSpeech: 0.18,
             maximumSpeech: 12
         )
@@ -380,6 +408,16 @@ public struct VoiceCaptureBuffer: Equatable, Sendable {
 
     public mutating func finish() -> [Int16] {
         let rest = held
+        held.removeAll(keepingCapacity: true)
+        ring.removeAll(keepingCapacity: true)
+        speaking = false
+        return rest
+    }
+
+    /// Speech that has not reached a silence end yet, including the pre-roll still in the ring.
+    public mutating func takeAll() -> [Int16] {
+        var rest = held
+        rest.append(contentsOf: ring)
         held.removeAll(keepingCapacity: true)
         ring.removeAll(keepingCapacity: true)
         speaking = false

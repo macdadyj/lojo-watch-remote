@@ -101,12 +101,40 @@ targets:
         SKIP_INSTALL: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_PREVIEWS: YES
+    preBuildScripts:
+      - name: Copy debug speech fixtures
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          if [ "${CONFIGURATION}" != "Debug" ]; then
+            exit 0
+          fi
+          src="${SRCROOT}/Fixtures/speech"
+          dest="${BUILT_PRODUCTS_DIR}/${FULL_PRODUCT_NAME}"
+          mkdir -p "${dest}"
+          cp "${src}/"*.wav "${dest}/"
+
+  WatchRemoteWatchUITests:
+    type: bundle.ui-testing
+    platform: watchOS
+    sources:
+      - path: App/WatchUITests
+    dependencies:
+      - target: WatchRemoteWatch
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lojo.WatchRemote.watchkitapp.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: WatchRemoteWatch
+        WATCHOS_DEPLOYMENT_TARGET: "10.0"
 
   WatchRemoteTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: App/Tests
+      - path: Fixtures/speech
+        buildPhase: resources
     dependencies:
       - package: WatchRemoteCore
         product: WatchRemoteCore
@@ -133,3 +161,14 @@ schemes:
     archive:
       config: Release
       customArchiveName: WatchRemote
+  WatchRemoteWatch:
+    build:
+      targets:
+        WatchRemoteWatch: all
+        WatchRemoteWatchUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - WatchRemoteWatchUITests

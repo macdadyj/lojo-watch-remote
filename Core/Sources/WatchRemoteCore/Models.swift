@@ -94,6 +94,8 @@ public struct GrokSession: Codable, Equatable, Identifiable, Sendable {
     public var updatedAt: Date?
     public var cwd: String?
     public var permission: PermissionRequest?
+    /// Lines from `session/load`. Omitted from older snapshots.
+    public var transcript: [String]?
 
     public init(
         id: String,
@@ -102,7 +104,8 @@ public struct GrokSession: Codable, Equatable, Identifiable, Sendable {
         status: SessionStatus,
         updatedAt: Date? = nil,
         cwd: String? = nil,
-        permission: PermissionRequest? = nil
+        permission: PermissionRequest? = nil,
+        transcript: [String]? = nil
     ) {
         self.id = id
         self.title = title
@@ -111,6 +114,7 @@ public struct GrokSession: Codable, Equatable, Identifiable, Sendable {
         self.updatedAt = updatedAt
         self.cwd = cwd
         self.permission = permission
+        self.transcript = transcript
     }
 }
 
@@ -206,6 +210,9 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
                 permission.detail = Self.clip(permission.detail, limit: summaryLimit)
                 item.permission = permission
             }
+            if let transcript = item.transcript {
+                item.transcript = Array(transcript.prefix(6)).map { Self.clip($0, limit: 120) }
+            }
             return item
         }
         if let banner {
@@ -232,6 +239,7 @@ public struct PhoneCommand: Codable, Equatable, Sendable {
         case deny
         case stop
         case selectComputer
+        case resume
     }
 
     public var kind: Kind

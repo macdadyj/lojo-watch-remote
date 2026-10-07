@@ -120,6 +120,8 @@ The phone only opens a direct-tcpip channel to `127.0.0.1:2419` and speaks ACP: 
 
 Interactive `grok` TUIs already running on the computer are not remote-controllable. The Watch starts sessions through this agent channel.
 
+Watch audio is not transcribed here. When the iPhone is away, `watch-remote-outbound` runs `WATCHREMOTE_STT_COMMAND`. The unit file for that service sets it to `~/.local/bin/watch-remote-stt`, which calls whisper.cpp. The install, the `base.en` model, and the restart command are in [outbound-relay.md](outbound-relay.md). Restarting this agent service does not load that command.
+
 Your Grok login stays in `~/.grok` on the computer. The phone never reads it.
 
 ## Watch without the iPhone

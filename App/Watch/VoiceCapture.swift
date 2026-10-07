@@ -3,8 +3,9 @@ import Foundation
 import WatchConnectivity
 import WatchRemoteCore
 
-/// Records one utterance on the Watch and sends 16 kHz chunks to the iPhone.
-/// Speech recognition stays on the iPhone: `SFSpeechRecognizer` is not in the watchOS SDK.
+/// Records one utterance on the Watch and ends it on silence.
+/// Chunks go to the iPhone when that route is active. The host route keeps the samples
+/// and sends one utterance. `SFSpeechRecognizer` is not in the watchOS SDK.
 /// Call `start`, `stop`, and `requestPermission` on the main queue. The input tap hops back to main.
 final class WatchVoiceCapture {
     var onPacket: ((VoicePacket) -> Void)?
@@ -15,6 +16,8 @@ final class WatchVoiceCapture {
     var onFailed: (() -> Void)?
 
     private(set) var isRunning = false
+    /// Fired when Stop Talking finds no samples after the last queued buffer is included.
+    var onFinishedEmpty: (() -> Void)?
     private var engine: AVAudioEngine?
     private var tapInstalled = false
     private var startedAt: TimeInterval = 0
@@ -22,6 +25,9 @@ final class WatchVoiceCapture {
     private var buffer = VoiceCaptureBuffer()
     private var utteranceID: String?
     private var sequence = 0
+    private var generation = 0
+    /// True after Stop Talking until the last queued buffer has been sent.
+    private var draining = false
 
     func requestPermission(_ done: @escaping (Bool) -> Void) {
         switch AVAudioApplication.shared.recordPermission {
@@ -113,18 +119,70 @@ final class WatchVoiceCapture {
     }
 
     func stop() {
+        generation += 1
+        draining = false
+        haltEngine()
+        isRunning = false
+    }
+
+    /// Stops the microphone and sends every sample captured so far, including audio
+    /// the silence detector has not ended. Returns false when nothing was captured.
+    @discardableResult
+    func finishEarly() -> Bool {
+        let pending = isRunning || draining || utteranceID != nil || sequence > 0
+        guard pending else {
+            stop()
+            return false
+        }
+        generation += 1
+        let token = generation
+        draining = true
+        haltEngine()
+        // One extra turn lets an in-flight tap callback append before the flush.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.generation == token else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.generation == token else { return }
+                self.emitRemainder()
+            }
+        }
+        return true
+    }
+
+    private func haltEngine() {
         if tapInstalled {
             engine?.inputNode.removeTap(onBus: 0)
             tapInstalled = false
         }
         engine?.stop()
         engine = nil
-        isRunning = false
         try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
     }
 
+    private func emitRemainder() {
+        let id = utteranceID
+        let sent = sequence
+        let rest = buffer.takeAll()
+        draining = false
+        isRunning = false
+        utteranceID = nil
+        sequence = 0
+        if let id, sent > 0 || !rest.isEmpty {
+            emit(id: id, samples: rest, isLast: true)
+            onEnded?(id)
+            return
+        }
+        if !rest.isEmpty {
+            let fresh = UUID().uuidString
+            emit(id: fresh, samples: rest, isLast: true)
+            onEnded?(fresh)
+            return
+        }
+        onFinishedEmpty?()
+    }
+
     private func ingest(_ samples: [Float], sampleRate: Double) {
-        guard isRunning else { return }
+        guard isRunning || draining else { return }
         let now = Date().timeIntervalSinceReferenceDate - startedAt
         let wasSpeaking = detector.phase == .speaking
         let signal = detector.observe(rms: VoicePCM.rms(samples), at: now)

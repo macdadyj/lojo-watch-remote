@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Transcribe one Watch wav with whisper.cpp. The transcript is the only stdout.
+
+The outbound service runs this as WATCHREMOTE_STT_COMMAND. It is one argv
+program plus the wav path. There is no shell.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+TIMESTAMP = re.compile(r"^\[\d{2}:\d{2}:\d{2}\.\d+ --> \d{2}:\d{2}:\d{2}\.\d+\]\s*")
+SKIP = {"[BLANK_AUDIO]", "(silence)", "[Silence]"}
+
+
+def transcript_from_whisper_output(text: str) -> str:
+    lines: list[str] = []
+    for raw in text.splitlines():
+        line = TIMESTAMP.sub("", raw).strip()
+        if not line or line in SKIP:
+            continue
+        if line.startswith(("whisper_", "ggml_", "system_info:")):
+            continue
+        lines.append(line)
+    return " ".join(lines).strip()
+
+
+def binary_path() -> str:
+    chosen = os.environ.get("WATCHREMOTE_WHISPER_CPP", "").strip()
+    if chosen:
+        return chosen
+    home = Path.home() / ".local" / "bin" / "whisper-cli"
+    if home.is_file() and os.access(home, os.X_OK):
+        return str(home)
+    found = shutil.which("whisper-cli")
+    return found or ""
+
+
+def model_path() -> str:
+    chosen = os.environ.get("WATCHREMOTE_WHISPER_CPP_MODEL", "").strip()
+    if chosen:
+        return chosen
+    return str(Path.home() / ".cache" / "watch-remote" / "ggml-base.en-q5_1.bin")
+
+
+def command(wav: str) -> list[str]:
+    threads = min(4, os.cpu_count() or 1)
+    return [
+        binary_path(),
+        "-m",
+        model_path(),
+        "-f",
+        wav,
+        "-nt",
+        "-l",
+        "en",
+        "-t",
+        str(threads),
+    ]
+
+
+def self_test() -> int:
+    heard = transcript_from_whisper_output(
+        "[00:00:00.000 --> 00:00:01.200]   list sessions\n[BLANK_AUDIO]\n"
+    )
+    if heard != "list sessions":
+        print(f"timestamp cleaner failed: {heard!r}", file=sys.stderr)
+        return 1
+    if transcript_from_whisper_output("yes\n") != "yes":
+        print("plain cleaner failed", file=sys.stderr)
+        return 1
+    if transcript_from_whisper_output("whisper_init: load\nyes\n") != "yes":
+        print("log cleaner failed", file=sys.stderr)
+        return 1
+    argv = command("utterance.wav")
+    if argv[1:8] != ["-m", model_path(), "-f", "utterance.wav", "-nt", "-l", "en"]:
+        print(f"argv shape failed: {argv}", file=sys.stderr)
+        return 1
+    if any(part == "shell" for part in argv):
+        print("command must not be a shell", file=sys.stderr)
+        return 1
+    print("watch-remote-stt: ok")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) == 2 and argv[1] == "--self-test":
+        return self_test()
+    if len(argv) != 2:
+        print("usage: watch-remote-stt WAV", file=sys.stderr)
+        return 2
+    wav = argv[1]
+    if not Path(wav).is_file():
+        print("The recording could not be read.", file=sys.stderr)
+        return 1
+    binary = binary_path()
+    model = model_path()
+    if not binary or not Path(binary).is_file():
+        print("whisper-cli is not installed. See docs/outbound-relay.md.", file=sys.stderr)
+        return 1
+    if not Path(model).is_file():
+        print(f"Whisper model is missing: {model}", file=sys.stderr)
+        return 1
+    completed = subprocess.run(
+        command(wav),
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "whisper-cli failed").strip()
+        print(detail, file=sys.stderr)
+        return completed.returncode or 1
+    text = transcript_from_whisper_output(completed.stdout or "")
+    if not text:
+        print("Whisper did not transcribe that audio.", file=sys.stderr)
+        return 1
+    print(text)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

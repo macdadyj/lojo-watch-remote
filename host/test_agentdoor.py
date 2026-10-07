@@ -78,6 +78,45 @@ class AgentDoorTests(unittest.TestCase):
             self.assertEqual(body["result"]["sessions"], [])
             self.assertNotIn("Method not found", payload.decode())
 
+    def test_headless_load_rejects_an_unknown_session(self) -> None:
+        left, right = socket.socketpair()
+        left.settimeout(2)
+        sessions: dict = {}
+
+        def body() -> dict:
+            parsed = agentdoor._parse(left.recv(4096))
+            self.assertIsNotNone(parsed)
+            assert parsed is not None
+            return json.loads(parsed[1])
+
+        try:
+            agentdoor._handle(right, "grok", sessions, {}, {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session/new",
+                "params": {"cwd": "/work", "mcpServers": []},
+            })
+            session_id = body()["result"]["sessionId"]
+            agentdoor._handle(right, "grok", sessions, {}, {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "session/load",
+                "params": {"sessionId": session_id, "cwd": "/work", "mcpServers": []},
+            })
+            self.assertEqual(body()["result"]["sessionId"], session_id)
+            agentdoor._handle(right, "grok", sessions, {}, {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "session/load",
+                "params": {"sessionId": "missing", "cwd": "/work", "mcpServers": []},
+            })
+            rejected = body()
+        finally:
+            left.close()
+            right.close()
+        self.assertIn("no longer", rejected["error"]["message"])
+        self.assertNotIn("missing", sessions)
+
     def test_cwd_resolution_stays_on_the_computer(self) -> None:
         home = Path("/home/user")
         self.assertEqual(agentdoor.resolve_cwd("", home), "/home/user")

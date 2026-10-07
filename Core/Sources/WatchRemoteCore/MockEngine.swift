@@ -21,6 +21,15 @@ public struct MockEngine: Equatable, Sendable {
         return session
     }
 
+    /// Keeps the same session id. A missing id returns false.
+    public mutating func continueSession(sessionID: String, prompt: String) -> Bool {
+        guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return false }
+        sessions[index].status = .running
+        sessions[index].summary = prompt
+        sessions[index].updatedAt = Date()
+        return true
+    }
+
     public mutating func raisePermission(sessionID: String) -> PermissionRequest? {
         guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return nil }
         let request = PermissionRequest(

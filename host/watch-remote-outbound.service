@@ -7,6 +7,10 @@ Type=simple
 ExecStart=%h/.local/bin/watch-remote-outbound
 Restart=on-failure
 RestartSec=5
+# Watch audio is transcribed here, not in watch-remote-agent. The command is
+# one program plus a wav path. stt.env may replace the binary or the model.
+Environment=WATCHREMOTE_STT_COMMAND=%h/.local/bin/watch-remote-stt
+EnvironmentFile=-%h/.config/watch-remote/stt.env
 
 [Install]
 WantedBy=default.target
