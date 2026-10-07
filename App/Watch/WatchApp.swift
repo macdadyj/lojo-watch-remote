@@ -1,15 +1,27 @@
 import SwiftUI
 import WatchConnectivity
+import WatchKit
 import WatchRemoteCore
 
 @main
 struct WatchRemoteWatchApp: App {
+    @WKApplicationDelegateAdaptor(WatchAppDelegate.self) private var appDelegate
     @StateObject private var model = WatchModel()
 
     var body: some Scene {
         WindowGroup {
             WatchRootView()
                 .environmentObject(model)
+        }
+    }
+}
+
+/// Foreground and background transitions are not Action Button presses.
+final class WatchAppDelegate: NSObject, WKApplicationDelegate {
+    func handle(_ userActivity: NSUserActivity) {
+        guard userActivity.activityType == ListenActionButton.activityType else { return }
+        Task { @MainActor in
+            ListenActionButton.press()
         }
     }
 }
@@ -45,8 +57,15 @@ final class WatchModel: ObservableObject {
     private(set) var uiHostReady = false
     /// UI test launch that opens a session id the demo catalog does not have.
     var uiOpenMissing = false
+    /// UI test launch that shows the wrist-down control.
+    private(set) var uiShowHooks = false
+    /// UI test launch that fires the duration cap after Speak.
+    private(set) var uiMaxListen = false
     /// Clip name from `-WatchRemoteInjectClip`. Empty on a normal launch.
     private(set) var injectedClip = ""
+    @Published var repairOffered = false
+    @Published var wristDown = false
+    var systemPausedListen = false
     var heldVoiceTask: String?
     let capture = WatchVoiceCapture()
     /// Where the current listen sends audio. The iPhone path streams chunks. The host path keeps one utterance.
@@ -72,6 +91,9 @@ final class WatchModel: ObservableObject {
     var resumedSessionID: String?
 
     init() {
+        ListenActionButton.register { [weak self] in
+            self?.toggleFromActionButton()
+        }
         let arguments = ProcessInfo.processInfo.arguments
         let environment = ProcessInfo.processInfo.environment
         uiTest = Self.isUITest(arguments: arguments, environment: environment)
@@ -81,6 +103,9 @@ final class WatchModel: ObservableObject {
             let hostMissing = arguments.contains("-WatchRemoteHostMissing") || environment["WATCHREMOTE_HOST_MISSING"] == "1"
             uiHostReady = uiPhoneOff && !hostMissing
             uiOpenMissing = arguments.contains("-WatchRemoteMissingSession")
+            uiShowHooks = arguments.contains("-WatchRemoteShowHooks")
+            uiMaxListen = arguments.contains("-WatchRemoteMaxListen")
+            VoicePreferences.shared.pauseSends = arguments.contains("-WatchRemotePauseSends")
             if uiPhoneOff && uiHostReady {
                 pathTitle = "direct"
                 snapshot.mode = .ssh
@@ -110,7 +135,7 @@ final class WatchModel: ObservableObject {
             pathTitle = Self.pathTitle(for: forcedScreen, snapshot: snapshot, reachable: false, direct: false)
             if forcedScreen == "voice-chat" || forcedScreen == "voice-loop" {
                 voiceStatus = "Listening"
-                voiceLine = VoiceSpeechCopy.listeningHint
+                voiceLine = ListenEndpoint.manualHint
                 voiceLog = forcedScreen == "voice-chat" ? VoiceConversationFixture.history : []
                 if forcedScreen == "voice-chat" {
                     pendingAllowSessionID = DemoCatalog.approvalID
@@ -143,6 +168,11 @@ final class WatchModel: ObservableObject {
         }
         direct.onUp = { [weak self] in
             self?.flushPendingHostAudio()
+        }
+        direct.onRepair = { [weak self] in
+            guard let self else { return }
+            self.repairOffered = true
+            self.requestPhonePairing()
         }
         bridge.start { [weak self] snapshot, reachable, directText in
             guard let self, self.forcedScreen == nil else { return }
@@ -195,16 +225,15 @@ final class WatchModel: ObservableObject {
             }
         }
         capture.onEmpty = { [weak self] in
-            self?.voiceStatus = "Listening"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                self?.armListener()
-            }
+            guard let self else { return }
+            self.relinquishListen(status: "Paused")
         }
         capture.onFinishedEmpty = { [weak self] in
             guard let self, self.voiceModeActive else { return }
             self.expectID = nil
             self.discardPendingHostAudio()
-            self.voiceStatus = "Paused"
+            self.systemPausedListen = false
+            self.relinquishListen(status: "Paused")
         }
         capture.onPhase = { [weak self] text in
             self?.voiceStatus = text
@@ -434,10 +463,21 @@ final class WatchModel: ObservableObject {
                 return
             }
             self.dictationOffered = false
-            self.voiceStatus = "Listening"
-            self.voiceLine = VoiceSpeechCopy.listeningHint
+            self.capture.endsOnSilence = ListenEndpoint.endsOnSilence(pauseSends: VoicePreferences.shared.pauseSends)
+            self.applyListenChrome()
+            self.retainRuntime()
             self.capture.start()
         }
+    }
+
+    func requestPhonePairing() {
+        repairOffered = true
+        guard forcedScreen == nil, !uiTest else { return }
+        _ = bridge.send(PhoneCommand(kind: .showPairing))
+    }
+
+    func directNoteDisplay(_ active: Bool) {
+        direct.noteDisplay(active)
     }
 
     private func appendHostAudio(_ packet: VoicePacket) {

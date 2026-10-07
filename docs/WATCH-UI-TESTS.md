@@ -56,7 +56,7 @@ The conversation bar's stop control is **I'm done**. It stops the microphone imm
 
 | | Launch | What it checks |
 | --- | --- | --- |
-| a | phone off | Home shows `direct`, Pause sends, and Speak. The dictation copy is absent. Shot `phone-off-home`. |
+| a | phone off | Home shows `direct`, Action Button, and Speak. The dictation copy is absent. Shot `phone-off-home`. |
 | b | phone off | The idle demo chat opens with its title and summary. Shot `phone-off-restored`. |
 | c | phone off, `pause-task` | Speak shows Listening, not dictation, and the restored title stays. Shot `phone-off-listening`. |
 | d | phone off, `pause-task` | I'm done sends `You: list sessions`, the mock host says `Heard list sessions`, and Speak returns. Shot `phone-off-done`. |
@@ -65,3 +65,16 @@ The conversation bar's stop control is **I'm done**. It stops the microphone imm
 | g | host missing, then `-WatchRemoteMissingSession` | Speak shows the dictation fallback and Dictate. An unknown session says "That chat is no longer on this computer." Shots `phone-off-unpaired` and `phone-off-missing`. |
 
 The system dictation sheet is not presented in the simulator. Case g checks the fallback copy and the Dictate button. Opening that sheet still needs a Watch. The computer-side transcriber is whisper.cpp via `watch-remote-outbound`, documented in [outbound-relay.md](outbound-relay.md).
+
+## Manual listen
+
+`WatchManualListenUITests` is part of the same job. Listening starts only from Speak or the Action Button control. I'm done and a second Action Button press send the clip and leave the chat open. The default is manual: a pause does not send. Pause sends remains an optional toggle.
+
+| | Launch | What it checks |
+| --- | --- | --- |
+| Action Button | `pause-task` | The Action Button control shows Listening, the second press sends `You: list sessions`, and the restored chat stays. Shot `manual-action`. |
+| I'm done | phone off, `pause-task` | Speak, then I'm done, sends and the mock host answers. Shot `manual-done`. |
+| Wrist | phone off, `pause-task`, `-WatchRemoteShowHooks` | Wrist down keeps the restored lines, does not show "This relay did not accept this pairing." or "Reconnecting…", and wrist up is Listening again. Shots `manual-wrist-down` and `manual-wrist-up`. |
+| Cap | phone off, `pause-task`, `-WatchRemoteMaxListen` | The duration cap sends without I'm done and the chat stays open. Shot `manual-cap`. |
+
+History restore, yes/no approvals, and the phone-off path stay in `WatchScaffoldUITests` and `WatchPhoneOffUITests`. The pairing-reject sentence is also covered by `testPairingRejectBannerIsOnlyEmittedForANonOkAuthPayload`, which fails if a send error or a suspend uses that sentence.

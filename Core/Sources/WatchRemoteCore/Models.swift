@@ -240,6 +240,8 @@ public struct PhoneCommand: Codable, Equatable, Sendable {
         case stop
         case selectComputer
         case resume
+        /// The Watch asked the iPhone to open the pairing screen.
+        case showPairing
     }
 
     public var kind: Kind

@@ -25,6 +25,24 @@ struct AskGrokIntent: AppIntent {
     }
 }
 
+/// Assigned in Settings, Action Button, Shortcut. A press toggles listen. It does not end the chat.
+struct ToggleListenIntent: AppIntent {
+    static let title: LocalizedStringResource = "Listen"
+    static let description = IntentDescription("Starts or stops listening. Assign Listen to the Action Button.")
+
+    static var openAppWhenRun: Bool { true }
+
+    @available(watchOS 26.0, *)
+    static var supportedModes: IntentModes { .foreground }
+
+    func perform() async throws -> some IntentResult {
+        await MainActor.run {
+            ListenActionButton.press()
+        }
+        return .result()
+    }
+}
+
 struct WatchRemoteShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -35,6 +53,15 @@ struct WatchRemoteShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Ask Grok",
             systemImageName: "mic.fill"
+        )
+        AppShortcut(
+            intent: ToggleListenIntent(),
+            phrases: [
+                "Listen with \(.applicationName)",
+                "Toggle \(.applicationName) listening",
+            ],
+            shortTitle: "Listen",
+            systemImageName: "mic.circle"
         )
     }
 }

@@ -6,7 +6,11 @@ Tapping Speak or the approval microphone opened the system dictation sheet. Each
 
 ## After
 
-Tap Speak once. The Watch records with `AVAudioEngine` and decides the utterance ended after about 1.5 seconds below the silence threshold (`VoiceEndpointDetector`). A listen also ends at 12 seconds so it cannot hang. When the iPhone app is reachable, the Watch sends 16 kHz audio there and the iPhone transcribes with `SFSpeechRecognizer`. When the iPhone is away and the Watch has a direct pairing, the same recording goes to the computer over the relay. The Watch acts, speaks, and listens again.
+Tap Speak, or press the Action Button. The Watch records with `AVAudioEngine` until you tap **I'm done** or press the Action Button again. That is the default. Silence does not send. A listen still ends at 12 seconds so it cannot hang. **Pause sends** in the list is optional and off until you turn it on. Then a pause of about 1.5 seconds ends the turn, which is the old hands-free behavior.
+
+Lowering the wrist, dimming the always-on display, or leaving the app does not stop the listen and does not end the chat. An extended runtime session keeps the microphone running. If that session ends on its own, the samples stay and the relay stays paired. Raising the wrist continues the same listen.
+
+When the iPhone app is reachable, the Watch sends 16 kHz audio there and the iPhone transcribes with `SFSpeechRecognizer`. When the iPhone is away and the Watch has a direct pairing, the same recording goes to the computer over the relay. In pause mode the Watch listens again after it acts. In the default manual mode it waits for Speak or the Action Button.
 
 Spoken allow still waits for a second word (yes or confirm). Deny and stop send on the first word. The on-screen Allow, Deny, Stop, and Yes buttons remain for when speech misses.
 
@@ -18,7 +22,9 @@ The pause-to-send path records on the Watch and transcribes on the iPhone. Three
 - `WCSession.isReachable` is often false for a moment after the Watch app becomes frontmost, even with the iPhone app open. The old check did not wait, so Speak went straight to the sheet.
 - `SFSpeechRecognizer` errors such as “No speech detected” (`kAFAssistantErrorDomain` 1110), and `requiresOnDeviceRecognition` when the on-device asset is missing, were sent back as a hard failure. The Watch opened the sheet instead of listening again.
 
-A build installed before this path existed still uses the sheet, because that Watch binary’s Speak button calls the dictation controller. The Watch app is inside the iPhone archive. After the new TestFlight build is installed, open Watch Remote on the Watch once. The home screen shows a short **Speak** control and the words **Pause sends**. A microphone that covers the session list is the previous binary.
+A build installed before this path existed still uses the sheet, because that Watch binary’s Speak button calls the dictation controller. The Watch app is inside the iPhone archive. After the new TestFlight build is installed, open Watch Remote on the Watch once. The home screen shows a short **Speak** control and the words **Action Button**. A microphone that covers the session list is the previous binary.
+
+On Apple Watch Ultra, and on other models that have an Action Button, assign the shortcut **Listen** in Settings, Action Button, Shortcut. The shortcut is `ToggleListenIntent`. A press starts listening. The next press sends and leaves the chat open. Raising your wrist does not press that button. There is no workout session. The host outbound client does not change.
 
 ## Why recognition is on the iPhone
 
@@ -46,7 +52,7 @@ scripts/watch-ui-checklist.sh
 
 That script checks the pair-help copy, the short Speak bar, and that the dictation sheet is not the Speak button. After screenshots exist, `scripts/watch-ui-checklist.sh --screenshots build/screenshots` checks the PNGs. CI uploads them as the `screenshots` artifact.
 
-`scripts/watch-ui-test.sh` is the watchOS simulator chain. It boots one 41/42 mm-class Watch and one 45/49 mm-class Watch. The scaffold taps home, a past session, Speak, and I'm done. `WatchPhoneOffUITests` repeats that conversation with the iPhone simulated off, including a clip with no pause, yes and no, a missing chat, and the unpaired dictation fallback. The microphone stays off. Debug clips from `Fixtures/speech` are loaded only for those launches. `scripts/watch_ui_vision.py` then scores the shots for text size, contrast, clipping, and Speak-bar overlap. An LLM score runs only when `WATCH_UI_VISION_API_KEY` is set. Screenshots are the `watch-ui-screenshots` artifact (`small/` and `large/`, names such as `phone-off-home.png`). TestFlight does not start until this job passes. See [WATCH-UI-TESTS.md](WATCH-UI-TESTS.md).
+`scripts/watch-ui-test.sh` is the watchOS simulator chain. It boots one 41/42 mm-class Watch and one 45/49 mm-class Watch. The scaffold taps home, a past session, Speak, and I'm done. `WatchPhoneOffUITests` repeats that conversation with the iPhone simulated off. `WatchManualListenUITests` covers the Action Button, wrist down, and the duration cap. The microphone stays off. Debug clips from `Fixtures/speech` are loaded only for those launches. `scripts/watch_ui_vision.py` then scores the shots for text size, contrast, clipping, and Speak-bar overlap. An LLM score runs only when `WATCH_UI_VISION_API_KEY` is set. Screenshots are the `watch-ui-screenshots` artifact (`small/` and `large/`). TestFlight does not start until this job passes. See [WATCH-UI-TESTS.md](WATCH-UI-TESTS.md).
 
 ## Simulator
 
@@ -67,11 +73,11 @@ The live microphone cannot be checked in CI.
 
 1. Install the build. Open Watch Remote on the iPhone and leave it reachable.
 2. On the Watch, tap Speak. The first time, allow the microphone on the Watch and speech recognition on the iPhone. Those prompts should not come back on the next utterance.
-3. Say “list sessions”, then pause about a second and a half. The Watch should answer without a Done tap, then listen again.
+3. Say “list sessions”, then tap I'm done or press the Action Button. The Watch should answer and wait. It should not send on a pause unless Pause sends is on.
 4. With a task waiting for approval, say “allow”, pause, and after the read-back say “yes”. It should approve without tapping Allow.
 5. On another approval, say “deny” once. It should deny without a second confirm.
 6. While a task is running, say “stop”. It should stop.
-7. With the iPhone app still open, tap Speak. The conversation stays on screen (history, I'm done, New task). It should not open the keyboard. Say a phrase and pause. Done is not part of that turn. I'm done is the stop control, not End.
-8. Force-quit the iPhone app and tap Speak. With a direct pairing, pause-to-send still works: the Watch records, detects silence, and the computer transcribes. Set up that transcriber with the steps in [outbound-relay.md](outbound-relay.md). The dictation sheet opens only when there is no pairing, or the microphone cannot be used. That sheet still needs Done.
-9. While it is listening, tap I'm done before the pause. The microphone stops, what you already said is sent, and the chat stays open so you can speak again. The session is not ended.
+7. With the iPhone app still open, tap Speak. The conversation stays on screen (history, I'm done, New task). It should not open the keyboard. Say a phrase and tap I'm done. The chat stays open.
+8. Force-quit the iPhone app and tap Speak. With a direct pairing, the Watch records and the computer transcribes after I'm done or the Action Button. Set up that transcriber with the steps in [outbound-relay.md](outbound-relay.md). The dictation sheet opens only when there is no pairing, or the microphone cannot be used. That sheet still needs Done.
+9. While it is listening, lower your wrist, then raise it. The chat is still there, the microphone is still in that listen, and the screen does not say the relay rejected the pairing. Tap I'm done. What you already said is sent, and the chat stays open. The session is not ended.
 10. Tap a past chat. Its messages show, and Speak stays on that chat. A chat the computer no longer has shows "That chat is no longer on this computer."

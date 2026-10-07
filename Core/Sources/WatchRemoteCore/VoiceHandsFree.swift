@@ -320,7 +320,8 @@ public struct VoiceEndpointDetector: Equatable, Sendable {
     }
 
     /// `time` is seconds from the start of this listen, and it must not go backwards.
-    public mutating func observe(rms: Float, at time: TimeInterval) -> Signal? {
+    /// Silence ends the turn only when `endsOnSilence` is true. The maximum duration always ends it.
+    public mutating func observe(rms: Float, at time: TimeInterval, endsOnSilence: Bool = true) -> Signal? {
         let loud = rms >= configuration.threshold
         switch phase {
         case .idle:
@@ -345,7 +346,8 @@ public struct VoiceEndpointDetector: Equatable, Sendable {
                 reset()
                 return .ended(.maximum)
             }
-            if let lastLoud, let speechStart,
+            if endsOnSilence,
+               let lastLoud, let speechStart,
                time - lastLoud >= configuration.silence,
                time - speechStart >= configuration.minimumSpeech {
                 reset()

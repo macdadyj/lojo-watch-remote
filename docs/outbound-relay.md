@@ -52,9 +52,9 @@ This repository does not deploy a relay and does not create any cloud resources.
 
 ## What the Watch can and cannot do alone
 
-watchOS will keep a WebSocket only while Watch Remote is in the foreground. When the app is suspended, the socket is gone. There is no background connection.
+Lowering the wrist does not end a listen and does not mean the pairing was rejected. While the Watch is listening it starts an extended runtime session so recording can continue. If watchOS suspends the app anyway, the samples already captured stay in memory and the direct pairing stays in the Watch Keychain. Raising the wrist resumes that listen. A dropped socket retries with backoff and the screen says **Reconnecting…** only when the display is on. That is not a new pairing. The sentence **This relay did not accept this pairing** appears only when the relay's auth reply is explicitly not ok. Then the Watch asks the iPhone to open the pairing screen.
 
-Opening the app connects again and shows the last sessions it had. A task you already started keeps running on the computer. Allow and Deny work after the app is open and the header says **direct**. If the relay or the computer is down, the screen says so in plain words and keeps the last list.
+A task you already started keeps running on the computer. Allow and Deny work while the header says **direct**. If the relay or the computer is down, the screen says so in plain words and keeps the last list. The host outbound client is unchanged.
 
 Demo mode never opens the relay. A pairing QR without a relay URL never opens it either.
 

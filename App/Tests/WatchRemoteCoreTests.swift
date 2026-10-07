@@ -970,4 +970,63 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(VoiceTestHost.mode, "mock")
         XCTAssertNil(VoiceWAV.monoFloats(data: Data("not a wav".utf8)))
     }
+
+    func testManualListenIgnoresSilenceAndTheDurationCapStillEndsTheTurn() {
+        XCTAssertEqual(ListenEndpoint.ownerDefault, .manual)
+        XCTAssertFalse(ListenEndpoint.endsOnSilence(pauseSends: false))
+        XCTAssertTrue(ListenEndpoint.endsOnSilence(pauseSends: true))
+        XCTAssertEqual(ListenEndpoint.title(pauseSends: false), "Action Button")
+        XCTAssertEqual(ListenEndpoint.title(pauseSends: true), VoiceSpeechCopy.pauseSends)
+        XCTAssertTrue(ListenEndpoint.manualHint.contains("I'm done"))
+
+        var manual = VoiceEndpointDetector()
+        XCTAssertNil(manual.observe(rms: 0.2, at: 0, endsOnSilence: false))
+        XCTAssertEqual(manual.observe(rms: 0.2, at: 0.08, endsOnSilence: false), .began)
+        XCTAssertNil(manual.observe(rms: 0, at: 3, endsOnSilence: false))
+        XCTAssertEqual(manual.observe(rms: 0, at: 12, endsOnSilence: false), .ended(.maximum))
+    }
+
+    /// The pairing-reject sentence is only for an auth payload that is explicitly not ok.
+    func testPairingRejectBannerIsOnlyEmittedForANonOkAuthPayload() {
+        let rejected = #"{"ok":false}"#
+        XCTAssertEqual(
+            RelayUserNotice.banner(for: .authPayload(rejected), displayOff: false),
+            RelayUserNotice.pairingRejectedText
+        )
+        XCTAssertEqual(
+            RelayUserNotice.banner(for: .authPayload(rejected), displayOff: true),
+            RelayUserNotice.pairingRejectedText
+        )
+        XCTAssertEqual(RelayUserNotice.classify(.authPayload(rejected)), .pairingRejected)
+        XCTAssertEqual(RelayUserNotice.classify(.authPayload(#"{"ok":false,"reason":"no"}"#)), .pairingRejected)
+        XCTAssertEqual(RelayUserNotice.classify(.authPayload(#"{"ok":0}"#)), .pairingRejected)
+        XCTAssertEqual(RelayUserNotice.classify(.authPayload(#"{"ok":"no"}"#)), .pairingRejected)
+
+        XCTAssertEqual(RelayUserNotice.classify(.authPayload(#"{"ok":true}"#)), .accepted)
+        XCTAssertNil(RelayUserNotice.banner(for: .authPayload(#"{"ok":true}"#), displayOff: false))
+        XCTAssertEqual(RelayUserNotice.classify(.authPayload(#"{"ok":true,"room":"1"}"#)), .accepted)
+        XCTAssertEqual(RelayUserNotice.classify(.authPayload("not json")), .ignored)
+        XCTAssertEqual(RelayUserNotice.classify(.authPayload(#"{"status":"no"}"#)), .ignored)
+        XCTAssertNil(RelayUserNotice.banner(for: .authPayload("not json"), displayOff: false))
+
+        let transport: [RelaySocketFault] = [.authSendFailed, .dataSendFailed, .disconnected, .suspended]
+        for fault in transport {
+            let notice = RelayUserNotice.classify(fault)
+            XCTAssertEqual(notice, .reconnecting)
+            XCTAssertNotEqual(
+                RelayUserNotice.banner(for: fault, displayOff: false),
+                RelayUserNotice.pairingRejectedText
+            )
+            XCTAssertEqual(RelayUserNotice.banner(for: fault, displayOff: false), RelayUserNotice.reconnectingText)
+            XCTAssertNil(RelayUserNotice.banner(for: fault, displayOff: true))
+            XCTAssertFalse(
+                (RelayUserNotice.banner(for: fault, displayOff: true) ?? "").contains("did not accept")
+            )
+            XCTAssertFalse(
+                (RelayUserNotice.banner(for: fault, displayOff: false) ?? "").contains("did not accept")
+            )
+        }
+        XCTAssertEqual(RelayUserNotice.pairingRejectedText, "This relay did not accept this pairing.")
+        XCTAssertNotEqual(RelayUserNotice.reconnectingText, RelayUserNotice.pairingRejectedText)
+    }
 }

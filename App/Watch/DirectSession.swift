@@ -84,6 +84,8 @@ final class DirectSession: ObservableObject {
     var onRestored: ((String, [String]) -> Void)?
     var onTranscript: ((String, String) -> Void)?
     var onUp: (() -> Void)?
+    /// The auth reply was explicitly not ok. The Keychain pairing is kept until a new one arrives.
+    var onRepair: (() -> Void)?
 
     private(set) var pairing: DirectPairing?
     private var task: URLSessionWebSocketTask?
@@ -94,6 +96,11 @@ final class DirectSession: ObservableObject {
     private var next = 0
     private var authed = false
     private var generation = 0
+    private var retryAttempt = 0
+    private var retryItem: DispatchWorkItem?
+    private var displayOff = false
+    private var giveUp = false
+    private var resumeWhenActive = false
 
     var hasPairing: Bool { pairing != nil }
     var label: String { pairing?.label ?? "" }
@@ -119,6 +126,8 @@ final class DirectSession: ObservableObject {
         let changed = pairing?.key != incoming.key || pairing?.token != incoming.token || pairing?.relayURL != incoming.relayURL
         pairing = incoming
         DirectKeychain.save(incoming)
+        giveUp = false
+        resumeWhenActive = false
         if changed {
             sendCounter = 0
             replay = RelayReplay()
@@ -127,32 +136,43 @@ final class DirectSession: ObservableObject {
         }
     }
 
+    func noteDisplay(_ active: Bool) {
+        displayOff = !active
+    }
+
     func connectIfNeeded() {
-        guard pairing != nil else { return }
+        guard pairing != nil, !giveUp else { return }
+        if displayOff {
+            resumeWhenActive = true
+            return
+        }
         if phase == .up || phase == .connecting { return }
         connect()
     }
 
     func disconnect() {
-        generation += 1
-        authed = false
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
-        urlSession?.invalidateAndCancel()
-        urlSession = nil
+        retryItem?.cancel()
+        retryItem = nil
+        resumeWhenActive = false
+        tearSocket()
         if phase != .idle {
             phase = .idle
         }
     }
 
     func wake() {
-        guard hasPairing else { return }
-        if phase != .up {
-            disconnect()
-            connect()
-        } else {
+        displayOff = false
+        guard hasPairing, !giveUp else { return }
+        if phase == .up && authed && task != nil {
             send(DirectMessage(op: .list, id: freshID()))
+            return
         }
+        if phase == .connecting && task != nil {
+            return
+        }
+        resumeWhenActive = false
+        retryAttempt = 0
+        connect()
     }
 
     func refresh() {
@@ -189,8 +209,14 @@ final class DirectSession: ObservableObject {
     }
 
     private func connect() {
+        if displayOff {
+            resumeWhenActive = true
+            return
+        }
         guard let pairing, let url = URL(string: pairing.relayURL), let key = RelayMaterial.keyData(pairing.key) else { return }
-        disconnect()
+        retryItem?.cancel()
+        retryItem = nil
+        tearSocket()
         self.pairing = pairing
         self.key = key
         phase = .connecting
@@ -211,7 +237,7 @@ final class DirectSession: ObservableObject {
             Task { @MainActor in
                 guard let self, self.generation == current else { return }
                 if error != nil {
-                    self.fail("The relay did not accept this pairing.")
+                    self.noteFault(.authSendFailed)
                 }
             }
         }
@@ -231,18 +257,31 @@ final class DirectSession: ObservableObject {
         guard generation == current else { return }
         switch result {
         case .failure:
-            fail("The direct connection stopped. Open Watch Remote to try again.")
+            noteFault(.disconnected)
         case .success(let message):
             switch message {
             case .string(let text):
-                if text.contains("\"ok\":true") {
+                guard !authed else {
+                    receive(current)
+                    return
+                }
+                switch RelayUserNotice.classify(.authPayload(text)) {
+                case .accepted:
                     authed = true
+                    retryAttempt = 0
+                    resumeWhenActive = false
                     phase = .up
                     onBanner?(nil)
                     onUp?()
                     send(DirectMessage(op: .list, id: freshID()))
+                    receive(current)
+                case .pairingRejected:
+                    rejectPairing()
+                case .reconnecting:
+                    noteFault(.disconnected)
+                case .ignored:
+                    receive(current)
                 }
-                receive(current)
             case .data(let data):
                 open(data)
                 receive(current)
@@ -305,7 +344,7 @@ final class DirectSession: ObservableObject {
                 Task { @MainActor in
                     guard let self, self.generation == current else { return }
                     if error != nil {
-                        self.fail("The direct connection stopped. Open Watch Remote to try again.")
+                        self.noteFault(.dataSendFailed)
                     }
                 }
             }
@@ -314,12 +353,75 @@ final class DirectSession: ObservableObject {
         }
     }
 
-    private func fail(_ text: String) {
+    private func noteFault(_ fault: RelaySocketFault) {
+        switch RelayUserNotice.classify(fault) {
+        case .pairingRejected:
+            rejectPairing()
+        case .accepted, .ignored:
+            break
+        case .reconnecting:
+            if displayOff {
+                quietDrop()
+            } else {
+                scheduleReconnect()
+            }
+        }
+    }
+
+    /// The socket died because the watch left the foreground. Keep the pairing and the banner quiet.
+    private func quietDrop() {
+        tearSocket()
+        resumeWhenActive = true
+        phase = .idle
+        onBanner?(nil)
+        onChange?()
+    }
+
+    private func scheduleReconnect() {
+        guard pairing != nil, !giveUp else { return }
+        retryItem?.cancel()
+        retryItem = nil
+        tearSocket()
+        phase = .connecting
+        onBanner?(RelayUserNotice.banner(for: .disconnected, displayOff: false))
+        onChange?()
+        let attempt = retryAttempt
+        retryAttempt = min(attempt + 1, 5)
+        let delay = min(8.0, 0.4 * pow(2.0, Double(attempt)))
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor in
+                self?.connect()
+            }
+        }
+        retryItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    private func rejectPairing() {
+        giveUp = true
+        retryItem?.cancel()
+        retryItem = nil
+        resumeWhenActive = false
+        tearSocket()
+        phase = .failed(RelayUserNotice.pairingRejectedText)
+        onBanner?(RelayUserNotice.pairingRejectedText)
+        onRepair?()
+        onChange?()
+    }
+
+    private func tearSocket() {
+        generation += 1
         authed = false
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         urlSession?.invalidateAndCancel()
         urlSession = nil
+    }
+
+    private func fail(_ text: String) {
+        retryItem?.cancel()
+        retryItem = nil
+        tearSocket()
         phase = .failed(text)
         onBanner?(text)
         onChange?()

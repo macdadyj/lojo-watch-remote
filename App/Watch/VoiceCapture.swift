@@ -16,6 +16,10 @@ final class WatchVoiceCapture {
     var onFailed: (() -> Void)?
 
     private(set) var isRunning = false
+    /// True after a wrist-down suspend. Samples already captured stay in the buffer.
+    private(set) var isSuspended = false
+    /// Silence ends the utterance only in the optional pause mode. The duration cap always ends it.
+    var endsOnSilence = false
     /// Fired when Stop Talking finds no samples after the last queued buffer is included.
     var onFinishedEmpty: (() -> Void)?
     private var engine: AVAudioEngine?
@@ -52,6 +56,39 @@ final class WatchVoiceCapture {
         buffer = VoiceCaptureBuffer()
         utteranceID = nil
         sequence = 0
+        isSuspended = false
+        startedAt = Date().timeIntervalSinceReferenceDate
+        guard openEngine() else { return }
+        onPhase?("Listening")
+    }
+
+    /// Stops the microphone and keeps every sample captured so far.
+    /// The relay, the chat, and the utterance id stay as they are.
+    func suspendKeepingAudio() {
+        guard isRunning || engine != nil else { return }
+        suspendedAt = Date().timeIntervalSinceReferenceDate
+        haltEngine()
+        isRunning = false
+        isSuspended = true
+    }
+
+    /// Opens the microphone again on the same utterance. Does not discard samples.
+    func resume() {
+        guard isSuspended, !draining else { return }
+        let now = Date().timeIntervalSinceReferenceDate
+        if suspendedAt > 0 {
+            startedAt += max(0, now - suspendedAt)
+        }
+        suspendedAt = 0
+        isSuspended = false
+        guard openEngine() else { return }
+        onPhase?("Listening")
+    }
+
+    /// Wall clock when the microphone was suspended, so the duration cap ignores the gap.
+    private var suspendedAt: TimeInterval = 0
+
+    private func openEngine() -> Bool {
         do {
             try configureSession()
             let engine = AVAudioEngine()
@@ -59,7 +96,7 @@ final class WatchVoiceCapture {
             guard let format = Self.usableFormat(input) else {
                 stop()
                 onFailed?()
-                return
+                return false
             }
             let rate = format.sampleRate
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] pcm, _ in
@@ -73,11 +110,11 @@ final class WatchVoiceCapture {
             try engine.start()
             self.engine = engine
             isRunning = true
-            startedAt = Date().timeIntervalSinceReferenceDate
-            onPhase?("Listening")
+            return true
         } catch {
             stop()
             onFailed?()
+            return false
         }
     }
 
@@ -121,6 +158,8 @@ final class WatchVoiceCapture {
     func stop() {
         generation += 1
         draining = false
+        isSuspended = false
+        suspendedAt = 0
         haltEngine()
         isRunning = false
     }
@@ -129,7 +168,7 @@ final class WatchVoiceCapture {
     /// the silence detector has not ended. Returns false when nothing was captured.
     @discardableResult
     func finishEarly() -> Bool {
-        let pending = isRunning || draining || utteranceID != nil || sequence > 0
+        let pending = isRunning || draining || isSuspended || utteranceID != nil || sequence > 0
         guard pending else {
             stop()
             return false
@@ -137,6 +176,8 @@ final class WatchVoiceCapture {
         generation += 1
         let token = generation
         draining = true
+        isSuspended = false
+        suspendedAt = 0
         haltEngine()
         // One extra turn lets an in-flight tap callback append before the flush.
         DispatchQueue.main.async { [weak self] in
@@ -182,10 +223,15 @@ final class WatchVoiceCapture {
     }
 
     private func ingest(_ samples: [Float], sampleRate: Double) {
-        guard isRunning || draining else { return }
-        let now = Date().timeIntervalSinceReferenceDate - startedAt
+        guard isRunning || draining || isSuspended else { return }
+        let now: TimeInterval
+        if isSuspended, suspendedAt > 0 {
+            now = suspendedAt - startedAt
+        } else {
+            now = Date().timeIntervalSinceReferenceDate - startedAt
+        }
         let wasSpeaking = detector.phase == .speaking
-        let signal = detector.observe(rms: VoicePCM.rms(samples), at: now)
+        let signal = detector.observe(rms: VoicePCM.rms(samples), at: now, endsOnSilence: endsOnSilence && !isSuspended)
         if case .began = signal {
             let id = UUID().uuidString
             utteranceID = id

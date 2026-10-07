@@ -708,6 +708,9 @@ final class RemoteStore: ObservableObject {
                 banner = SessionResume.missingMessage
                 publish()
             }
+        case .showPairing:
+            tab = .computer
+            beginScan()
         }
     }
 

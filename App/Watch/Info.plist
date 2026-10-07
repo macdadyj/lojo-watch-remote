@@ -25,7 +25,7 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Watch Remote listens while you speak a task or an approval, and stops when you pause.</string>
+	<string>Watch Remote listens when you tap Speak or press the Action Button, and stops when you tap I'm done or press the Action Button again.</string>
 	<key>INAlternativeAppNames</key>
 	<array>
 		<dict>

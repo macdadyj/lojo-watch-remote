@@ -11,13 +11,15 @@ final class WatchPhoneOffUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// a. Home stays on screen, the path is direct, and Pause sends is the control.
+    /// a. Home stays on screen, the path is direct, and the Action Button control is the default.
     func testAPhoneOffHomeShowsDirectAndPauseToSend() throws {
         let app = launch()
         let list = app.descendants(matching: .any)["session.list"]
         XCTAssertTrue(list.waitForExistence(timeout: 40), "home session list did not appear")
         XCTAssertTrue(app.staticTexts["Path direct"].waitForExistence(timeout: 4), "phone-off home did not show the direct path")
-        XCTAssertTrue(app.staticTexts["Pause sends"].waitForExistence(timeout: 4), "Pause sends is missing")
+        let action = app.buttons["voice.action"]
+        XCTAssertTrue(action.waitForExistence(timeout: 4), "Action Button control is missing")
+        XCTAssertEqual(action.label, "Action Button")
         XCTAssertTrue(app.buttons["voice.speak"].waitForExistence(timeout: 4), "Speak is missing")
         XCTAssertFalse(app.staticTexts["Hands-free needs the iPhone app open. Tap Done after you speak."].exists)
         shot(app, "phone-off-home")

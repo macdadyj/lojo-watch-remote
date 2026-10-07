@@ -97,7 +97,16 @@ struct WatchListView: View {
                         .font(.caption2)
                         .foregroundStyle(LojoTheme.danger)
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("voice.banner")
                 }
+                if model.repairOffered {
+                    Button(RelayUserNotice.repairText) {
+                        model.requestPhonePairing()
+                    }
+                    .buttonStyle(QuietButtonStyle(compact: true))
+                    .accessibilityIdentifier("voice.repair")
+                }
+                ListenTestHooks()
                 if model.snapshot.sessions.isEmpty {
                     Text(emptyCopy)
                         .font(.caption)
