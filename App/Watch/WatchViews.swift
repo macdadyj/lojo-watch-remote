@@ -18,6 +18,9 @@ struct WatchRootView: View {
                     VoiceChatView()
                 } else if model.forcedScreen == nil, let prompt = model.pendingDictation {
                     VoiceConfirmView(transcript: prompt, isPreview: false)
+                } else if model.forcedScreen == nil, model.uiTest, model.voiceModeActive {
+                    // Skip the animated push. A cold watchOS simulator never idles, and the history snapshot times out.
+                    VoiceChatView()
                 } else {
                     switch model.forcedScreen {
                     case "session", "long":
@@ -46,6 +49,11 @@ struct WatchRootView: View {
         .tint(LojoTheme.accent)
         .environment(\.colorScheme, scheme)
         .preferredColorScheme(model.appearance.colorScheme)
+        .transaction { transaction in
+            if model.uiTest {
+                transaction.disablesAnimations = true
+            }
+        }
         .onAppear {
             model.setActive(scenePhase == .active)
             model.consumeUITestLaunch()
