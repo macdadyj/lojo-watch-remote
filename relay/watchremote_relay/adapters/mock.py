@@ -55,3 +55,27 @@ class MockAdapter:
             session["summary"] = "Allowed." if allow else "Denied."
             session["updatedAt"] = time.time()
             return
+
+    def restore(self, session_id: str) -> dict:
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise RuntimeError("That chat is no longer on this computer.")
+        lines = list(session.get("lines") or [])
+        if not lines:
+            lines = [part for part in (session.get("title"), session.get("summary")) if part]
+        return {"lines": lines, "session": session}
+
+    def continue_session(self, session_id: str, prompt: str, cwd: str) -> dict:
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise RuntimeError("That chat is no longer on this computer.")
+        lines = list(session.get("lines") or [])
+        lines.append(f"You: {prompt}")
+        lines.append(f"Grok: Done. {prompt}")
+        session["lines"] = lines
+        session["summary"] = f"Done. {prompt}"
+        session["status"] = "idle"
+        session["updatedAt"] = time.time()
+        if cwd:
+            session["cwd"] = cwd
+        return session

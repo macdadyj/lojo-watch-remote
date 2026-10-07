@@ -1,6 +1,8 @@
 # Watch UI tests
 
-The `watch-ui` job in `.github/workflows/ios.yml` runs on every pull request, every push to `main`, and every manual run. TestFlight upload waits for it. The phone screenshot job does not gate the upload.
+The `watch-ui` and `phone-ui` jobs in `.github/workflows/ios.yml` run on every pull request, every push to `main`, and every manual run. TestFlight upload waits for both. The phone screenshot job does not gate the upload.
+
+`phone-ui` runs `PhoneChatUITests`: tap an idle chat, read the history, send a follow-up, relaunch and send again, start a new chat, background and foreground, and turn Auto-approve tools on. Shots are attached to the test result and uploaded as `phone-ui-screenshots`.
 
 ## What the scaffold does
 

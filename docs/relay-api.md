@@ -50,7 +50,19 @@ Dates in JSON are Unix seconds.
 
 `POST /v1/sessions/<id>/cancel`
 
-Empty object. Stops that session.
+Empty object. Stops that session. This is an explicit stop. The relay does not expire a session on its own.
+
+`POST /v1/sessions/<id>/resume`
+
+Returns `{"lines": ["…"], "session": {…}}`. Opening a chat loads those lines. A missing id returns 404.
+
+`POST /v1/sessions/<id>/prompt`
+
+```json
+{"prompt": "add a note", "cwd": "/home/user/src"}
+```
+
+Continues that session. A missing id returns 404 so the phone can open a new backend session with the earlier lines.
 
 ## Run
 

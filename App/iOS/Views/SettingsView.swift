@@ -41,6 +41,20 @@ struct SettingsView: View {
                     if store.mode == .ssh { sshSecret }
                     if store.mode == .relay { relayFields }
 
+                    Toggle(isOn: Binding(
+                        get: { store.autoApproveTools },
+                        set: { store.setAutoApprove($0) }
+                    )) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Auto-approve tools")
+                                .font(.headline)
+                            Text("Allows tool calls without a tap. Off until you turn it on.")
+                                .font(.footnote)
+                                .foregroundStyle(LojoTheme.secondaryText)
+                        }
+                    }
+                    .accessibilityIdentifier("settings.autoApprove")
+
                     Picker("Appearance", selection: Binding(
                         get: { store.appearance },
                         set: { store.setAppearance($0) }

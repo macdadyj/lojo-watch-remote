@@ -90,6 +90,28 @@ def make_handler(adapter, tokens: TokenStore, admin: str):
                     return
                 self._json(201, session)
                 return
+            if path.startswith("/v1/sessions/") and path.endswith("/resume"):
+                session_id = path.removeprefix("/v1/sessions/").removesuffix("/resume").strip("/")
+                try:
+                    payload = adapter.restore(session_id)
+                except Exception as exc:  # noqa: BLE001
+                    self._json(404, {"error": str(exc)})
+                    return
+                self._json(200, payload)
+                return
+            if path.startswith("/v1/sessions/") and path.endswith("/prompt"):
+                session_id = path.removeprefix("/v1/sessions/").removesuffix("/prompt").strip("/")
+                prompt = str(body.get("prompt") or "").strip()
+                if not prompt:
+                    self._json(400, {"error": "Prompt is empty"})
+                    return
+                try:
+                    session = adapter.continue_session(session_id, prompt, str(body.get("cwd") or ""))
+                except Exception as exc:  # noqa: BLE001
+                    self._json(404, {"error": str(exc)})
+                    return
+                self._json(200, session)
+                return
             if path.startswith("/v1/sessions/") and path.endswith("/cancel"):
                 session_id = path.removeprefix("/v1/sessions/").removesuffix("/cancel").strip("/")
                 adapter.cancel(session_id)

@@ -96,6 +96,8 @@ public struct GrokSession: Codable, Equatable, Identifiable, Sendable {
     public var permission: PermissionRequest?
     /// Lines from `session/load`. Omitted from older snapshots.
     public var transcript: [String]?
+    /// Nil inherits the phone setting. True or false is this chat only.
+    public var autoApprove: Bool?
 
     public init(
         id: String,
@@ -105,7 +107,8 @@ public struct GrokSession: Codable, Equatable, Identifiable, Sendable {
         updatedAt: Date? = nil,
         cwd: String? = nil,
         permission: PermissionRequest? = nil,
-        transcript: [String]? = nil
+        transcript: [String]? = nil,
+        autoApprove: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -115,6 +118,7 @@ public struct GrokSession: Codable, Equatable, Identifiable, Sendable {
         self.cwd = cwd
         self.permission = permission
         self.transcript = transcript
+        self.autoApprove = autoApprove
     }
 }
 
@@ -139,6 +143,8 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
     public var activeComputerID: String
     /// The active computer has a direct relay pairing the Watch can use on its own.
     public var directReady: Bool
+    /// Phone setting. Off until the user turns it on. Older snapshots omit it.
+    public var autoApproveTools: Bool
 
     public init(
         mode: ConnectionMode,
@@ -149,7 +155,8 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         hostLabel: String,
         computers: [ComputerSummary] = [],
         activeComputerID: String = "",
-        directReady: Bool = false
+        directReady: Bool = false,
+        autoApproveTools: Bool = false
     ) {
         self.mode = mode
         self.link = link
@@ -160,6 +167,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         self.computers = computers
         self.activeComputerID = activeComputerID
         self.directReady = directReady
+        self.autoApproveTools = autoApproveTools
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -172,6 +180,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         case computers
         case activeComputerID
         case directReady
+        case autoApproveTools
     }
 
     public init(from decoder: Decoder) throws {
@@ -185,6 +194,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         computers = try container.decodeIfPresent([ComputerSummary].self, forKey: .computers) ?? []
         activeComputerID = try container.decodeIfPresent(String.self, forKey: .activeComputerID) ?? ""
         directReady = try container.decodeIfPresent(Bool.self, forKey: .directReady) ?? false
+        autoApproveTools = try container.decodeIfPresent(Bool.self, forKey: .autoApproveTools) ?? false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -198,6 +208,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         try container.encode(computers, forKey: .computers)
         try container.encode(activeComputerID, forKey: .activeComputerID)
         try container.encode(directReady, forKey: .directReady)
+        try container.encode(autoApproveTools, forKey: .autoApproveTools)
     }
 
     /// WatchConnectivity application context is small. Keep the payload short.
@@ -242,6 +253,8 @@ public struct PhoneCommand: Codable, Equatable, Sendable {
         case resume
         /// The Watch asked the iPhone to open the pairing screen.
         case showPairing
+        /// `enabled` is the Auto-approve tools switch.
+        case setAutoApprove
     }
 
     public var kind: Kind
@@ -250,6 +263,7 @@ public struct PhoneCommand: Codable, Equatable, Sendable {
     public var permissionID: String?
     public var cwd: String?
     public var computerID: String?
+    public var enabled: Bool?
 
     public init(
         kind: Kind,
@@ -257,7 +271,8 @@ public struct PhoneCommand: Codable, Equatable, Sendable {
         sessionID: String? = nil,
         permissionID: String? = nil,
         cwd: String? = nil,
-        computerID: String? = nil
+        computerID: String? = nil,
+        enabled: Bool? = nil
     ) {
         self.kind = kind
         self.prompt = prompt
@@ -265,6 +280,7 @@ public struct PhoneCommand: Codable, Equatable, Sendable {
         self.permissionID = permissionID
         self.cwd = cwd
         self.computerID = computerID
+        self.enabled = enabled
     }
 }
 

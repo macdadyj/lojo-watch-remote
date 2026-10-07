@@ -128,6 +128,20 @@ targets:
         TEST_TARGET_NAME: WatchRemoteWatch
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
 
+  WatchRemoteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: App/iOSUITests
+    dependencies:
+      - target: WatchRemote
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lojo.WatchRemote.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: WatchRemote
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+
   WatchRemoteTests:
     type: bundle.unit-test
     platform: iOS
@@ -172,3 +186,14 @@ schemes:
       config: Debug
       targets:
         - WatchRemoteWatchUITests
+  WatchRemoteUI:
+    build:
+      targets:
+        WatchRemote: all
+        WatchRemoteUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - WatchRemoteUITests

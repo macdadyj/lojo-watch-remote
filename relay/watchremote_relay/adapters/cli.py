@@ -56,6 +56,33 @@ class CLIAdapter:
     def decide(self, permission_id: str, allow: bool) -> None:
         raise RuntimeError("Command mode cannot approve or deny. Use the agent server.")
 
+    def restore(self, session_id: str) -> dict:
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise RuntimeError("That chat is no longer on this computer.")
+        lines = list(session.get("lines") or [])
+        if not lines:
+            lines = [part for part in (session.get("title"), session.get("summary")) if part]
+        return {"lines": lines, "session": session}
+
+    def continue_session(self, session_id: str, prompt: str, cwd: str) -> dict:
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise RuntimeError("That chat is no longer on this computer.")
+        lines = list(session.get("lines") or [])
+        lines.append(f"You: {prompt}")
+        session["lines"] = lines
+        session["status"] = "running"
+        session["summary"] = "Continuing."
+        session["updatedAt"] = time.time()
+        thread = threading.Thread(
+            target=self._run,
+            args=(session_id, prompt, cwd or str(session.get("cwd") or "")),
+            daemon=True,
+        )
+        thread.start()
+        return session
+
     def _binary(self) -> str:
         override = os.environ.get("GROK_BIN")
         if override:

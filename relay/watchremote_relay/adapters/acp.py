@@ -87,6 +87,30 @@ class ACPAdapter:
             session["permission"] = None
             session["summary"] = "Stopped."
 
+    def restore(self, session_id: str) -> dict:
+        stored = None
+        with self._lock:
+            stored = self.sessions.get(session_id)
+        listed = next((row for row in self.list_sessions() if row.get("id") == session_id), None)
+        source = listed or stored
+        if source is None:
+            raise RuntimeError("That chat is no longer on this computer.")
+        lines = [part for part in (str(source.get("title") or ""), str(source.get("summary") or "")) if part]
+        return {"lines": lines, "session": source}
+
+    def continue_session(self, session_id: str, prompt: str, cwd: str) -> dict:
+        restored = self.restore(session_id)
+        session = dict(restored.get("session") or {})
+        session["id"] = session_id
+        session["status"] = "running"
+        session["summary"] = "Continuing."
+        if cwd:
+            session["cwd"] = cwd
+        with self._lock:
+            self.sessions[session_id] = session
+        threading.Thread(target=self._prompt, args=(session_id, prompt), daemon=True).start()
+        return session
+
     def decide(self, permission_id: str, allow: bool) -> None:
         with self._lock:
             pending = None

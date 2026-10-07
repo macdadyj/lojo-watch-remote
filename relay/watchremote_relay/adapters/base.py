@@ -15,3 +15,9 @@ class Adapter(Protocol):
 
     def decide(self, permission_id: str, allow: bool) -> None:
         ...
+
+    def restore(self, session_id: str) -> dict:
+        ...
+
+    def continue_session(self, session_id: str, prompt: str, cwd: str) -> dict:
+        ...

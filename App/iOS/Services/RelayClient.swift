@@ -48,6 +48,34 @@ final class RelayClient: NSObject, URLSessionDelegate {
         _ = try await request(url: url, token: token, pin: pin, path: "/v1/sessions/\(sessionID)/cancel", method: "POST", json: [:])
     }
 
+    func load(url: String, token: String?, pin: String?, sessionID: String) async throws -> [String] {
+        let body = try await request(
+            url: url,
+            token: token,
+            pin: pin,
+            path: "/v1/sessions/\(sessionID)/resume",
+            method: "POST",
+            json: [:]
+        )
+        let object = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let lines = object?["lines"] as? [String] ?? []
+        return lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    func prompt(url: String, token: String?, pin: String?, sessionID: String, prompt: String, cwd: String) async throws -> GrokSession {
+        let body = try await request(
+            url: url,
+            token: token,
+            pin: pin,
+            path: "/v1/sessions/\(sessionID)/prompt",
+            method: "POST",
+            json: ["prompt": prompt, "cwd": cwd]
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        return try decoder.decode(GrokSession.self, from: body)
+    }
+
     private func request(url: String, token: String?, pin: String?, path: String, method: String, json: Any?) async throws -> Data {
         guard let token, !token.isEmpty else { throw RelayError.message("Save the relay device token first.") }
         guard let pin, !pin.isEmpty else { throw RelayError.message("Save the relay certificate fingerprint first.") }

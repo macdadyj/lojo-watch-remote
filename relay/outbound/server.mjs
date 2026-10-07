@@ -29,7 +29,9 @@ export function createRelay(options = {}) {
   const log = options.log ?? defaultLog;
   const rooms = new Map();
   const limits = new Map();
+  const peers = new Set();
   let connections = 0;
+  const heartbeatMs = numberOption(options.heartbeatMs, process.env.WATCHREMOTE_OUTBOUND_HEARTBEAT_MS, 25000);
 
   function note(event, extra = {}) {
     const safe = { event };
@@ -122,6 +124,7 @@ export function createRelay(options = {}) {
     }, 5_000);
     authTimer.unref?.();
 
+    peers.add(peer);
     socket.on("data", (chunk) => {
       peer.buffer = Buffer.concat([peer.buffer, chunk]);
       try {
@@ -138,6 +141,7 @@ export function createRelay(options = {}) {
       if (current.closed) return;
       current.closed = true;
       clearTimeout(authTimer);
+      peers.delete(current);
       connections = Math.max(0, connections - 1);
       const room = current.room;
       if (room && current.role && room[current.role] === current) {
@@ -263,6 +267,16 @@ export function createRelay(options = {}) {
     } catch {
       try { peer.socket.destroy(); } catch { /* already gone */ }
     }
+  }
+
+  if (heartbeatMs > 0) {
+    const heartbeat = setInterval(() => {
+      for (const peer of peers) {
+        if (peer.authed && !peer.closed) sendFrame(peer.socket, 0x9, Buffer.alloc(0));
+      }
+    }, heartbeatMs);
+    heartbeat.unref?.();
+    server.on("close", () => clearInterval(heartbeat));
   }
 
   return {

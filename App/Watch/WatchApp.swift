@@ -184,8 +184,12 @@ final class WatchModel: ObservableObject {
                 let arrived = Set(snapshot.sessions.compactMap(\.permission?.id)).subtracting(previous)
                 self.hasLiveSnapshot = true
                 self.snapshot = snapshot
+                if VoicePreferences.shared.autoApproveTools != snapshot.autoApproveTools {
+                    VoicePreferences.shared.autoApproveTools = snapshot.autoApproveTools
+                }
                 self.noteResume(from: snapshot)
-                if !arrived.isEmpty { WatchFeedback.notification() }
+                self.autoApproveWaitingTools()
+                if !arrived.isEmpty, !VoicePreferences.shared.autoApproveTools { WatchFeedback.notification() }
             }
             self.reachable = reachable
             self.route()
@@ -431,6 +435,32 @@ final class WatchModel: ObservableObject {
             return
         }
         send(PhoneCommand(kind: .stop, sessionID: session.id))
+    }
+
+    func setAutoApprove(_ enabled: Bool) {
+        guard forcedScreen == nil, !uiTest else { return }
+        _ = bridge.send(PhoneCommand(kind: .setAutoApprove, enabled: enabled))
+    }
+
+    func endChat() {
+        guard let id = resumedSessionID, let session = snapshot.sessions.first(where: { $0.id == id }) else {
+            remember("Ended.")
+            return
+        }
+        stop(session)
+        remember("Ended.")
+    }
+
+    private var autoApprovedPermissionIDs = Set<String>()
+
+    func autoApproveWaitingTools() {
+        guard VoicePreferences.shared.autoApproveTools else { return }
+        for session in snapshot.sessions {
+            guard let permission = session.permission else { continue }
+            guard autoApprovedPermissionIDs.insert(permission.id).inserted else { continue }
+            allow(session)
+            remember(ChatTranscript.autoApproved(permission.title))
+        }
     }
 
     func selectComputer(_ id: String) {

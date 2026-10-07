@@ -605,6 +605,7 @@ def _finish_prompt(
 ) -> None:
     session = sessions.get(session_id)
     if session is not None:
+        # A finished turn can show Idle. Nothing here expires the chat or the socket.
         session.status = "stopped" if session.stop_reason == "cancelled" else ("idle" if code == 0 else "failed")
     if code != 0 and (session is None or session.stop_reason != "cancelled"):
         _error(client, ident, f"The task ended with status {code}.")

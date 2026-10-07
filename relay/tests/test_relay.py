@@ -12,6 +12,10 @@ from watchremote_relay.adapters.acp import client_frame, handshake_request, pop_
 from watchremote_relay.adapters.cli import CLIAdapter
 from watchremote_relay.adapters.mock import MockAdapter
 from watchremote_relay.server import TokenStore, bind_address, build_adapter, configured_bind, main, make_handler
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "host"))
+from keepalive import remains_live  # noqa: E402
 
 
 class RelayTests(unittest.TestCase):
@@ -94,6 +98,26 @@ class RelayTests(unittest.TestCase):
             with urllib.request.urlopen(listed) as response:
                 body = json.load(response)
             self.assertEqual(body["sessions"][0]["status"], "stopped")
+            session_id = body["sessions"][0]["id"]
+            resumed = urllib.request.Request(
+                base + "/v1/sessions/" + session_id + "/resume",
+                data=b"{}",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(resumed) as response:
+                restored = json.load(response)
+            self.assertTrue(restored["lines"])
+            followed = urllib.request.Request(
+                base + "/v1/sessions/" + session_id + "/prompt",
+                data=json.dumps({"prompt": "add a note", "cwd": "/work"}).encode(),
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(followed) as response:
+                continued = json.load(response)
+            self.assertEqual(continued["id"], session_id)
+            self.assertIn("Done. add a note", continued["summary"])
         finally:
             server.shutdown()
             server.server_close()
@@ -106,6 +130,11 @@ class RelayTests(unittest.TestCase):
         self.assertNotIn("?", request.split("\r\n", 1)[0])
         with self.assertRaises(RuntimeError):
             handshake_request("bad\nsecret", "127.0.0.1", 2419, "abc")
+
+    def test_a_chat_stays_live_after_ten_minutes(self):
+        self.assertIsNone(__import__("keepalive", fromlist=["IDLE_TIMEOUT"]).IDLE_TIMEOUT)
+        self.assertTrue(remains_live(10 * 60 + 5, False))
+        self.assertFalse(remains_live(10 * 60, True))
 
     def _state_path(self):
         directory = tempfile.mkdtemp()

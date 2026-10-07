@@ -1029,4 +1029,64 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(RelayUserNotice.pairingRejectedText, "This relay did not accept this pairing.")
         XCTAssertNotEqual(RelayUserNotice.reconnectingText, RelayUserNotice.pairingRejectedText)
     }
+
+    func testIdleChatStaysOpenAndAFollowUpKeepsTheThread() {
+        let statuses: [SessionStatus] = [.running, .needsApproval, .idle, .stopped, .failed, .unknown]
+        for status in statuses {
+            XCTAssertTrue(ChatAccess.canOpen(status))
+            XCTAssertTrue(ChatAccess.canCompose(status))
+        }
+        XCTAssertNil(SessionKeepalive.idleTimeout)
+        XCTAssertTrue(SessionKeepalive.remainsLive(elapsed: 10 * 60 + 5, userEnded: false))
+        XCTAssertFalse(SessionKeepalive.remainsLive(elapsed: 10 * 60, userEnded: true))
+        XCTAssertGreaterThan(SessionKeepalive.heartbeatInterval, 0)
+
+        let idle = DemoCatalog.sessions().first { $0.id == DemoCatalog.idleID }
+        let entry = ChatTranscript.entry(for: idle ?? DemoCatalog.sessions()[0])
+        XCTAssertEqual(entry.title, "Note the overlay route")
+        XCTAssertEqual(entry.lastMessage, "The computer is reachable only on the private overlay.")
+        XCTAssertEqual(entry.status, .idle)
+
+        var engine = MockEngine(preview: true)
+        XCTAssertTrue(engine.continueSession(sessionID: DemoCatalog.idleID, prompt: "add a note"))
+        XCTAssertTrue(engine.deliverReply(sessionID: DemoCatalog.idleID, reply: "Done. add a note"))
+        let thread = engine.sessions.first { $0.id == DemoCatalog.idleID }
+        XCTAssertEqual(thread?.status, .idle)
+        XCTAssertTrue(ChatAccess.canCompose(thread?.status ?? .failed))
+        XCTAssertTrue(thread?.transcript?.contains("You: add a note") == true)
+        XCTAssertTrue(thread?.transcript?.contains("Grok: Done. add a note") == true)
+        XCTAssertTrue(SessionKeepalive.remainsLive(elapsed: 700, userEnded: false))
+
+        let context = ChatTranscript.followUp(history: thread?.transcript ?? [], message: "and another")
+        XCTAssertTrue(context.contains("You: add a note"))
+        XCTAssertTrue(context.contains("and another"))
+        let streamed = ChatTranscript.streamingAssistant("Hello", in: [])
+        XCTAssertEqual(ChatTranscript.streamingAssistant(" there", in: streamed), ["Grok: Hello there"])
+        XCTAssertTrue(ChatTranscript.isToolCard(ChatTranscript.toolCard("Edit a file")))
+        XCTAssertEqual(ChatTranscript.autoApproved("Edit a file"), "Auto-approved: Edit a file")
+    }
+
+    func testAutoApprovePreferenceHonorsAPerChatOverride() {
+        XCTAssertFalse(ApprovalPreference(globalAutoApprove: false).autoApproves)
+        XCTAssertTrue(ApprovalPreference(globalAutoApprove: true).autoApproves)
+        XCTAssertFalse(ApprovalPreference(globalAutoApprove: true, sessionOverride: false).autoApproves)
+        XCTAssertTrue(ApprovalPreference(globalAutoApprove: false, sessionOverride: true).autoApproves)
+        var snapshot = DemoCatalog.snapshot()
+        snapshot.autoApproveTools = true
+        let text = LinkCodec.encodeSnapshot(snapshot)
+        XCTAssertEqual(text.flatMap(LinkCodec.decodeSnapshot)?.autoApproveTools, true)
+        let legacy = #"{"mode":"demo","link":"demo","sessions":[],"approvalsAvailable":true,"hostLabel":"example-host"}"#
+        XCTAssertEqual(LinkCodec.decodeSnapshot(legacy)?.autoApproveTools, false)
+        let command = PhoneCommand(kind: .setAutoApprove, enabled: true)
+        let encoded = command.encodeCheck()
+        XCTAssertEqual(encoded?.kind, .setAutoApprove)
+        XCTAssertEqual(encoded?.enabled, true)
+    }
+}
+
+private extension PhoneCommand {
+    func encodeCheck() -> PhoneCommand? {
+        guard let text = LinkCodec.encodeCommand(self) else { return nil }
+        return LinkCodec.decodeCommand(text)
+    }
 }

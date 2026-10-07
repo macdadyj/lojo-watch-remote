@@ -168,7 +168,9 @@ final class SSHConnection: @unchecked Sendable {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         tcp.enableKeepalive = true
-        tcp.keepaliveIdle = 30
+        tcp.keepaliveIdle = 15
+        tcp.keepaliveInterval = 15
+        tcp.keepaliveCount = 100
         let bootstrap = NIOTSConnectionBootstrap(group: NIOTSEventLoopGroup.singleton)
             .connectTimeout(.seconds(12))
             .channelOption(NIOTSChannelOptions.waitForActivity, value: false)

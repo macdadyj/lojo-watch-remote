@@ -270,6 +270,17 @@ test("a peer outside the proxy list cannot choose its address", async () => {
   first.socket.destroy();
 });
 
+test("heartbeat ping does not close an idle room", async () => {
+  const relay = createRelay({ log: () => {}, heartbeatMs: 40 });
+  const port = await listen(relay);
+  const client = await connect(port);
+  await auth(client, "host", "roomtokenvalue0009");
+  await client.waitFor((frames) => frames.some((frame) => frame.opcode === 9), 1000);
+  assert.equal(client.socket.destroyed, false);
+  relay.server.close();
+  client.socket.destroy();
+});
+
 test("message rate limit closes the socket", async () => {
   const relay = createRelay({ log: () => {}, ratePer10s: 3 });
   const port = await listen(relay);

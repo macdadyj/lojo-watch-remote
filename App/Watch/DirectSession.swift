@@ -97,6 +97,7 @@ final class DirectSession: ObservableObject {
     private var authed = false
     private var generation = 0
     private var retryAttempt = 0
+    private var heartbeatTask: Task<Void, Never>?
     private var retryItem: DispatchWorkItem?
     private var displayOff = false
     private var giveUp = false
@@ -272,6 +273,7 @@ final class DirectSession: ObservableObject {
                     resumeWhenActive = false
                     phase = .up
                     onBanner?(nil)
+                    armHeartbeat()
                     onUp?()
                     send(DirectMessage(op: .list, id: freshID()))
                     receive(current)
@@ -412,10 +414,29 @@ final class DirectSession: ObservableObject {
     private func tearSocket() {
         generation += 1
         authed = false
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         urlSession?.invalidateAndCancel()
         urlSession = nil
+    }
+
+    private func armHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let pause = UInt64(SessionKeepalive.heartbeatInterval * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: pause)
+                self?.pingIfLive()
+            }
+        }
+    }
+
+    private func pingIfLive() {
+        guard phase == .up, authed, !displayOff else { return }
+        guard SessionKeepalive.remainsLive(elapsed: SessionKeepalive.heartbeatInterval, userEnded: false) else { return }
+        send(DirectMessage(op: .ping, id: freshID()))
     }
 
     private func fail(_ text: String) {

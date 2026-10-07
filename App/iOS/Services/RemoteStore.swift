@@ -164,7 +164,11 @@ final class RemoteStore: ObservableObject {
     @Published var trustPrompt: TrustPrompt?
     @Published var showCompose = false
     @Published var selectedSessionID: String?
+    @Published var autoApproveTools = false
     private var holdsLaunchFixture = false
+    private var userDisconnected = false
+    private var heartbeatTask: Task<Void, Never>?
+    private var autoApprovedPermissionIDs = Set<String>()
     @Published var hasAgentSecret = false
     @Published var hasRelayToken = false
     @Published var hasRelayPin = false
@@ -187,7 +191,12 @@ final class RemoteStore: ObservableObject {
         keys = KeyStore(directory: support)
         let defaults = UserDefaults.standard
         mode = ConnectionMode(rawValue: defaults.string(forKey: "mode") ?? "") ?? .demo
-        appearance = AppearanceChoice(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
+        if defaults.object(forKey: "appearance") == nil {
+            appearance = .dark
+        } else {
+            appearance = AppearanceChoice(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .dark
+        }
+        autoApproveTools = defaults.bool(forKey: "autoApproveTools")
         cwd = defaults.string(forKey: "cwd") ?? ""
         relayURL = defaults.string(forKey: "relayURL") ?? ""
         if let data = defaults.data(forKey: "computers"),
@@ -217,11 +226,12 @@ final class RemoteStore: ObservableObject {
             onEvent: { [weak self] event in self?.apply(event) },
             onCLI: { [weak self] id, event in self?.applyCLI(id: id, event: event) },
             onDropped: { [weak self] in
-                guard let self, self.mode == .ssh else { return }
-                self.link = .offline
-                self.approvalsAvailable = false
-                self.statusLine = "Not connected"
+                guard let self, self.mode == .ssh, !self.userDisconnected else { return }
+                self.link = .connecting
+                self.statusLine = "Reconnecting"
+                self.banner = nil
                 self.publish()
+                Task { await self.reconnectIfNeeded() }
             },
             onAgentLost: { [weak self] in
                 guard let self, self.mode == .ssh else { return }
@@ -231,6 +241,8 @@ final class RemoteStore: ObservableObject {
             }
         )
         applyLaunch()
+        restoreThreads()
+        armHeartbeat()
         bridge.start { [weak self] command in
             self?.perform(command)
         } onActivated: { [weak self] in
@@ -249,7 +261,8 @@ final class RemoteStore: ObservableObject {
             hostLabel: host.label,
             computers: computers.map { ComputerSummary(id: $0.id, label: $0.label) },
             activeComputerID: host.id,
-            directReady: directContext?.contains("\"clear\":true") == false && directContext != nil
+            directReady: directContext?.contains("\"clear\":true") == false && directContext != nil,
+            autoApproveTools: autoApproveTools
         )
     }
 
@@ -570,7 +583,14 @@ final class RemoteStore: ObservableObject {
     }
 
     func refresh() async {
+        await refresh(quiet: false)
+    }
+
+    func refresh(quiet: Bool) async {
         guard !holdsLaunchFixture else { return }
+        if !quiet {
+            userDisconnected = false
+        }
         switch mode {
         case .demo:
             sessions = engine.sessions
@@ -578,10 +598,11 @@ final class RemoteStore: ObservableObject {
             approvalsAvailable = true
             statusLine = "Demo on this iPhone. Nothing is sent."
         case .ssh:
-            await refreshSSH()
+            await refreshSSH(quiet: quiet)
         case .relay:
-            await refreshRelay()
+            await refreshRelay(quiet: quiet)
         }
+        sweepAutoApprovals()
         publish()
     }
 
@@ -598,8 +619,8 @@ final class RemoteStore: ObservableObject {
             sessions = engine.sessions
             selectedSessionID = session.id
             publish()
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            _ = engine.raisePermission(sessionID: session.id)
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            _ = engine.deliverReply(sessionID: session.id, reply: "Done. \(text)")
             sessions = engine.sessions
         case .ssh:
             await startSSH(prompt: text)
@@ -622,7 +643,57 @@ final class RemoteStore: ObservableObject {
         case .ssh:
             await resumeSSH(id)
         case .relay:
-            resumeRelay(id)
+            await resumeRelay(id)
+        }
+    }
+
+    func openChat(_ sessionID: String) {
+        let id = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        userDisconnected = false
+        selectedSessionID = id
+        Task { await resume(sessionID: id) }
+    }
+
+    func endChat(_ sessionID: String) {
+        let existing = sessions.first { $0.id == sessionID }?.transcript ?? []
+        mirrorDemo(sessionID)
+        stop(sessionID)
+        let lines = ChatTranscript.append("Ended.", to: existing)
+        update(sessionID) { session in
+            session.transcript = lines
+            session.status = .stopped
+        }
+        mirrorDemo(sessionID)
+        publish()
+    }
+
+    func disconnectLink() {
+        userDisconnected = true
+        heartbeatTask?.cancel()
+        live?.disconnect()
+        if mode != .demo {
+            link = .offline
+            approvalsAvailable = false
+            statusLine = "Disconnected"
+        }
+        banner = nil
+        publish()
+        armHeartbeat()
+    }
+
+    func setAutoApprove(_ enabled: Bool) {
+        autoApproveTools = enabled
+        UserDefaults.standard.set(enabled, forKey: "autoApproveTools")
+        publish()
+        sweepAutoApprovals()
+    }
+
+    func setSessionAutoApprove(_ sessionID: String, _ enabled: Bool) {
+        update(sessionID) { $0.autoApprove = enabled }
+        publish()
+        if let request = sessions.first(where: { $0.id == sessionID })?.permission {
+            considerAutoApprove(sessionID: sessionID, request: request)
         }
     }
 
@@ -711,6 +782,8 @@ final class RemoteStore: ObservableObject {
         case .showPairing:
             tab = .computer
             beginScan()
+        case .setAutoApprove:
+            setAutoApprove(command.enabled == true)
         }
     }
 
@@ -752,42 +825,49 @@ final class RemoteStore: ObservableObject {
         publish()
     }
 
-    private func refreshSSH() async {
+    private func refreshSSH(quiet: Bool) async {
         guard let live else { return }
         do {
             try await ensureSSH()
-            sessions = try await live.list(cwd: cwd.isEmpty ? nil : cwd)
+            let listed = try await live.list(cwd: cwd.isEmpty ? nil : cwd)
+            sessions = mergeThreads(listed)
             link = .connected
             approvalsAvailable = live.approvalsAvailable
             statusLine = live.statusLine
             banner = nil
         } catch {
             if link != .needsPairing {
-                link = .offline
+                link = quiet ? .connecting : .offline
             }
             approvalsAvailable = false
-            banner = error.localizedDescription
-            statusLine = live.statusLine
+            if quiet {
+                statusLine = "Reconnecting"
+            } else {
+                banner = error.localizedDescription
+                statusLine = live.statusLine
+            }
         }
     }
 
     private func continueSession(_ sessionID: String, prompt: String) async {
         switch mode {
         case .demo:
+            mirrorDemo(sessionID)
             guard engine.continueSession(sessionID: sessionID, prompt: prompt) else {
-                banner = SessionResume.missingMessage
-                publish()
+                await respawnDemo(threadID: sessionID, prompt: prompt)
                 return
             }
             sessions = engine.sessions
             selectedSessionID = sessionID
             banner = nil
+            publish()
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            _ = engine.deliverReply(sessionID: sessionID, reply: "Done. \(prompt)")
+            sessions = engine.sessions
         case .ssh:
             await continueSSH(sessionID: sessionID, prompt: prompt)
         case .relay:
-            banner = sessions.contains(where: { $0.id == sessionID })
-                ? SessionResume.unsupportedMessage
-                : SessionResume.missingMessage
+            await continueRelay(sessionID: sessionID, prompt: prompt)
         }
         publish()
     }
@@ -801,26 +881,142 @@ final class RemoteStore: ObservableObject {
         }
         let lines = SessionResume.displayLines(title: source.title, summary: source.summary, transcript: source.transcript ?? [])
         if sessions.contains(where: { $0.id == sessionID }) {
-            update(sessionID) { $0.transcript = lines }
+            update(sessionID) { session in
+                if session.transcript == nil || session.transcript?.isEmpty == true {
+                    session.transcript = lines
+                }
+            }
         } else {
             var copy = source
             copy.transcript = lines
             sessions.insert(copy, at: 0)
         }
         banner = nil
+        mirrorDemo(sessionID)
         publish()
     }
 
-    private func resumeRelay(_ sessionID: String) {
-        guard let source = sessions.first(where: { $0.id == sessionID }) else {
-            banner = SessionResume.missingMessage
-            publish()
-            return
+    /// Demo turns live on the engine. Copy the visible transcript across first so a resume is not dropped.
+    private func mirrorDemo(_ sessionID: String) {
+        guard let current = sessions.first(where: { $0.id == sessionID }) else { return }
+        guard let stored = engine.sessions.first(where: { $0.id == sessionID }) else { return }
+        let visible = current.transcript ?? []
+        let previous = stored.transcript ?? []
+        engine.adopt(
+            sessionID: sessionID,
+            title: current.title,
+            transcript: visible.count >= previous.count ? visible : previous,
+            autoApprove: current.autoApprove
+        )
+    }
+
+    private func resumeRelay(_ sessionID: String) async {
+        let local = sessions.first(where: { $0.id == sessionID })
+        do {
+            let lines = try await relay.load(
+                url: relayURL,
+                token: keys.secret(account: "relay-token"),
+                pin: keys.secret(account: "relay-pin"),
+                sessionID: sessionID
+            )
+            let shown = lines.isEmpty
+                ? SessionResume.displayLines(title: local?.title ?? "", summary: local?.summary ?? "", transcript: local?.transcript ?? [])
+                : lines
+            if sessions.contains(where: { $0.id == sessionID }) {
+                update(sessionID) { $0.transcript = shown }
+            }
+            link = .connected
+            statusLine = "Relay on the overlay."
+            banner = nil
+        } catch {
+            guard let local else {
+                banner = SessionResume.missingMessage
+                publish()
+                return
+            }
+            let lines = SessionResume.displayLines(title: local.title, summary: local.summary, transcript: local.transcript ?? [])
+            update(sessionID) { $0.transcript = lines }
+            banner = nil
         }
-        let lines = SessionResume.displayLines(title: source.title, summary: source.summary, transcript: source.transcript ?? [])
-        update(sessionID) { $0.transcript = lines }
-        banner = nil
         publish()
+    }
+
+    private func continueRelay(_ sessionID: String, prompt: String) async {
+        let history = sessions.first(where: { $0.id == sessionID })?.transcript ?? []
+        do {
+            let session = try await relay.prompt(
+                url: relayURL,
+                token: keys.secret(account: "relay-token"),
+                pin: keys.secret(account: "relay-pin"),
+                sessionID: sessionID,
+                prompt: prompt,
+                cwd: cwd
+            )
+            if sessions.contains(where: { $0.id == sessionID }) {
+                update(sessionID) { item in
+                    item.summary = session.summary
+                    item.status = session.status
+                    item.transcript = ChatTranscript.append("You: \(prompt)", to: item.transcript ?? [])
+                    item.updatedAt = Date()
+                }
+            } else {
+                var copy = session
+                copy.transcript = ChatTranscript.append("You: \(prompt)", to: history)
+                sessions.insert(copy, at: 0)
+            }
+            selectedSessionID = sessionID
+            link = .connected
+            banner = nil
+        } catch {
+            let text = error.localizedDescription
+            if text.contains("no longer") || text.contains("Not found") || text.contains("404") {
+                await respawn(threadID: sessionID, prompt: prompt, history: history)
+            } else {
+                banner = text
+            }
+        }
+    }
+
+    private func respawnDemo(threadID: String, prompt: String) async {
+        let history = sessions.first(where: { $0.id == threadID })?.transcript ?? []
+        let title = sessions.first(where: { $0.id == threadID })?.title
+        let created = engine.start(prompt: prompt, cwd: cwd)
+        engine.rewrite(sessionID: created.id, title: title, transcript: ChatTranscript.append("You: \(prompt)", to: history))
+        engine.remove(sessionID: threadID)
+        sessions = engine.sessions
+        selectedSessionID = created.id
+        publish()
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        _ = engine.deliverReply(sessionID: created.id, reply: "Done. \(prompt)")
+        sessions = engine.sessions
+        publish()
+    }
+
+    private func respawn(threadID: String, prompt: String, history: [String]) async {
+        let context = ChatTranscript.followUp(history: history, message: prompt)
+        let keptTitle = sessions.first(where: { $0.id == threadID })?.title
+        switch mode {
+        case .demo:
+            await respawnDemo(threadID: threadID, prompt: prompt)
+        case .ssh:
+            await startSSH(prompt: context)
+            stitchNewest(replacing: threadID, history: history, prompt: prompt, title: keptTitle)
+        case .relay:
+            await startRelay(prompt: context)
+            stitchNewest(replacing: threadID, history: history, prompt: prompt, title: keptTitle)
+        }
+    }
+
+    private func stitchNewest(replacing threadID: String, history: [String], prompt: String, title: String?) {
+        guard let newest = sessions.first, newest.id != threadID else { return }
+        update(newest.id) { session in
+            if let title, !title.isEmpty { session.title = title }
+            var lines = history
+            lines = ChatTranscript.append("You: \(prompt)", to: lines)
+            session.transcript = lines
+        }
+        sessions.removeAll { $0.id == threadID }
+        selectedSessionID = newest.id
     }
 
     private func resumeSSH(_ sessionID: String) async {
@@ -880,8 +1076,8 @@ final class RemoteStore: ObservableObject {
             try await ensureSSH()
             let listed = try await live.list(cwd: cwd.isEmpty ? nil : cwd)
             guard let known = listed.first(where: { $0.id == sessionID }) else {
-                banner = SessionResume.missingMessage
-                publish()
+                let history = sessions.first(where: { $0.id == sessionID })?.transcript ?? []
+                await respawn(threadID: sessionID, prompt: prompt, history: history)
                 return
             }
             if !sessions.contains(where: { $0.id == sessionID }) {
@@ -937,8 +1133,13 @@ final class RemoteStore: ObservableObject {
     }
 
     func reconnectIfNeeded() async {
-        guard !holdsLaunchFixture, mode == .ssh else { return }
-        await refresh()
+        guard !holdsLaunchFixture, !userDisconnected else { return }
+        switch mode {
+        case .demo:
+            return
+        case .ssh, .relay:
+            await refresh(quiet: true)
+        }
     }
 
     private func ensureSSH() async throws {
@@ -998,16 +1199,21 @@ final class RemoteStore: ObservableObject {
         }
     }
 
-    private func refreshRelay() async {
+    private func refreshRelay(quiet: Bool) async {
         do {
-            sessions = try await relay.list(url: relayURL, token: keys.secret(account: "relay-token"), pin: keys.secret(account: "relay-pin"))
+            let listed = try await relay.list(url: relayURL, token: keys.secret(account: "relay-token"), pin: keys.secret(account: "relay-pin"))
+            sessions = mergeThreads(listed)
             link = .connected
             approvalsAvailable = true
             statusLine = "Relay on the overlay."
             banner = nil
         } catch {
-            link = .offline
-            banner = error.localizedDescription
+            link = quiet ? .connecting : .offline
+            if quiet {
+                statusLine = "Reconnecting"
+            } else {
+                banner = error.localizedDescription
+            }
         }
     }
 
@@ -1036,7 +1242,7 @@ final class RemoteStore: ObservableObject {
                 permissionID: request.id,
                 allow: allow
             )
-            await refreshRelay()
+            await refreshRelay(quiet: false)
         } catch {
             banner = error.localizedDescription
             publish()
@@ -1051,7 +1257,7 @@ final class RemoteStore: ObservableObject {
                 pin: keys.secret(account: "relay-pin"),
                 sessionID: sessionID
             )
-            await refreshRelay()
+            await refreshRelay(quiet: false)
         } catch {
             banner = error.localizedDescription
             publish()
@@ -1068,6 +1274,8 @@ final class RemoteStore: ObservableObject {
                 session.permission = request
                 session.summary = request.title
             }
+            publish()
+            considerAutoApprove(sessionID: request.sessionID, request: request)
         case .result, .failure, .notification:
             break
         }
@@ -1088,12 +1296,16 @@ final class RemoteStore: ObservableObject {
         update(sessionID) { session in
             switch event {
             case .text(let text):
-                let combined = (session.summary + text).trimmingCharacters(in: .whitespacesAndNewlines)
-                session.summary = PhoneSnapshot.clip(combined, limit: 280)
+                session.transcript = ChatTranscript.streamingAssistant(text, in: session.transcript ?? [])
+                session.summary = PhoneSnapshot.clip(
+                    ChatTranscript.lastMessage(summary: session.summary, transcript: session.transcript),
+                    limit: 280
+                )
                 session.status = .running
             case .thought:
                 break
             case .tool(let title):
+                session.transcript = ChatTranscript.append(ChatTranscript.toolCard(title), to: session.transcript ?? [])
                 session.summary = "Using \(title)."
                 session.status = .running
             case .toolUpdate:
@@ -1103,6 +1315,7 @@ final class RemoteStore: ObservableObject {
             case .end(_, let reason, let usage):
                 session.permission = nil
                 session.status = reason == "cancelled" ? .stopped : .idle
+                session.updatedAt = Date()
                 if let usage, !usage.isEmpty { session.summary = usage }
             case .error(let message):
                 session.status = .failed
@@ -1185,7 +1398,90 @@ final class RemoteStore: ObservableObject {
     }
 
     private func publish() {
+        persistThreads()
         bridge.push(snapshot, direct: directContext)
+    }
+
+    private func threadsFile() -> URL {
+        support.appendingPathComponent("threads.json")
+    }
+
+    private func persistThreads() {
+        guard !holdsLaunchFixture else { return }
+        guard let data = try? JSONEncoder().encode(sessions) else { return }
+        try? data.write(to: threadsFile(), options: .atomic)
+    }
+
+    private func restoreThreads() {
+        guard !holdsLaunchFixture else { return }
+        guard let data = try? Data(contentsOf: threadsFile()),
+              let saved = try? JSONDecoder().decode([GrokSession].self, from: data),
+              !saved.isEmpty else { return }
+        sessions = saved
+        engine = MockEngine(sessions: saved)
+    }
+
+    private func mergeThreads(_ listed: [GrokSession]) -> [GrokSession] {
+        let listedIDs = Set(listed.map(\.id))
+        let kept = sessions.filter { !listedIDs.contains($0.id) }
+        let merged = listed.map { item -> GrokSession in
+            var copy = item
+            if let local = sessions.first(where: { $0.id == item.id }) {
+                if copy.transcript == nil || copy.transcript?.isEmpty == true {
+                    copy.transcript = local.transcript
+                }
+                if copy.autoApprove == nil {
+                    copy.autoApprove = local.autoApprove
+                }
+            }
+            return copy
+        }
+        return merged + kept
+    }
+
+    private func sweepAutoApprovals() {
+        for session in sessions {
+            if let request = session.permission {
+                considerAutoApprove(sessionID: session.id, request: request)
+            }
+        }
+    }
+
+    private func considerAutoApprove(sessionID: String, request: PermissionRequest) {
+        let session = sessions.first { $0.id == sessionID }
+        let preference = ApprovalPreference(globalAutoApprove: autoApproveTools, sessionOverride: session?.autoApprove)
+        guard preference.autoApproves else { return }
+        guard autoApprovedPermissionIDs.insert(request.id).inserted else { return }
+        let line = ChatTranscript.autoApproved(request.title)
+        if mode == .demo {
+            engine.noteLine(sessionID: sessionID, line: line)
+        }
+        update(sessionID) { item in
+            item.transcript = ChatTranscript.append(line, to: item.transcript ?? [])
+        }
+        allow(sessionID)
+    }
+
+    private func armHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let pause = UInt64(SessionKeepalive.heartbeatInterval * 1_000_000_000)
+                try? await Task.sleep(nanoseconds: pause)
+                await self?.heartbeat()
+            }
+        }
+    }
+
+    private func heartbeat() async {
+        guard !holdsLaunchFixture, !userDisconnected else { return }
+        guard SessionKeepalive.remainsLive(elapsed: SessionKeepalive.heartbeatInterval, userEnded: false) else { return }
+        switch mode {
+        case .demo:
+            return
+        case .ssh, .relay:
+            await refresh(quiet: true)
+        }
     }
 
     private func applyLaunch() {
@@ -1196,12 +1492,19 @@ final class RemoteStore: ObservableObject {
         if let appearanceName, let choice = AppearanceChoice(rawValue: appearanceName) {
             appearance = choice
         }
+        let uiTest = arguments.contains("-WatchRemoteUITest") || environment["WATCHREMOTE_UI_TEST"] == "1"
         guard let screen else {
-            if mode == .demo {
+            if uiTest || mode == .demo {
+                mode = uiTest ? .demo : mode
+                if uiTest {
+                    engine = MockEngine(preview: true)
+                    appearance = .dark
+                }
                 sessions = engine.sessions
                 link = .demo
                 approvalsAvailable = true
                 statusLine = "Demo on this iPhone. Nothing is sent."
+                banner = nil
             }
             return
         }

@@ -14,7 +14,7 @@ struct WatchRootView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if model.forcedScreen == "voice-chat" || model.forcedScreen == "voice-loop" || (model.forcedScreen == nil && model.voiceModeActive) {
+                if model.forcedScreen == "voice-chat" || model.forcedScreen == "voice-loop" {
                     VoiceChatView()
                 } else if model.forcedScreen == nil, let prompt = model.pendingDictation {
                     VoiceConfirmView(transcript: prompt, isPreview: false)
@@ -32,6 +32,12 @@ struct WatchRootView: View {
                         WatchListView()
                             .safeAreaInset(edge: .bottom, spacing: 2) {
                                 VoiceHomeBar()
+                            }
+                            .navigationDestination(isPresented: Binding(
+                                get: { model.voiceModeActive && model.forcedScreen == nil },
+                                set: { model.voiceModeActive = $0 }
+                            )) {
+                                VoiceChatView()
                             }
                     }
                 }
@@ -58,6 +64,7 @@ struct WatchRootView: View {
 struct WatchListView: View {
     @EnvironmentObject private var model: WatchModel
     @Environment(\.colorScheme) private var scheme
+    @ObservedObject private var preferences = VoicePreferences.shared
 
     var body: some View {
         ScrollView {
@@ -134,6 +141,9 @@ struct WatchListView: View {
             }
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
+        }
+        .onChange(of: preferences.autoApproveTools) { _, enabled in
+            model.setAutoApprove(enabled)
         }
         .accessibilityIdentifier("session.list")
         .watchPage()
@@ -235,11 +245,16 @@ struct WatchRow: View {
                 .foregroundStyle(LojoTheme.readablePrimary(scheme))
                 .lineLimit(4)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(session.summary)
+            Text(ChatTranscript.lastMessage(summary: session.summary, transcript: session.transcript))
                 .font(.caption2)
                 .foregroundStyle(LojoTheme.readableSecondary(scheme))
                 .lineLimit(4)
                 .fixedSize(horizontal: false, vertical: true)
+            if let updated = session.updatedAt {
+                Text(updated, style: .relative)
+                    .font(.caption2)
+                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
+            }
         }
         .lojoCard(padding: 12)
         .accessibilityElement(children: .combine)

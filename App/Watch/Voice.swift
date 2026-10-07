@@ -30,6 +30,11 @@ final class VoicePreferences: ObservableObject {
         didSet { UserDefaults.standard.set(pauseSends, forKey: Keys.pauseSends) }
     }
 
+    /// Off until turned on. Tool prompts are allowed without a tap.
+    @Published var autoApproveTools: Bool {
+        didSet { UserDefaults.standard.set(autoApproveTools, forKey: Keys.autoApprove) }
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         autoSend = defaults.bool(forKey: Keys.autoSend)
@@ -39,12 +44,14 @@ final class VoicePreferences: ObservableObject {
         } else {
             pauseSends = defaults.bool(forKey: Keys.pauseSends)
         }
+        autoApproveTools = defaults.bool(forKey: Keys.autoApprove)
     }
 
     private enum Keys {
         static let autoSend = "watch.voice.autoSend"
         static let readAloud = "watch.voice.readAloud"
         static let pauseSends = "watch.voice.pauseSends"
+        static let autoApprove = "watch.voice.autoApprove"
     }
 }
 
@@ -175,6 +182,13 @@ struct VoicePreferenceToggles: View {
                     .font(.caption2)
             }
             .accessibilityHint("Speaks the latest finished result. Off until you turn it on.")
+
+            Toggle(isOn: $preferences.autoApproveTools) {
+                Text("Auto-approve tools")
+                    .font(.caption2)
+            }
+            .accessibilityIdentifier("settings.autoApprove")
+            .accessibilityHint("Allows tool calls without a tap. Off until you turn it on.")
         }
     }
 }
@@ -331,6 +345,18 @@ struct VoiceChatView: View {
                         .foregroundStyle(LojoTheme.readableSecondary(scheme))
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                Button("Chats") {
+                    model.voiceModeActive = false
+                }
+                .buttonStyle(QuietButtonStyle(compact: true))
+                .accessibilityIdentifier("chat.back")
+                .accessibilityLabel("Chats")
+                Button("End chat") {
+                    model.endChat()
+                }
+                .buttonStyle(QuietButtonStyle(compact: true))
+                .accessibilityIdentifier("chat.end")
+                .accessibilityLabel("End chat")
                 if model.pendingAllowSessionID != nil {
                     Button("Yes") {
                         model.confirmSpokenAllow()

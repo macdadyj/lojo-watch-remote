@@ -73,7 +73,7 @@ final class WatchScaffoldUITests: XCTestCase {
 
         let history = app.descendants(matching: .any)["voice.history"]
         XCTAssertTrue(history.waitForExistence(timeout: 8), "I'm done closed the chat")
-        XCTAssertFalse(list.exists, "I'm done left the conversation")
+        XCTAssertFalse(list.isHittable, "I'm done left the conversation")
         XCTAssertTrue(
             app.staticTexts["You: list sessions"].waitForExistence(timeout: 4),
             "I'm done did not send what was said"

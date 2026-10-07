@@ -163,6 +163,9 @@ struct ComputerView: View {
                 Text(store.snapshot.directReady ? "The Watch can connect on its own, or through this iPhone." : "The Watch uses this iPhone. A direct relay was not in the pairing QR.")
                     .font(.footnote)
                     .foregroundStyle(LojoTheme.secondaryText)
+                Button("Disconnect") { store.disconnectLink() }
+                    .buttonStyle(QuietButtonStyle())
+                    .accessibilityIdentifier("computer.disconnect")
             }
         }
         .lojoCard()

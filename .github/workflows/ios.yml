@@ -180,9 +180,51 @@ jobs:
           path: build/watch-ui-screenshots
           if-no-files-found: error
 
-  # Upload waits for the Watch UI tests. It still does not wait for the screenshot job.
+  # Phone taps. TestFlight waits for this job and for watch-ui. It still does not wait for screenshots.
+  phone-ui:
+    runs-on: macos-26
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          if [[ -d /Applications/Xcode_26.6.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.6.app
+          elif [[ -d /Applications/Xcode_26.app ]]; then
+            sudo xcode-select -s /Applications/Xcode_26.app
+          else
+            sudo xcode-select -s /Applications/Xcode.app
+          fi
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('project.yml', 'Core/Package.swift') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Phone chat UI tests
+        run: scripts/phone-ui-test.sh
+
+      - name: Upload phone UI screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: phone-ui-screenshots
+          path: build/phone-ui-screenshots
+          if-no-files-found: warn
+
+  # Upload waits for the Watch and phone UI tests. It still does not wait for the screenshot job.
   testflight:
-    needs: [watch-ui]
+    needs: [watch-ui, phone-ui]
     if: github.event_name != 'pull_request'
     # Runs queue one at a time: each one creates and revokes its own distribution certificate.
     concurrency:
