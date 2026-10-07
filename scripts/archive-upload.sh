@@ -115,6 +115,7 @@ PY
   [[ "$(compute_build_number "" 1)" == "101" ]] || { echo "self-test failed: build number without a run" >&2; exit 1; }
   echo "build number ok: run 1 -> 101, run 5 attempt 3 -> 105.3"
   python3 "${SCRIPT_DIR}/asc_signing.py" --self-test
+  python3 "${SCRIPT_DIR}/asc_testflight.py" --self-test
   python3 "${SCRIPT_DIR}/patch-watch-embed.py" --self-test
   exit 0
 fi
@@ -248,3 +249,6 @@ xcodebuild -exportArchive \
   -authenticationKeyID "${ASC_KEY_ID}" \
   -authenticationKeyIssuerID "${ASC_ISSUER_ID}"
 echo "Uploaded to App Store Connect."
+echo "Releasing build ${BUILD_NUMBER} to the internal TestFlight group."
+KEY_PATH="${KEY_PATH}" BUILD_NUMBER="${BUILD_NUMBER}" \
+  python3 "${SCRIPT_DIR}/asc_testflight.py" release --wait-seconds 900

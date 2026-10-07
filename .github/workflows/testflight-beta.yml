@@ -1,0 +1,24 @@
+name: TestFlight beta
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: Build number already uploaded to App Store Connect
+        required: true
+        default: "164"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Put the build in internal TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUILD_NUMBER: ${{ inputs.build }}
+        run: python3 scripts/asc_testflight.py release --build "${BUILD_NUMBER}" --wait-seconds 1500 --require-ready
