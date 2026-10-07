@@ -977,6 +977,10 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertTrue(ListenEndpoint.endsOnSilence(pauseSends: true))
         XCTAssertEqual(ListenEndpoint.title(pauseSends: false), "Action Button")
         XCTAssertEqual(ListenEndpoint.title(pauseSends: true), VoiceSpeechCopy.pauseSends)
+        XCTAssertEqual(ListenEndpoint.barLabel(pauseSends: false), "Action")
+        XCTAssertEqual(ListenEndpoint.barLabel(pauseSends: true), "Pause")
+        XCTAssertFalse(ListenEndpoint.barLabel(pauseSends: false).contains("…"))
+        XCTAssertLessThan(ListenEndpoint.barLabel(pauseSends: false).count, ListenEndpoint.manualTitle.count)
         XCTAssertTrue(ListenEndpoint.manualHint.contains("I'm done"))
 
         var manual = VoiceEndpointDetector()

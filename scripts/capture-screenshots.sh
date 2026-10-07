@@ -218,4 +218,5 @@ if [[ -n "${OTHER_WATCH}" ]]; then
   xcrun simctl pair "${OTHER_UDID}" "${PHONE_UDID}" || true
   xcrun simctl install "${OTHER_UDID}" "${WATCH}"
   shoot "${OTHER_UDID}" com.lojo.WatchRemote.watchkitapp sessions dark watch-sessions-other-size.png
+  shoot "${OTHER_UDID}" com.lojo.WatchRemote.watchkitapp voice-chat dark watch-voice-chat-other-size.png
 fi

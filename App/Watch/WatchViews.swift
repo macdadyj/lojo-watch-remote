@@ -33,9 +33,6 @@ struct WatchRootView: View {
                         VoiceConfirmView(transcript: VoicePreview.task, isPreview: true)
                     default:
                         WatchListView()
-                            .safeAreaInset(edge: .bottom, spacing: 2) {
-                                VoiceHomeBar()
-                            }
                             .navigationDestination(isPresented: Binding(
                                 get: { model.voiceModeActive && model.forcedScreen == nil },
                                 set: { model.voiceModeActive = $0 }
@@ -75,6 +72,22 @@ struct WatchListView: View {
     @ObservedObject private var preferences = VoicePreferences.shared
 
     var body: some View {
+        VStack(spacing: 0) {
+            sessionList
+            VoiceHomeBar()
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: preferences.autoApproveTools) { _, enabled in
+            model.setAutoApprove(enabled)
+        }
+        .watchPage()
+        .navigationTitle("Remote")
+        .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
+        .onAppear { model.refresh() }
+    }
+
+    private var sessionList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -150,16 +163,9 @@ struct WatchListView: View {
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
         }
-        .onChange(of: preferences.autoApproveTools) { _, enabled in
-            model.setAutoApprove(enabled)
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("session.list")
-        .watchPage()
         .contentMargins(.top, 10, for: .scrollContent)
-        .contentMargins(.bottom, 18, for: .scrollContent)
-        .navigationTitle("Remote")
-        .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
-        .onAppear { model.refresh() }
     }
 
     private var computerSwitcher: some View {

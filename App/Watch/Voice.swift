@@ -316,6 +316,18 @@ struct VoiceChatView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            historyList
+            VoiceConversationBar(showSpeak: showSpeakAgain || model.forcedScreen != nil)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .watchPage()
+        .navigationTitle(model.forcedScreen == "voice-loop" ? "Voice loop" : "Voice")
+        .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
+    }
+
+    private var historyList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 ListenTestHooks()
@@ -337,6 +349,7 @@ struct VoiceChatView: View {
                     .font(.footnote)
                     .foregroundStyle(LojoTheme.readablePrimary(scheme))
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("voice.line")
                     .accessibilityLabel("Spoken")
                     .accessibilityValue(model.voiceLine)
                 ForEach(Array(history.enumerated()), id: \.offset) { item in
@@ -344,6 +357,7 @@ struct VoiceChatView: View {
                         .font(.caption2)
                         .foregroundStyle(LojoTheme.readableSecondary(scheme))
                         .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("voice.line")
                 }
                 Button("Chats") {
                     model.voiceModeActive = false
@@ -413,14 +427,9 @@ struct VoiceChatView: View {
             .padding(.top, 8)
             .padding(.bottom, 8)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("voice.history")
-        .watchPage()
         .contentMargins(.top, 4, for: .scrollContent)
-        .safeAreaInset(edge: .bottom, spacing: 2) {
-            VoiceConversationBar(showSpeak: showSpeakAgain || model.forcedScreen != nil)
-        }
-        .navigationTitle(model.forcedScreen == "voice-loop" ? "Voice loop" : "Voice")
-        .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
     }
 }
 

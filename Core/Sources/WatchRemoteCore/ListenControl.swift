@@ -11,6 +11,8 @@ public enum ListenEndpointMode: String, Equatable, Sendable {
 
 public enum ListenEndpoint {
     public static let manualTitle = "Action Button"
+    public static let actionBarLabel = "Action"
+    public static let pauseBarLabel = "Pause"
     public static let doneTitle = "I'm done"
     public static let manualHint = "Listening. Action Button or I'm done sends."
     public static let waitingManual = "Waiting for the iPhone app. I'm done sends."
@@ -32,6 +34,11 @@ public enum ListenEndpoint {
             return VoiceSpeechCopy.pauseSends
         }
         return manualTitle
+    }
+
+    /// Short label for the bottom bar. The full title stays on the accessibility label.
+    public static func barLabel(pauseSends: Bool) -> String {
+        pauseSends ? pauseBarLabel : actionBarLabel
     }
 
     public static func waiting(pauseSends: Bool) -> String {

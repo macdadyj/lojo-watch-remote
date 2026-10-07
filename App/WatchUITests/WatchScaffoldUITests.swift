@@ -3,7 +3,12 @@ import XCTest
 /// Taps the home list, a past session, Speak, and I'm done on the watchOS simulator.
 /// The app is launched with `-WatchRemoteUITest`, so the microphone and the real host stay off.
 final class WatchScaffoldUITests: XCTestCase {
-    /// `DemoCatalog.idleID`. Kept here so this bundle does not link the app target's package twice.
+    /// `DemoCatalog` session ids. Kept here so this bundle does not link the app target's package twice.
+    private static let sessionRowIDs = [
+        "0199aaaa-0000-7000-8000-000000000001",
+        "0199aaaa-0000-7000-8000-000000000002",
+        "0199aaaa-0000-7000-8000-000000000003",
+    ]
     private static let idleSessionID = "0199aaaa-0000-7000-8000-000000000003"
 
     override func setUpWithError() throws {
@@ -21,6 +26,8 @@ final class WatchScaffoldUITests: XCTestCase {
             app.staticTexts["Test clip missing."].exists,
             "audio injection hook could not load pause-task"
         )
+        assertSpeakClearsLastVisible(Self.sessionRows(app), in: app)
+        assertActionHintFits(app)
         shot(app, "scaffold-home")
 
         var row = app.buttons["session.row.\(Self.idleSessionID)"]
@@ -46,6 +53,8 @@ final class WatchScaffoldUITests: XCTestCase {
         )
         let speak = app.buttons["voice.speak"]
         XCTAssertTrue(speak.waitForExistence(timeout: 8), "restored chat did not stay open")
+        assertSpeakClearsLastVisible(Self.transcriptLines(app), in: app)
+        assertActionHintFits(app)
         shot(app, "scaffold-restored")
         speak.tap()
 
@@ -88,7 +97,57 @@ final class WatchScaffoldUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [sent], timeout: 8), .completed, "I'm done did not show Sent")
         XCTAssertTrue(app.buttons["voice.speak"].waitForExistence(timeout: 4), "I'm done removed Speak")
+        assertSpeakClearsLastVisible(Self.transcriptLines(app), in: app)
         shot(app, "scaffold-done")
+    }
+
+    /// Speak sits under the scroll view. Its frame must not cross the lowest row or transcript line still on screen.
+    private func assertSpeakClearsLastVisible(
+        _ elements: [XCUIElement],
+        in app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let speak = app.buttons["voice.speak"]
+        XCTAssertTrue(speak.waitForExistence(timeout: 8), "Speak missing", file: file, line: line)
+        let visible = elements.filter { Self.onScreen($0, in: app) }
+        XCTAssertFalse(visible.isEmpty, "no visible row or transcript text", file: file, line: line)
+        guard let last = visible.max(by: { $0.frame.maxY < $1.frame.maxY }) else { return }
+        let overlap = speak.frame.intersection(last.frame)
+        XCTAssertFalse(
+            overlap.width > 1 && overlap.height > 1,
+            "Speak \(speak.frame) covers the last visible text \"\(last.label)\" \(last.frame)",
+            file: file,
+            line: line
+        )
+    }
+
+    private func assertActionHintFits(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        let action = app.buttons["voice.action"]
+        XCTAssertTrue(action.waitForExistence(timeout: 4), "Action Button control is missing", file: file, line: line)
+        XCTAssertFalse(action.label.contains("…"), "Action Button hint is truncated", file: file, line: line)
+        XCTAssertTrue(
+            app.frame.insetBy(dx: -2, dy: -2).contains(action.frame),
+            "Action Button hint is off the screen \(action.frame)",
+            file: file,
+            line: line
+        )
+    }
+
+    private static func sessionRows(_ app: XCUIApplication) -> [XCUIElement] {
+        sessionRowIDs.map { app.buttons["session.row.\($0)"] }
+    }
+
+    private static func transcriptLines(_ app: XCUIApplication) -> [XCUIElement] {
+        let query = app.staticTexts.matching(identifier: "voice.line")
+        let count = min(query.count, 12)
+        return (0..<count).map { query.element(boundBy: $0) }
+    }
+
+    private static func onScreen(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        guard element.exists else { return false }
+        let shown = element.frame.intersection(app.frame)
+        return shown.width > 2 && shown.height > 2
     }
 
     private func shot(_ app: XCUIApplication, _ name: String) {
