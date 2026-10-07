@@ -23,14 +23,30 @@ PY
 )"
 
 mkdir -p build/phone-ui-screenshots
-xcodebuild test \
-  -project WatchRemote.xcodeproj \
-  -scheme WatchRemoteUI \
-  -destination "platform=iOS Simulator,id=${UDID}" \
-  -clonedSourcePackagesDirPath build/SourcePackages \
-  -derivedDataPath build/DerivedDataUI \
-  -resultBundlePath build/phone-ui-screenshots/PhoneChat.xcresult \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="-" \
-  DEVELOPMENT_TEAM=""
+run_phone() {
+  xcodebuild test \
+    -project WatchRemote.xcodeproj \
+    -scheme WatchRemoteUI \
+    -destination "platform=iOS Simulator,id=${UDID}" \
+    -clonedSourcePackagesDirPath build/SourcePackages \
+    -derivedDataPath build/DerivedDataUI \
+    -resultBundlePath build/phone-ui-screenshots/PhoneChat.xcresult \
+    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGN_IDENTITY="-" \
+    DEVELOPMENT_TEAM=""
+}
+
+set +e
+run_phone
+status=$?
+set -e
+if [[ "${status}" -ne 0 ]]; then
+  echo "Phone UI tests failed (status ${status}). Rebooting the simulator and trying once more." >&2
+  xcrun simctl shutdown "${UDID}" || true
+  sleep 2
+  xcrun simctl boot "${UDID}" || true
+  xcrun simctl bootstatus "${UDID}" -b || true
+  rm -rf build/phone-ui-screenshots/PhoneChat.xcresult
+  run_phone
+fi

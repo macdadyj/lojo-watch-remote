@@ -15,7 +15,7 @@ final class WatchScaffoldUITests: XCTestCase {
         app.launchArguments = ["-WatchRemoteUITest", "-WatchRemoteInjectClip", "pause-task"]
         app.launch()
 
-        let list = app.descendants(matching: .any)["session.list"]
+        let list = app.scrollViews["session.list"]
         XCTAssertTrue(list.waitForExistence(timeout: 40), "home session list did not appear")
         XCTAssertFalse(
             app.staticTexts["Test clip missing."].exists,
@@ -23,14 +23,14 @@ final class WatchScaffoldUITests: XCTestCase {
         )
         shot(app, "scaffold-home")
 
-        var row = app.descendants(matching: .any)["session.row.\(Self.idleSessionID)"]
+        var row = app.buttons["session.row.\(Self.idleSessionID)"]
         if !row.waitForExistence(timeout: 4) {
             app.swipeUp()
         }
         XCTAssertTrue(row.waitForExistence(timeout: 8), "idle session row missing")
         row.tap()
 
-        let restored = app.descendants(matching: .any)["voice.history"]
+        let restored = app.scrollViews["voice.history"]
         XCTAssertTrue(restored.waitForExistence(timeout: 8), "tapping a past chat did not reopen it")
         XCTAssertTrue(
             app.staticTexts["Note the overlay route"].waitForExistence(timeout: 4),
@@ -49,7 +49,7 @@ final class WatchScaffoldUITests: XCTestCase {
         shot(app, "scaffold-restored")
         speak.tap()
 
-        let status = app.descendants(matching: .any)["voice.status"]
+        let status = app.staticTexts["voice.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 8), "listening state did not appear")
         let listening = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value CONTAINS %@ OR label CONTAINS %@", "Listening", "Listening"),
@@ -71,7 +71,7 @@ final class WatchScaffoldUITests: XCTestCase {
         XCTAssertEqual(done.label, "I'm done")
         done.tap()
 
-        let history = app.descendants(matching: .any)["voice.history"]
+        let history = app.scrollViews["voice.history"]
         XCTAssertTrue(history.waitForExistence(timeout: 8), "I'm done closed the chat")
         XCTAssertFalse(list.isHittable, "I'm done left the conversation")
         XCTAssertTrue(

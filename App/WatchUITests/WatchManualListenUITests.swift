@@ -18,8 +18,8 @@ final class WatchManualListenUITests: XCTestCase {
         let status = try status(app)
         XCTAssertEqual(try waitValue(status, "Listening"), .completed, "Action Button did not start listening")
         app.buttons["voice.action"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["voice.history"].waitForExistence(timeout: 8), "Action Button closed the chat")
-        XCTAssertFalse(app.descendants(matching: .any)["session.list"].isHittable, "Action Button left the conversation")
+        XCTAssertTrue(app.scrollViews["voice.history"].waitForExistence(timeout: 8), "Action Button closed the chat")
+        XCTAssertFalse(app.scrollViews["session.list"].isHittable, "Action Button left the conversation")
         XCTAssertTrue(app.staticTexts["You: list sessions"].waitForExistence(timeout: 8), "Action Button did not send")
         XCTAssertTrue(app.staticTexts["Note the overlay route"].exists, "Action Button cleared the restored chat")
         XCTAssertEqual(try waitValue(status, "Sent"), .completed)
@@ -59,7 +59,7 @@ final class WatchManualListenUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Reconnecting…"].exists, "wrist down showed a failure banner")
         XCTAssertTrue(app.staticTexts["Note the overlay route"].exists, "wrist down cleared the chat")
         XCTAssertTrue(app.staticTexts["The computer is reachable only on the private overlay."].exists)
-        XCTAssertTrue(app.descendants(matching: .any)["voice.history"].exists)
+        XCTAssertTrue(app.scrollViews["voice.history"].exists)
         shot(app, "manual-wrist-down")
         app.buttons["voice.wrist"].tap()
         XCTAssertEqual(try waitValue(status, "Listening"), .completed, "wrist up did not resume listening")
@@ -79,7 +79,7 @@ final class WatchManualListenUITests: XCTestCase {
         )
         XCTAssertTrue(app.staticTexts["Heard list sessions"].waitForExistence(timeout: 4))
         XCTAssertTrue(app.staticTexts["Note the overlay route"].exists, "the duration cap closed the chat")
-        XCTAssertFalse(app.descendants(matching: .any)["session.list"].isHittable)
+        XCTAssertFalse(app.scrollViews["session.list"].isHittable)
         XCTAssertTrue(app.buttons["voice.speak"].waitForExistence(timeout: 4))
         XCTAssertFalse(app.staticTexts[Self.pairingRejected].exists)
         shot(app, "manual-cap")
@@ -111,19 +111,19 @@ final class WatchManualListenUITests: XCTestCase {
     }
 
     private func openIdle(_ app: XCUIApplication) {
-        let list = app.descendants(matching: .any)["session.list"]
+        let list = app.scrollViews["session.list"]
         XCTAssertTrue(list.waitForExistence(timeout: 40), "home session list did not appear")
-        var row = app.descendants(matching: .any)["session.row.\(Self.idleSessionID)"]
+        var row = app.buttons["session.row.\(Self.idleSessionID)"]
         if !row.waitForExistence(timeout: 4) {
             app.swipeUp()
         }
         XCTAssertTrue(row.waitForExistence(timeout: 8), "idle session row missing")
         row.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["voice.history"].waitForExistence(timeout: 8), "the chat did not open")
+        XCTAssertTrue(app.scrollViews["voice.history"].waitForExistence(timeout: 8), "the chat did not open")
     }
 
     private func status(_ app: XCUIApplication) throws -> XCUIElement {
-        let status = app.descendants(matching: .any)["voice.status"]
+        let status = app.staticTexts["voice.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 8), "voice status did not appear")
         return status
     }

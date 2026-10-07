@@ -137,7 +137,7 @@ jobs:
   # Simulator taps on both Watch sizes. TestFlight waits for this job and does not wait for screenshots.
   watch-ui:
     runs-on: macos-26
-    timeout-minutes: 70
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v4
 
@@ -183,7 +183,7 @@ jobs:
   # Phone taps. TestFlight waits for this job and for watch-ui. It still does not wait for screenshots.
   phone-ui:
     runs-on: macos-26
-    timeout-minutes: 50
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
 

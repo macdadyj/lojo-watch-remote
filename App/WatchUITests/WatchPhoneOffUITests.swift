@@ -14,7 +14,7 @@ final class WatchPhoneOffUITests: XCTestCase {
     /// a. Home stays on screen, the path is direct, and the Action Button control is the default.
     func testAPhoneOffHomeShowsDirectAndPauseToSend() throws {
         let app = launch()
-        let list = app.descendants(matching: .any)["session.list"]
+        let list = app.scrollViews["session.list"]
         XCTAssertTrue(list.waitForExistence(timeout: 40), "home session list did not appear")
         XCTAssertTrue(app.staticTexts["Path direct"].waitForExistence(timeout: 4), "phone-off home did not show the direct path")
         let action = app.buttons["voice.action"]
@@ -55,7 +55,7 @@ final class WatchPhoneOffUITests: XCTestCase {
         let status = try status(app)
         XCTAssertEqual(try waitValue(status, "Listening"), .completed)
         app.buttons["voice.done"].tap()
-        XCTAssertTrue(app.descendants(matching: .any)["voice.history"].waitForExistence(timeout: 8), "I'm done closed the chat")
+        XCTAssertTrue(app.scrollViews["voice.history"].waitForExistence(timeout: 8), "I'm done closed the chat")
         XCTAssertTrue(app.staticTexts["You: list sessions"].waitForExistence(timeout: 4), "the utterance was not sent")
         XCTAssertTrue(app.staticTexts["Heard list sessions"].waitForExistence(timeout: 4), "the mock computer did not answer")
         XCTAssertTrue(app.staticTexts["Note the overlay route"].exists)
@@ -153,19 +153,19 @@ final class WatchPhoneOffUITests: XCTestCase {
     }
 
     private func openRow(_ app: XCUIApplication, _ identifier: String) {
-        let list = app.descendants(matching: .any)["session.list"]
+        let list = app.scrollViews["session.list"]
         XCTAssertTrue(list.waitForExistence(timeout: 40), "home session list did not appear")
-        var row = app.descendants(matching: .any)["session.row.\(identifier)"]
+        var row = app.buttons["session.row.\(identifier)"]
         if !row.waitForExistence(timeout: 4) {
             app.swipeUp()
         }
         XCTAssertTrue(row.waitForExistence(timeout: 8), "session row \(identifier) missing")
         row.tap()
-        XCTAssertTrue(app.descendants(matching: .any)["voice.history"].waitForExistence(timeout: 8), "the chat did not open")
+        XCTAssertTrue(app.scrollViews["voice.history"].waitForExistence(timeout: 8), "the chat did not open")
     }
 
     private func status(_ app: XCUIApplication) throws -> XCUIElement {
-        let status = app.descendants(matching: .any)["voice.status"]
+        let status = app.staticTexts["voice.status"]
         XCTAssertTrue(status.waitForExistence(timeout: 8), "voice status did not appear")
         return status
     }
