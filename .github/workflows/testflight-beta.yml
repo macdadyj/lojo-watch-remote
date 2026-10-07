@@ -1,6 +1,9 @@
 name: TestFlight beta
 
 on:
+  push:
+    branches:
+      - cursor/release-build-164-b6b5
   workflow_dispatch:
     inputs:
       build:
@@ -20,5 +23,5 @@ jobs:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-          BUILD_NUMBER: ${{ inputs.build }}
+          BUILD_NUMBER: ${{ github.event.inputs.build || '164' }}
         run: python3 scripts/asc_testflight.py release --build "${BUILD_NUMBER}" --wait-seconds 1500 --require-ready
