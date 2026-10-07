@@ -293,9 +293,10 @@ struct ChatThreadView: View {
     private var composer: some View {
         HStack(alignment: .bottom, spacing: 10) {
             TextField("Message", text: $draft, axis: .vertical)
-                .lineLimit(1...6)
+                .lineLimit(1...6, reservesSpace: true)
                 .textFieldStyle(.plain)
                 .padding(12)
+                .frame(minHeight: 48, alignment: .topLeading)
                 .background(
                     RoundedRectangle(cornerRadius: 22, style: .continuous)
                         .fill(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05))

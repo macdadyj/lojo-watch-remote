@@ -108,14 +108,25 @@ final class PhoneChatUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 6), "composer missing")
         field.tap()
         field.typeText(text)
-        app.buttons["chat.send"].tap()
+        let send = app.buttons["chat.send"]
+        let enabled = NSPredicate(format: "isEnabled == true")
+        XCTAssertEqual(XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: enabled, object: send)], timeout: 4), .completed)
+        if !send.isHittable {
+            app.swipeUp()
+        }
+        send.tap()
     }
 
     private func composer(_ app: XCUIApplication, identifier: String) -> XCUIElement {
+        let any = app.descendants(matching: .any)[identifier]
+        if any.waitForExistence(timeout: 2) { return any }
         let field = app.textFields[identifier]
+        if field.exists { return field }
         let view = app.textViews[identifier]
-        if field.waitForExistence(timeout: 2) { return field }
-        return view
+        if view.exists { return view }
+        let placeholder = app.textViews["Message"]
+        if placeholder.exists { return placeholder }
+        return app.textFields["Message"]
     }
 
     private func shot(_ app: XCUIApplication, _ name: String) {
