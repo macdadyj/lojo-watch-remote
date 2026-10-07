@@ -174,10 +174,20 @@ def assign_build(token, group_id, build_id):
     return "added"
 
 
-def group_has_tester(token, group_id):
-    status, body = signing.api(token, "GET", f"/v1/betaGroups/{group_id}/betaTesters?limit=5")
+def tester_count(token, group_id):
+    query = urllib.parse.urlencode({"limit": "20", "fields[betaTesters]": "state"})
+    status, body = signing.api(token, "GET", f"/v1/betaGroups/{group_id}/betaTesters?{query}")
+    if status == 403:
+        return None
     data = parsed(status, body, "group testers")
-    return bool(data.get("data"))
+    return len(data.get("data") or [])
+
+
+def group_has_tester(token, group_id):
+    count = tester_count(token, group_id)
+    if count is None:
+        return False
+    return count > 0
 
 
 def link_internal_testers(token, group_id):
@@ -243,13 +253,25 @@ def report_found(version, attributes, detail, group_names):
 
 def membership_before_change(token, groups, build_id):
     names = []
+    unreadable = False
     for group in groups:
         name = (group.get("attributes") or {}).get("name") or "internal"
         contained = group_contains_build(token, group["id"], build_id)
+        count = tester_count(token, group["id"])
+        count_text = "unknown" if count is None else str(count)
         if contained is None:
-            return None
+            unreadable = True
+            show(f"internalGroup {name} containsBuild=unknown testers={count_text}")
+            continue
+        show(
+            f"internalGroup {name} containsBuild="
+            + ("true" if contained else "false")
+            + f" testers={count_text}"
+        )
         if contained:
             names.append(name)
+    if unreadable:
+        return None
     return names
 
 
@@ -450,8 +472,9 @@ def self_test():
             state["assigned"].add("GROUP")
             state["internal"] = "IN_BETA_TESTING"
             return 204, ""
-        if path == "/v1/betaGroups/GROUP/betaTesters?limit=5":
-            return 200, json.dumps({"data": [{"id": "T"}] if state["testers"] else []})
+        if path.startswith("/v1/betaGroups/GROUP/betaTesters"):
+            testers = [{"id": "T", "attributes": {"state": "ACTIVE"}}] if state["testers"] else []
+            return 200, json.dumps({"data": testers})
         if path.startswith("/v1/users"):
             state["users_listed"] += 1
             return 200, json.dumps({
