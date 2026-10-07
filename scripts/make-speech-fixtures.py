@@ -78,13 +78,25 @@ def say_clip(phrase: str, trailing: float, path: Path) -> bool:
             raw = handle.readframes(handle.getnframes())
         samples = list(struct.unpack("<" + "h" * (len(raw) // 2), raw))
         samples.extend(silence(trailing))
-        write_pcm(path, samples)
-        return True
+        # A Mac without a speech voice can make `say` exit 0 and write almost no audio.
+        # Leave the clip for the tone fallback instead of failing the Watch UI job.
+        if long_enough(path.stem, trailing, len(samples)):
+            write_pcm(path, samples)
+            return True
+        return False
     except (subprocess.CalledProcessError, wave.Error, struct.error):
         return False
     finally:
         aiff.unlink(missing_ok=True)
         spoken.unlink(missing_ok=True)
+
+
+def long_enough(name: str, trailing: float, frames: int) -> str:
+    if frames < RATE // 4:
+        return f"{name}.wav is too short"
+    if name == "pause-task" and frames < int(RATE * (0.4 + trailing)):
+        return f"{name}.wav is missing trailing silence"
+    return ""
 
 
 def check() -> int:
@@ -99,10 +111,9 @@ def check() -> int:
                 failures.append(f"{path.name} is not 16 kHz mono pcm")
                 continue
             frames = handle.getnframes()
-        if frames < RATE // 4:
-            failures.append(f"{path.name} is too short")
-        if name == "pause-task" and frames < int(RATE * (0.4 + trailing)):
-            failures.append(f"{path.name} is missing trailing silence")
+        problem = long_enough(name, trailing, frames)
+        if problem:
+            failures.append(problem)
     if failures:
         print("speech fixtures failed:", file=sys.stderr)
         print("\n".join(failures), file=sys.stderr)
