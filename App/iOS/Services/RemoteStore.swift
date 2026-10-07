@@ -941,7 +941,7 @@ final class RemoteStore: ObservableObject {
         publish()
     }
 
-    private func continueRelay(_ sessionID: String, prompt: String) async {
+    private func continueRelay(sessionID: String, prompt: String) async {
         let history = sessions.first(where: { $0.id == sessionID })?.transcript ?? []
         do {
             let session = try await relay.prompt(
