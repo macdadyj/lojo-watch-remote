@@ -134,10 +134,31 @@ def ensure_internal_group(token, app_id):
     return [data["data"]], True
 
 
-def build_group_ids(token, build_id):
-    status, body = signing.api(token, "GET", f"/v1/builds/{build_id}/betaGroups?limit=50")
-    data = parsed(status, body, "build groups")
-    return {item["id"] for item in data.get("data", [])}
+def group_contains_build(token, group_id, build_id):
+    """True, False, or None when this key cannot read the relationship.
+
+    The CI key may create and delete a build's betaGroups link, and still
+    reject GET /v1/builds/{id}/betaGroups. Listing builds from the group is
+    the read that role allows. None means the caller should assign and use
+    the write response to learn whether the build was already a member.
+    """
+    query = urllib.parse.urlencode({"limit": "200", "fields[builds]": "version"})
+    path = f"/v1/betaGroups/{group_id}/builds?{query}"
+    root = signing.API_ROOT
+    for _page in range(5):
+        status, body = signing.api(token, "GET", path)
+        if status == 403:
+            return None
+        data = parsed(status, body, "group builds")
+        for item in data.get("data", []):
+            if item.get("id") == build_id:
+                return True
+        next_link = ((data.get("links") or {}).get("next")) or ""
+        if next_link.startswith(root):
+            path = next_link[len(root):]
+            continue
+        return False
+    return False
 
 
 def assign_build(token, group_id, build_id):
@@ -145,10 +166,12 @@ def assign_build(token, group_id, build_id):
     status, body = signing.api(
         token, "POST", f"/v1/betaGroups/{group_id}/relationships/builds", payload
     )
-    if status in (204, 200, 409):
-        return status != 409
+    if status in (204, 200):
+        return "added"
+    if status == 409:
+        return "already"
     parsed(status, body, "assign build")
-    return True
+    return "added"
 
 
 def group_has_tester(token, group_id):
@@ -206,13 +229,48 @@ def report_found(version, attributes, detail, group_names):
     show(f"found build {version}")
     show("processingState=" + value_text(attributes.get("processingState")))
     show("usesNonExemptEncryption=" + value_text(attributes.get("usesNonExemptEncryption")))
+    show("uploadedDate=" + value_text(attributes.get("uploadedDate")))
     show("expired=" + value_text(attributes.get("expired")))
     show("internalBuildState=" + value_text(detail.get("internalBuildState")))
     show("externalBuildState=" + value_text(detail.get("externalBuildState")))
-    if group_names:
+    if group_names is None:
+        show("internalGroups=unreadable")
+    elif group_names:
         show("internalGroups=" + ",".join(group_names))
     else:
         show("internalGroups=none")
+
+
+def membership_before_change(token, groups, build_id):
+    names = []
+    for group in groups:
+        name = (group.get("attributes") or {}).get("name") or "internal"
+        contained = group_contains_build(token, group["id"], build_id)
+        if contained is None:
+            return None
+        if contained:
+            names.append(name)
+    return names
+
+
+def ensure_group_membership(token, groups, build_id, changes):
+    for group in groups:
+        name = (group.get("attributes") or {}).get("name") or "internal"
+        contained = group_contains_build(token, group["id"], build_id)
+        if contained is True:
+            line = f"build already in internal group {name}"
+            if line not in changes:
+                changes.append(line)
+                show(line)
+            continue
+        result = assign_build(token, group["id"], build_id)
+        if result == "already":
+            line = f"build already in internal group {name}"
+        else:
+            line = f"added build to internal group {name}"
+        if line not in changes:
+            changes.append(line)
+            show(line)
 
 
 def release(version, wait_seconds, require_ready):
@@ -233,13 +291,7 @@ def release(version, wait_seconds, require_ready):
     if not detail:
         detail = refresh_detail(token, build_id)
     groups, created = ensure_internal_group(token, app_id)
-    assigned = build_group_ids(token, build_id)
-    names = []
-    for group in groups:
-        name = (group.get("attributes") or {}).get("name") or "internal"
-        if group["id"] in assigned:
-            names.append(name)
-    report_found(version, attributes, detail, names)
+    report_found(version, attributes, detail, membership_before_change(token, groups, build_id))
     if created:
         show("created internal group Internal")
 
@@ -260,14 +312,9 @@ def release(version, wait_seconds, require_ready):
                 changes.append("set usesNonExemptEncryption=false")
                 show("set usesNonExemptEncryption=false")
         groups, _created = ensure_internal_group(token, app_id)
-        assigned = build_group_ids(token, build_id)
+        ensure_group_membership(token, groups, build_id, changes)
         for group in groups:
             name = (group.get("attributes") or {}).get("name") or "internal"
-            if group["id"] not in assigned:
-                added = assign_build(token, group["id"], build_id)
-                if added:
-                    changes.append(f"added build to internal group {name}")
-                    show(f"added build to internal group {name}")
             linked = link_internal_testers(token, group["id"])
             if linked:
                 line = f"linked {linked} internal testers to {name}"
@@ -376,10 +423,23 @@ def self_test():
                 "attributes": {"name": "Internal", "isInternalGroup": True},
             }]
             return 201, json.dumps({"data": state["groups"][0]})
-        if path == "/v1/builds/BUILD/betaGroups?limit=50":
+        if "/builds/BUILD/betaGroups" in path:
+            state["used_forbidden_read"] = True
+            return 403, json.dumps({
+                "errors": [{
+                    "status": "403",
+                    "code": "FORBIDDEN_ERROR",
+                    "detail": "The relationship 'betaGroups' does not allow 'GET_RELATED'.",
+                }]
+            })
+        if path.startswith("/v1/betaGroups/GROUP/builds"):
+            if state.get("hide_group_builds"):
+                return 403, json.dumps({
+                    "errors": [{"status": "403", "code": "FORBIDDEN_ERROR", "detail": "GET_RELATED"}]
+                })
             data = []
             if "GROUP" in state["assigned"]:
-                data.append({"type": "betaGroups", "id": "GROUP", "attributes": {"name": "Internal"}})
+                data.append({"type": "builds", "id": "BUILD", "attributes": {"version": "164"}})
             return 200, json.dumps({"data": data})
         if path == "/v1/builds/BUILD" and method == "PATCH":
             state["encryption"] = False
@@ -424,16 +484,34 @@ def self_test():
     sys.stdout = captured = __import__("io").StringIO()
     try:
         release("164", wait_seconds=60, require_ready=True)
+        text = captured.getvalue()
+        captured.seek(0)
+        captured.truncate(0)
+        state["encryption"] = None
+        state["processing"] = "PROCESSING"
+        state["internal"] = "MISSING_EXPORT_COMPLIANCE"
+        state["groups"] = [{
+            "type": "betaGroups",
+            "id": "GROUP",
+            "attributes": {"name": "Internal", "isInternalGroup": True},
+        }]
+        state["assigned"] = set()
+        state["testers"] = {"USER"}
+        state["ticks"] = 0
+        state["hide_group_builds"] = True
+        state["used_forbidden_read"] = False
+        release("164", wait_seconds=60, require_ready=True)
+        hidden = captured.getvalue()
     finally:
         sys.stdout = held
         signing.api = real_api
         signing.jwt_from_env = real_jwt
         time.sleep = real_sleep
-    text = captured.getvalue()
     required = (
         "found build 164",
         "processingState=PROCESSING",
         "usesNonExemptEncryption=null",
+        "uploadedDate=2026-10-07T22:55:25Z",
         "internalBuildState=MISSING_EXPORT_COMPLIANCE",
         "internalGroups=none",
         "created internal group Internal",
@@ -450,6 +528,18 @@ def self_test():
         raise SystemExit("self-test printed a tester address")
     if state["encryption"] is not False or "GROUP" not in state["assigned"]:
         raise SystemExit("self-test did not update compliance and the group")
+    if state.get("used_forbidden_read"):
+        raise SystemExit("self-test read a build's betaGroups relationship")
+    for line in (
+        "internalGroups=unreadable",
+        "added build to internal group Internal",
+        "final processingState=VALID",
+        "final internalBuildState=IN_BETA_TESTING",
+    ):
+        if line not in hidden:
+            raise SystemExit("self-test missing after unreadable groups: " + line)
+    if "owner@example.com" in hidden:
+        raise SystemExit("self-test printed a tester address")
     show("asc testflight: ok")
 
 
