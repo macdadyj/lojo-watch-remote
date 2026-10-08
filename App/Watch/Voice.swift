@@ -403,6 +403,7 @@ struct VoiceChatView: View {
             }
             .accessibilityIdentifier("voice.history")
             .contentMargins(.top, 4, for: .scrollContent)
+            .contentMargins(.bottom, 0, for: .scrollContent)
             .onChange(of: tailToken) { _, _ in
                 guard followLatest else { return }
                 pin(proxy)
