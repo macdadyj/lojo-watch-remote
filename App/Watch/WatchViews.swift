@@ -88,32 +88,33 @@ struct WatchListView: View {
 
     private var sessionList: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                // One short header so the first chat sits inside the scroll view, above Speak.
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .top, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                // Host, link, and path stay short so two chats fit above the mic.
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
                         StatusMark(status: headerMark, size: 10)
-                            .padding(.top, 3)
                         Text(model.snapshot.hostLabel)
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(LojoTheme.readablePrimary(scheme))
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(headerTitle)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(headerTitle)
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        if model.snapshot.mode == .demo { DemoBadge(compact: true) }
+                    }
+                    if model.pathTitle != headerTitle {
                         Text(model.pathTitle)
                             .font(.caption.weight(.bold))
                             .foregroundStyle(model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readablePrimary(scheme))
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityLabel("Path \(model.pathTitle)")
-                        Spacer(minLength: 4)
-                        if model.snapshot.mode == .demo { DemoBadge(compact: true) }
                     }
                     if model.snapshot.computers.count > 1 {
                         computerSwitcher
@@ -126,7 +127,6 @@ struct WatchListView: View {
                     }
                 }
                 .accessibilityElement(children: .contain)
-                .padding(.top, 2)
                 if let banner = model.banner ?? model.snapshot.banner {
                     Text(banner)
                         .font(.caption2)
@@ -168,12 +168,12 @@ struct WatchListView: View {
                 .accessibilityLabel("New task")
                 VoicePreferenceToggles()
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 6)
+            .padding(.bottom, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("session.list")
-        .contentMargins(.top, 2, for: .scrollContent)
+        .contentMargins(.top, 0, for: .scrollContent)
     }
 
     private var computerSwitcher: some View {
@@ -254,7 +254,7 @@ struct WatchRow: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 1) {
             if session.status == .needsApproval || session.status == .failed {
                 HStack(spacing: 4) {
                     StatusMark(status: session.status, size: 10)
@@ -275,7 +275,7 @@ struct WatchRow: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .lojoCard(padding: 6)
+        .lojoCard(padding: 4)
         .accessibilityElement(children: .combine)
     }
 }
