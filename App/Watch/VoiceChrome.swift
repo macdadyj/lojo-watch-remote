@@ -2,8 +2,8 @@ import SwiftUI
 import WatchRemoteCore
 
 private enum SpeakBarSlot {
-    /// The 44pt control plus a two-line hint, so neither covers the scroll view.
-    static let height = VoiceChromeMetrics.maxSpeakBarHeight + 36
+    /// One slim row. The height cap keeps the mic from covering the transcript.
+    static let height = min(40, VoiceChromeMetrics.maxSpeakBarHeight)
 }
 
 /// Scroll content on top, the speak row in a fixed slot underneath.
@@ -21,7 +21,7 @@ struct SpeakBarPage<Content: View, Bar: View>: View {
                     )
                     .clipped()
                 bar()
-                    .frame(width: proxy.size.width, height: SpeakBarSlot.height, alignment: .bottom)
+                    .frame(width: proxy.size.width, height: SpeakBarSlot.height, alignment: .center)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
@@ -34,17 +34,9 @@ struct VoiceHomeBar: View {
 
     var body: some View {
         SpeakChromeBar {
-            Button {
+            SpeakMicButton(hint: "Starts listening. I'm done or the Action Button sends. A pause sends only when Pause sends is on.") {
                 model.beginHandsFreeVoice()
-            } label: {
-                SpeakChromeLabel()
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .accessibilityIdentifier("voice.speak")
-            .accessibilityLabel("Voice conversation")
-            .accessibilityHint("Starts listening. I'm done or the Action Button sends. A pause sends only when Pause sends is on.")
-            .modifier(PrimaryHandGesture())
         }
     }
 }
@@ -56,16 +48,9 @@ struct VoiceConversationBar: View {
     var body: some View {
         SpeakChromeBar {
             if showSpeak {
-                Button {
+                SpeakMicButton(hint: "Starts listening. I'm done or the Action Button sends.") {
                     model.continueListening()
-                } label: {
-                    SpeakChromeLabel()
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .accessibilityIdentifier("voice.speak")
-                .accessibilityHint("Starts listening. I'm done or the Action Button sends.")
-                .modifier(PrimaryHandGesture())
             } else {
                 Button {
                     model.stopTalking()
@@ -86,41 +71,65 @@ struct VoiceConversationBar: View {
     }
 }
 
-private struct SpeakChromeLabel: View {
+private struct SpeakMicButton: View {
+    var hint: String
+    var action: () -> Void
+
     var body: some View {
-        Label("Speak", systemImage: "mic.fill")
-            .font(.footnote.weight(.semibold))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
+        Button(action: action) {
+            Image(systemName: "mic.fill")
+                .font(.footnote.weight(.bold))
+                .foregroundStyle(Color.white)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(LojoTheme.accent))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("voice.speak")
+        .accessibilityLabel("Voice conversation")
+        .accessibilityHint(hint)
+        .modifier(PrimaryHandGesture())
     }
 }
 
-private struct SpeakChromeBar<Leading: View>: View {
+private struct SpeakChromeBar<Control: View>: View {
     @Environment(\.colorScheme) private var scheme
     @EnvironmentObject private var model: WatchModel
-    @ViewBuilder var leading: () -> Leading
+    @ObservedObject private var preferences = VoicePreferences.shared
+    @ViewBuilder var control: () -> Control
 
     var body: some View {
-        VStack(spacing: 2) {
-            Button {
-                model.toggleFromActionButton()
-            } label: {
+        HStack(alignment: .center, spacing: 6) {
+            actionControl
+            if preferences.actionHintSeen {
+                Spacer(minLength: 4)
+            }
+            control()
+        }
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(scheme == .dark ? Color.black : Color(red: 0.95, green: 0.95, blue: 0.96))
+    }
+
+    private var actionControl: some View {
+        Button {
+            model.toggleFromActionButton()
+        } label: {
+            if preferences.actionHintSeen {
+                Image(systemName: "button.programmable")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 22, height: 22)
+            } else {
                 Text("Press the Action Button to talk")
                     .font(.caption2)
                     .lineLimit(2)
+                    .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("voice.action")
-            .accessibilityLabel(ListenEndpoint.manualTitle)
-            leading()
         }
-        .padding(.horizontal, 8)
-        .padding(.bottom, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .background(scheme == .dark ? Color.black : Color(red: 0.95, green: 0.95, blue: 0.96))
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("voice.action")
+        .accessibilityLabel(ListenEndpoint.manualTitle)
     }
 }
 

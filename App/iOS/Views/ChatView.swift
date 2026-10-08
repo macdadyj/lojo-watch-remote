@@ -555,16 +555,30 @@ struct ChatBlockRow: View {
         }
     }
 
+    @ViewBuilder
     private func bubble(_ text: String, mine: Bool) -> some View {
+        if mine {
+            HStack(alignment: .bottom, spacing: 0) {
+                Spacer(minLength: 64)
+                messageText(text, mine: true)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(LojoTheme.accent)
+                    )
+            }
+        } else {
+            messageText(text, mine: false)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func messageText(_ text: String, mine: Bool) -> some View {
         Text(markdown(text))
             .font(.body)
             .foregroundStyle(mine ? Color.white : Color.primary)
-            .padding(12)
-            .background(
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(mine ? LojoTheme.accent : (scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05)))
-            )
-            .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+            .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier(latest ? "chat.latest" : (oldest ? "chat.oldest" : "chat.line"))
     }
 

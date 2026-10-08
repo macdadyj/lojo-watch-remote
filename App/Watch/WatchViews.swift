@@ -91,25 +91,29 @@ struct WatchListView: View {
             VStack(alignment: .leading, spacing: 6) {
                 // One short header so the first chat sits inside the scroll view, above Speak.
                 VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 4) {
+                    HStack(alignment: .top, spacing: 4) {
                         StatusMark(status: headerMark, size: 10)
+                            .padding(.top, 3)
                         Text(model.snapshot.hostLabel)
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                            .lineLimit(1)
-                        Spacer(minLength: 4)
-                        if model.snapshot.mode == .demo { DemoBadge(compact: true) }
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    Text(headerTitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 4) {
-                        Text(headerTitle)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                            .lineLimit(1)
                         Text(model.pathTitle)
                             .font(.caption.weight(.bold))
                             .foregroundStyle(model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readablePrimary(scheme))
-                            .lineLimit(1)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                             .accessibilityLabel("Path \(model.pathTitle)")
+                        Spacer(minLength: 4)
+                        if model.snapshot.mode == .demo { DemoBadge(compact: true) }
                     }
                     if model.snapshot.computers.count > 1 {
                         computerSwitcher
@@ -263,11 +267,13 @@ struct WatchRow: View {
             Text(session.title)
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                .lineLimit(1)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             Text(ChatTranscript.lastMessage(summary: session.summary, transcript: session.transcript))
                 .font(.footnote)
                 .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                .lineLimit(1)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .lojoCard(padding: 6)
         .accessibilityElement(children: .combine)

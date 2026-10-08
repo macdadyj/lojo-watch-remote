@@ -20,6 +20,7 @@ extension WatchModel {
             stopTalking()
             return
         }
+        VoicePreferences.shared.noteActionHintUsed()
         beginHandsFreeVoice()
     }
 

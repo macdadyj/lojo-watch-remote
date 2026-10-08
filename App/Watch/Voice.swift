@@ -35,6 +35,16 @@ final class VoicePreferences: ObservableObject {
         didSet { UserDefaults.standard.set(autoApproveTools, forKey: Keys.autoApprove) }
     }
 
+    /// The two-line Action Button sentence shows once, until Speak or the Action Button is used.
+    @Published var actionHintSeen: Bool {
+        didSet { UserDefaults.standard.set(actionHintSeen, forKey: Keys.actionHintSeen) }
+    }
+
+    func noteActionHintUsed() {
+        guard !actionHintSeen else { return }
+        actionHintSeen = true
+    }
+
     private init() {
         let defaults = UserDefaults.standard
         autoSend = defaults.bool(forKey: Keys.autoSend)
@@ -45,6 +55,7 @@ final class VoicePreferences: ObservableObject {
             pauseSends = defaults.bool(forKey: Keys.pauseSends)
         }
         autoApproveTools = defaults.bool(forKey: Keys.autoApprove)
+        actionHintSeen = defaults.bool(forKey: Keys.actionHintSeen)
     }
 
     private enum Keys {
@@ -52,6 +63,7 @@ final class VoicePreferences: ObservableObject {
         static let readAloud = "watch.voice.readAloud"
         static let pauseSends = "watch.voice.pauseSends"
         static let autoApprove = "watch.voice.autoApprove"
+        static let actionHintSeen = "watch.voice.actionHintSeen"
     }
 }
 
@@ -325,19 +337,7 @@ struct VoiceChatView: View {
 
     var body: some View {
         SpeakBarPage {
-            VStack(spacing: 0) {
-                if !model.voiceStatus.isEmpty {
-                    Text(model.voiceStatus)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(LojoTheme.accent)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                        .accessibilityIdentifier("voice.status")
-                        .accessibilityLabel("Voice status")
-                        .accessibilityValue(model.voiceStatus)
-                }
-                historyList
-            }
+            historyList
         } bar: {
             VoiceConversationBar(showSpeak: showSpeakAgain || model.forcedScreen != nil)
         }
@@ -543,6 +543,16 @@ struct VoiceChatView: View {
                     }
                 }
                 .id(rowID)
+            }
+            if !model.voiceStatus.isEmpty {
+                Text(model.voiceStatus)
+                    .font(.caption2)
+                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .accessibilityIdentifier("voice.status")
+                    .accessibilityLabel("Voice status")
+                    .accessibilityValue(model.voiceStatus)
             }
         }
     }
@@ -764,6 +774,7 @@ extension WatchModel {
     }
 
     func beginHandsFreeVoice() {
+        VoicePreferences.shared.noteActionHintUsed()
         if uiTest {
             voiceModeActive = true
             if uiPhoneOff {

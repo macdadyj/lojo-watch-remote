@@ -109,6 +109,62 @@ final class WatchScaffoldUITests: XCTestCase {
         shot(app, "scaffold-done")
     }
 
+    /// The home list and a long transcript keep more than one row on screen. Counts happen before any swipe.
+    func testHomeShowsTwoChatsAndTheTranscriptShowsEnoughBubbles() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-WatchRemoteUITest"]
+        app.launch()
+
+        let list = app.scrollViews["session.list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 40), "home session list did not appear")
+        let first = app.buttons["session.row.\(Self.sessionRowIDs[0])"]
+        XCTAssertTrue(first.waitForExistence(timeout: 8), "home rows did not appear")
+        let visibleRows = Self.sessionRows(app).filter { shown($0, in: list) }
+        XCTAssertGreaterThanOrEqual(
+            visibleRows.count,
+            2,
+            "home shows \(visibleRows.count) chat rows in \(list.frame)"
+        )
+
+        let longID = "0199aaaa-0000-7000-8000-000000000005"
+        var row = app.buttons["session.row.\(longID)"]
+        if !row.waitForExistence(timeout: 2) {
+            list.swipeUp()
+            row = app.buttons["session.row.\(longID)"]
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 8), "long chat row missing")
+        row.tap()
+
+        let history = app.scrollViews["voice.history"]
+        XCTAssertTrue(history.waitForExistence(timeout: 8), "long chat did not open")
+        let reply = app.staticTexts["Yes. The latest line is this one."]
+        XCTAssertTrue(reply.waitForExistence(timeout: 8), "latest reply missing")
+        let mine = app.staticTexts["Still with me?"]
+        XCTAssertTrue(mine.waitForExistence(timeout: 4), "user line missing")
+
+        let needed = app.frame.height >= 230 ? 3 : 2
+        let query = app.staticTexts.matching(identifier: "voice.line")
+        let total = min(query.count, 16)
+        var visible = 0
+        for index in 0..<total where shown(query.element(boundBy: index), in: history) {
+            visible += 1
+        }
+        XCTAssertGreaterThanOrEqual(
+            visible,
+            needed,
+            "transcript shows \(visible) bubbles in \(history.frame); wanted \(needed)"
+        )
+        XCTAssertTrue(shown(reply, in: history), "latest reply is off screen")
+        XCTAssertTrue(shown(mine, in: history), "user line is off screen")
+        XCTAssertGreaterThan(mine.frame.maxX, history.frame.midX, "user bubble is not on the right")
+        XCTAssertLessThan(mine.frame.width, history.frame.width * 0.92, "user bubble fills the row")
+        XCTAssertLessThan(reply.frame.minX, history.frame.midX, "assistant bubble does not start on the left")
+        let status = app.staticTexts["voice.status"]
+        XCTAssertTrue(status.waitForExistence(timeout: 4), "delivery status missing")
+        XCTAssertGreaterThan(status.frame.midY, reply.frame.midY, "delivery status is not under the last bubble")
+        shot(app, "scaffold-bubbles")
+    }
+
     /// Speak sits under the scroll view. Its frame must not cross the scroll view or the visible part of the lowest row.
     private func assertSpeakClearsLastVisible(
         _ elements: [XCUIElement],
