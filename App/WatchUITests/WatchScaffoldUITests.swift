@@ -47,6 +47,12 @@ final class WatchScaffoldUITests: XCTestCase {
             app.staticTexts["The computer is reachable only on the private overlay."].waitForExistence(timeout: 4),
             "restored chat did not show the session summary"
         )
+        XCTAssertTrue(app.staticTexts["Worked · 3 steps"].waitForExistence(timeout: 4), "tool calls were not grouped")
+        XCTAssertFalse(app.staticTexts["Tool: Tool"].exists, "a nameless tool row is still a transcript line")
+        XCTAssertFalse(
+            app.staticTexts["Execute curl -fsS https://example.invalid/weather"].exists,
+            "a raw command is visible before the tool row is expanded"
+        )
         XCTAssertFalse(
             app.staticTexts["That chat is no longer on this computer."].exists,
             "a live demo session was reported missing"
@@ -84,7 +90,7 @@ final class WatchScaffoldUITests: XCTestCase {
         XCTAssertTrue(history.waitForExistence(timeout: 8), "I'm done closed the chat")
         XCTAssertFalse(list.isHittable, "I'm done left the conversation")
         XCTAssertTrue(
-            app.staticTexts["You: list sessions"].waitForExistence(timeout: 4),
+            app.staticTexts["list sessions"].waitForExistence(timeout: 4),
             "I'm done did not send what was said"
         )
         XCTAssertTrue(

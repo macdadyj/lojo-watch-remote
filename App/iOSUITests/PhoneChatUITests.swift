@@ -3,6 +3,7 @@ import XCTest
 /// Phone chats stay open when a turn is idle, and a follow-up sends in the same thread.
 final class PhoneChatUITests: XCTestCase {
     private let idleSessionID = "0199aaaa-0000-7000-8000-000000000003"
+    private let longSessionID = "0199aaaa-0000-7000-8000-000000000005"
 
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -84,6 +85,46 @@ final class PhoneChatUITests: XCTestCase {
         shot(app, "phone-controls")
     }
 
+    func testLongChatStaysAnchoredOnTheLatestMessage() throws {
+        let app = launch()
+        let list = app.descendants(matching: .any)["session.list"]
+        XCTAssertTrue(list.waitForExistence(timeout: 12))
+        var row = app.descendants(matching: .any)["session.row.\(longSessionID)"]
+        if !row.waitForExistence(timeout: 2) {
+            app.swipeUp()
+            row = app.descendants(matching: .any)["session.row.\(longSessionID)"]
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 6), "long chat row missing")
+        row.tap()
+        let history = app.descendants(matching: .any)["chat.history"]
+        XCTAssertTrue(history.waitForExistence(timeout: 8))
+        let latest = history.staticTexts["Yes. The latest line is this one."]
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let oldest = history.staticTexts["oldest note in this chat"]
+        XCTAssertTrue(oldest.waitForExistence(timeout: 4), "the first message is missing from the chat")
+        XCTAssertTrue(waitUntilVisible(latest, in: history), "opening a long chat hid the latest message")
+        XCTAssertFalse(visible(oldest, in: history), "opening a long chat showed the first message")
+        send(app, "ping the bottom")
+        let reply = history.staticTexts["Done. ping the bottom"]
+        XCTAssertTrue(reply.waitForExistence(timeout: 8), "the reply did not arrive")
+        XCTAssertTrue(waitUntilVisible(reply, in: history), "the latest message is off screen")
+        XCTAssertFalse(visible(oldest, in: history), "sending jumped back to the start of the chat")
+        shot(app, "phone-long-anchored")
+    }
+
+    func testToolCallsCollapseToOneRow() throws {
+        let app = launch()
+        openIdle(app)
+        XCTAssertTrue(app.staticTexts["Worked · 3 steps"].waitForExistence(timeout: 6), "tool calls were not grouped")
+        XCTAssertFalse(app.staticTexts["Tool: Tool"].exists)
+        XCTAssertFalse(app.staticTexts["Execute curl -fsS https://example.invalid/weather"].exists)
+        app.buttons["chat.tools"].tap()
+        XCTAssertTrue(app.staticTexts["Ran a command"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Searched the web"].exists)
+        XCTAssertTrue(app.staticTexts["Used a tool"].exists)
+        shot(app, "phone-tools-collapsed")
+    }
+
     private func launch() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-WatchRemoteUITest"]
@@ -123,6 +164,24 @@ final class PhoneChatUITests: XCTestCase {
         let view = app.textViews[identifier]
         if view.waitForExistence(timeout: 2) { return view }
         return field
+    }
+
+    private func visible(_ element: XCUIElement, in container: XCUIElement) -> Bool {
+        guard element.exists, container.exists else { return false }
+        let overlap = element.frame.intersection(container.frame)
+        return overlap.width > 2 && overlap.height > 2
+    }
+
+    private func waitUntilVisible(
+        _ element: XCUIElement,
+        in container: XCUIElement,
+        timeout: TimeInterval = 4
+    ) -> Bool {
+        let predicate = NSPredicate { _, _ in
+            self.visible(element, in: container)
+        }
+        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: nil)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
 
     private func shot(_ app: XCUIApplication, _ name: String) {

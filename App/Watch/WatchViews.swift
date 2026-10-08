@@ -198,6 +198,9 @@ struct WatchListView: View {
     private var headerTitle: String {
         if model.pathTitle == "Pair on iPhone first" { return "Pair on iPhone first" }
         if phoneAway && model.pathTitle != "direct" { return LinkState.phoneAway.title }
+        if model.reachable, model.snapshot.link == .connecting, !model.snapshot.sessions.isEmpty {
+            return LinkState.connected.title
+        }
         return model.snapshot.link.title
     }
 
@@ -247,11 +250,13 @@ struct WatchRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                StatusMark(status: session.status, size: 10)
-                Text(session.status.title)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(LojoTheme.readablePrimary(scheme))
+            if session.status == .needsApproval || session.status == .failed {
+                HStack(spacing: 6) {
+                    StatusMark(status: session.status, size: 10)
+                    Text(session.status.title)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                }
             }
             Text(session.title)
                 .font(.headline)

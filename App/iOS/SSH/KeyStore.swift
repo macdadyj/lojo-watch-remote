@@ -32,7 +32,7 @@ enum KeychainStore {
         SecItemDelete(query as CFDictionary)
         var item = query
         item[kSecValueData as String] = data
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(item as CFDictionary, nil)
         guard status == errSecSuccess else { throw KeyStoreError.status(status) }
     }
@@ -46,6 +46,8 @@ enum KeychainStore {
         guard status == errSecSuccess, let data = out as? Data else {
             throw status == errSecItemNotFound ? KeyStoreError.missing : KeyStoreError.status(status)
         }
+        let update = [kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly] as CFDictionary
+        SecItemUpdate(base(service: service, account: account) as CFDictionary, update)
         return data
     }
 
@@ -85,6 +87,9 @@ enum KeyStoreError: Error, LocalizedError, CustomStringConvertible {
 final class KeyStore: ObservableObject {
     @Published private(set) var key: PhoneKey?
     private let directory: URL
+    /// Last secrets read while the phone was unlocked. A locked phone cannot prompt the keychain.
+    private var secretCache: [String: String] = [:]
+    private var keyMaterial: [String: Data] = [:]
 
     init(directory: URL) {
         self.directory = directory
@@ -114,7 +119,7 @@ final class KeyStore: ObservableObject {
         guard SecureEnclave.isAvailable else { throw KeyStoreError.secureEnclaveUnavailable }
         var error: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(
-            nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, .privateKeyUsage, &error
+            nil, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, .privateKeyUsage, &error
         ) else {
             throw error?.takeRetainedValue() ?? KeyStoreError.secureEnclaveUnavailable
         }
@@ -126,7 +131,13 @@ final class KeyStore: ObservableObject {
 
     func privateKey() throws -> NIOSSHPrivateKey {
         guard let key else { throw KeyStoreError.missing }
-        let secret = try KeychainStore.read(service: KeychainStore.keyService, account: key.id)
+        let secret: Data
+        if let cached = keyMaterial[key.id] {
+            secret = cached
+        } else {
+            secret = try KeychainStore.read(service: KeychainStore.keyService, account: key.id)
+            keyMaterial[key.id] = secret
+        }
         switch key.kind {
         case .ed25519:
             return NIOSSHPrivateKey(ed25519Key: try Curve25519.Signing.PrivateKey(rawRepresentation: secret))
@@ -137,15 +148,26 @@ final class KeyStore: ObservableObject {
 
     func saveSecret(_ value: String, account: String) throws {
         try KeychainStore.write(Data(value.utf8), service: KeychainStore.secretService, account: account)
+        secretCache[account] = value
     }
 
     func secret(account: String) -> String? {
-        guard let data = try? KeychainStore.read(service: KeychainStore.secretService, account: account) else { return nil }
-        let text = String(decoding: data, as: UTF8.self)
-        return text.isEmpty ? nil : text
+        if let cached = secretCache[account], !cached.isEmpty { return cached }
+        do {
+            let data = try KeychainStore.read(service: KeychainStore.secretService, account: account)
+            let text = String(decoding: data, as: UTF8.self)
+            guard !text.isEmpty else { return nil }
+            secretCache[account] = text
+            return text
+        } catch KeyStoreError.status(let status) where status == errSecInteractionNotAllowed {
+            return secretCache[account]
+        } catch {
+            return nil
+        }
     }
 
     func forgetSecret(account: String) {
+        secretCache[account] = nil
         KeychainStore.delete(service: KeychainStore.secretService, account: account)
     }
 
@@ -160,7 +182,9 @@ final class KeyStore: ObservableObject {
             created: Date()
         )
         try KeychainStore.write(secret, service: KeychainStore.keyService, account: id)
+        keyMaterial[id] = secret
         if let previous = key {
+            keyMaterial[previous.id] = nil
             KeychainStore.delete(service: KeychainStore.keyService, account: previous.id)
         }
         key = record

@@ -7,15 +7,19 @@ public enum SessionResume {
     public static let unsupportedMessage = "This connection cannot reopen that chat."
 
     public static func displayLines(title: String, summary: String, transcript: [String]) -> [String] {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleaned = transcript
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         if !cleaned.isEmpty {
-            return Array(cleaned.prefix(8))
+            var lines = Array(cleaned.suffix(24))
+            if !trimmedTitle.isEmpty, !lines.contains(trimmedTitle) {
+                lines.insert(trimmedTitle, at: 0)
+            }
+            return lines
         }
         var lines: [String] = []
-        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedSummary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedTitle.isEmpty {
             lines.append(trimmedTitle)
         }

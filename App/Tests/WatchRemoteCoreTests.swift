@@ -943,6 +943,15 @@ final class WatchRemoteCoreTests: XCTestCase {
             "Note the overlay route",
             "The computer is reachable only on the private overlay.",
         ])
+        let long = DemoCatalog.sessions().first { $0.id == DemoCatalog.longID }
+        let longLines = SessionResume.displayLines(
+            title: long?.title ?? "",
+            summary: long?.summary ?? "",
+            transcript: long?.transcript ?? []
+        )
+        XCTAssertEqual(longLines.first, "A long chat")
+        XCTAssertEqual(longLines.last, "Grok: Yes. The latest line is this one.")
+        XCTAssertFalse(longLines.contains("You: oldest note in this chat"))
         XCTAssertEqual(SessionResume.missingMessage, "That chat is no longer on this computer.")
         XCTAssertFalse(SessionResume.unsupportedMessage.isEmpty)
         var engine = MockEngine(preview: true)
@@ -1068,6 +1077,27 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(ChatTranscript.streamingAssistant(" there", in: streamed), ["Grok: Hello there"])
         XCTAssertTrue(ChatTranscript.isToolCard(ChatTranscript.toolCard("Edit a file")))
         XCTAssertEqual(ChatTranscript.autoApproved("Edit a file"), "Auto-approved: Edit a file")
+        XCTAssertEqual(ChatTranscript.toolSummary("Tool"), "Used a tool")
+        XCTAssertEqual(ChatTranscript.toolSummary("Execute curl -fsS https://example.invalid"), "Ran a command")
+        XCTAssertEqual(ChatTranscript.toolSummary("Web search: maps"), "Searched the web")
+        XCTAssertEqual(ChatTranscript.toolSummary("grep"), "Searched files")
+        XCTAssertEqual(ChatTranscript.toolSummary("Omarchy|omarchy"), "Used a tool")
+        XCTAssertTrue(ChatTranscript.isStatusNoise("Keychain error -25308"))
+        XCTAssertTrue(ChatTranscript.isStatusNoise("On-device speech"))
+        let grouped = ChatTranscript.blocks(from: [
+            "You: hi",
+            ChatTranscript.toolCard("Tool"),
+            ChatTranscript.toolCard("Web search: maps"),
+            "Grok: hello",
+        ], toolsRunning: false)
+        XCTAssertEqual(grouped.count, 3)
+        if case .tools(_, let steps, let running) = grouped[1] {
+            XCTAssertEqual(steps.count, 2)
+            XCTAssertFalse(running)
+            XCTAssertEqual(ChatTranscript.toolGroupTitle(count: steps.count), "Worked · 2 steps")
+        } else {
+            XCTFail("tool calls were not grouped")
+        }
     }
 
     func testAutoApprovePreferenceHonorsAPerChatOverride() {

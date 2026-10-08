@@ -310,6 +310,7 @@ public enum DemoCatalog {
     public static let runningID = "0199aaaa-0000-7000-8000-000000000001"
     public static let approvalID = "0199aaaa-0000-7000-8000-000000000002"
     public static let idleID = "0199aaaa-0000-7000-8000-000000000003"
+    public static let longID = "0199aaaa-0000-7000-8000-000000000005"
 
     public static func sessions() -> [GrokSession] {
         [
@@ -339,9 +340,34 @@ public enum DemoCatalog {
                 id: idleID,
                 title: "Note the overlay route",
                 summary: "The computer is reachable only on the private overlay.",
-                status: .idle
+                status: .idle,
+                transcript: [
+                    "You: Where does this computer live?",
+                    ChatTranscript.toolCard("Execute curl -fsS https://example.invalid/weather"),
+                    ChatTranscript.toolCard("Web search: maps"),
+                    ChatTranscript.toolCard("Tool"),
+                    "Grok: The computer is reachable only on the private overlay.",
+                ]
             ),
+            longChat(),
         ]
+    }
+
+    /// Enough lines that the first message is off screen on a phone.
+    private static func longChat() -> GrokSession {
+        var lines = ["You: oldest note in this chat"]
+        for index in 1...32 {
+            lines.append("Grok: Earlier reply \(index).")
+        }
+        lines.append("You: Still with me?")
+        lines.append("Grok: Yes. The latest line is this one.")
+        return GrokSession(
+            id: longID,
+            title: "A long chat",
+            summary: "Yes. The latest line is this one.",
+            status: .idle,
+            transcript: lines
+        )
     }
 
     public static func snapshot() -> PhoneSnapshot {

@@ -1,10 +1,13 @@
 import SwiftUI
 import WatchRemoteCore
 
+private enum SpeakBarSlot {
+    /// The 44pt control plus a two-line hint, so neither covers the scroll view.
+    static let height = VoiceChromeMetrics.maxSpeakBarHeight + 36
+}
+
 /// Scroll content on top, the speak row in a fixed slot underneath.
-/// The slot is a little taller than the 44pt bar so a bordered button cannot spill upward.
 struct SpeakBarPage<Content: View, Bar: View>: View {
-    private static let slot = VoiceChromeMetrics.maxSpeakBarHeight + 8
     @ViewBuilder var content: () -> Content
     @ViewBuilder var bar: () -> Bar
 
@@ -14,11 +17,11 @@ struct SpeakBarPage<Content: View, Bar: View>: View {
                 content()
                     .frame(
                         width: proxy.size.width,
-                        height: max(proxy.size.height - Self.slot, 1)
+                        height: max(proxy.size.height - SpeakBarSlot.height, 1)
                     )
                     .clipped()
                 bar()
-                    .frame(width: proxy.size.width, height: Self.slot, alignment: .center)
+                    .frame(width: proxy.size.width, height: SpeakBarSlot.height, alignment: .bottom)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
@@ -41,6 +44,7 @@ struct VoiceHomeBar: View {
             .accessibilityIdentifier("voice.speak")
             .accessibilityLabel("Voice conversation")
             .accessibilityHint("Starts listening. I'm done or the Action Button sends. A pause sends only when Pause sends is on.")
+            .modifier(PrimaryHandGesture())
         }
     }
 }
@@ -61,6 +65,7 @@ struct VoiceConversationBar: View {
                 .controlSize(.small)
                 .accessibilityIdentifier("voice.speak")
                 .accessibilityHint("Starts listening. I'm done or the Action Button sends.")
+                .modifier(PrimaryHandGesture())
             } else {
                 Button {
                     model.stopTalking()
@@ -75,6 +80,7 @@ struct VoiceConversationBar: View {
                 .accessibilityIdentifier("voice.done")
                 .accessibilityLabel("I'm done")
                 .accessibilityHint("Stops the microphone and sends what you said. The chat stays open.")
+                .modifier(PrimaryHandGesture())
             }
         }
     }
@@ -91,38 +97,40 @@ private struct SpeakChromeLabel: View {
 
 private struct SpeakChromeBar<Leading: View>: View {
     @Environment(\.colorScheme) private var scheme
+    @EnvironmentObject private var model: WatchModel
     @ViewBuilder var leading: () -> Leading
 
     var body: some View {
-        HStack(spacing: 6) {
+        VStack(spacing: 2) {
+            Button {
+                model.toggleFromActionButton()
+            } label: {
+                Text("Press the Action Button to talk")
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("voice.action")
+            .accessibilityLabel(ListenEndpoint.manualTitle)
             leading()
-            Spacer(minLength: 4)
-            ActionBarButton()
         }
         .padding(.horizontal, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: VoiceChromeMetrics.maxSpeakBarHeight)
+        .padding(.bottom, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .background(scheme == .dark ? Color.black : Color(red: 0.95, green: 0.95, blue: 0.96))
     }
 }
 
-/// Icon plus a short word. The accessibility label keeps the full "Action Button" name.
-private struct ActionBarButton: View {
-    @EnvironmentObject private var model: WatchModel
-    @ObservedObject private var preferences = VoicePreferences.shared
-
-    var body: some View {
-        Button {
-            model.toggleFromActionButton()
-        } label: {
-            Label(ListenEndpoint.barLabel(pauseSends: preferences.pauseSends), systemImage: "button.programmable")
-                .font(.caption2.weight(.semibold))
-                .labelStyle(.titleAndIcon)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+/// Double tap on supported watches runs the same control as the mic button.
+private struct PrimaryHandGesture: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(watchOS 11.0, *) {
+            content.handGestureShortcut(.primaryAction)
+        } else {
+            content
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("voice.action")
-        .accessibilityLabel(ListenEndpoint.title(pauseSends: preferences.pauseSends))
     }
 }

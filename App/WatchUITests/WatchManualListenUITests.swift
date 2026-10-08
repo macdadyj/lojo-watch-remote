@@ -20,7 +20,7 @@ final class WatchManualListenUITests: XCTestCase {
         app.buttons["voice.action"].tap()
         XCTAssertTrue(app.scrollViews["voice.history"].waitForExistence(timeout: 8), "Action Button closed the chat")
         XCTAssertFalse(app.scrollViews["session.list"].isHittable, "Action Button left the conversation")
-        XCTAssertTrue(app.staticTexts["You: list sessions"].waitForExistence(timeout: 8), "Action Button did not send")
+        XCTAssertTrue(app.staticTexts["list sessions"].waitForExistence(timeout: 8), "Action Button did not send")
         XCTAssertTrue(app.staticTexts["Note the overlay route"].exists, "Action Button cleared the restored chat")
         XCTAssertEqual(try waitValue(status, "Sent"), .completed)
         XCTAssertTrue(app.buttons["voice.speak"].waitForExistence(timeout: 4), "Speak did not return")
@@ -38,7 +38,7 @@ final class WatchManualListenUITests: XCTestCase {
         XCTAssertTrue(done.waitForExistence(timeout: 4))
         XCTAssertEqual(done.label, "I'm done")
         done.tap()
-        XCTAssertTrue(app.staticTexts["You: list sessions"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["list sessions"].waitForExistence(timeout: 8))
         XCTAssertTrue(app.staticTexts["Heard list sessions"].waitForExistence(timeout: 4), "the mock computer did not answer")
         XCTAssertTrue(app.staticTexts["Note the overlay route"].exists)
         XCTAssertTrue(app.buttons["voice.speak"].waitForExistence(timeout: 4))
@@ -74,7 +74,7 @@ final class WatchManualListenUITests: XCTestCase {
         openIdle(app)
         app.buttons["voice.speak"].tap()
         XCTAssertTrue(
-            app.staticTexts["You: list sessions"].waitForExistence(timeout: 8),
+            app.staticTexts["list sessions"].waitForExistence(timeout: 8),
             "the duration cap did not send"
         )
         XCTAssertTrue(app.staticTexts["Heard list sessions"].waitForExistence(timeout: 4))

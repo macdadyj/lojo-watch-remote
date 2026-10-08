@@ -56,8 +56,11 @@ final class WatchPhoneOffUITests: XCTestCase {
         XCTAssertEqual(try waitValue(status, "Listening"), .completed)
         app.buttons["voice.done"].tap()
         XCTAssertTrue(app.scrollViews["voice.history"].waitForExistence(timeout: 8), "I'm done closed the chat")
-        XCTAssertTrue(app.staticTexts["You: list sessions"].waitForExistence(timeout: 4), "the utterance was not sent")
-        XCTAssertTrue(app.staticTexts["Heard list sessions"].waitForExistence(timeout: 4), "the mock computer did not answer")
+        let sentLine = app.staticTexts["list sessions"]
+        let reply = app.staticTexts["Heard list sessions"]
+        XCTAssertTrue(sentLine.waitForExistence(timeout: 4), "the utterance was not sent")
+        XCTAssertTrue(reply.waitForExistence(timeout: 4), "the mock computer did not answer")
+        XCTAssertTrue(reply.isHittable, "the reply is off the bottom of the chat")
         XCTAssertTrue(app.staticTexts["Note the overlay route"].exists)
         XCTAssertEqual(try waitValue(status, "Sent"), .completed)
         XCTAssertTrue(app.buttons["voice.speak"].waitForExistence(timeout: 4), "Speak did not return")
@@ -72,7 +75,7 @@ final class WatchPhoneOffUITests: XCTestCase {
         app.buttons["voice.speak"].tap()
         app.buttons["voice.done"].tap()
         XCTAssertTrue(
-            app.staticTexts["You: keep going without a pause"].waitForExistence(timeout: 8),
+            app.staticTexts["keep going without a pause"].waitForExistence(timeout: 8),
             "I'm done dropped audio that had not paused"
         )
         XCTAssertTrue(app.staticTexts["Heard keep going without a pause"].waitForExistence(timeout: 4))
@@ -86,7 +89,7 @@ final class WatchPhoneOffUITests: XCTestCase {
         openApproval(yes)
         yes.buttons["voice.speak"].tap()
         yes.buttons["voice.done"].tap()
-        XCTAssertTrue(yes.staticTexts["You: yes"].waitForExistence(timeout: 8))
+        XCTAssertTrue(yes.staticTexts["yes"].waitForExistence(timeout: 8))
         XCTAssertTrue(yes.staticTexts["Allowed."].waitForExistence(timeout: 4), "yes did not get the mock allow reply")
         XCTAssertTrue(yes.staticTexts["Update the parser"].exists, "the approval chat closed")
         shot(yes, "phone-off-yes")
@@ -96,7 +99,7 @@ final class WatchPhoneOffUITests: XCTestCase {
         openApproval(no)
         no.buttons["voice.speak"].tap()
         no.buttons["voice.done"].tap()
-        XCTAssertTrue(no.staticTexts["You: no"].waitForExistence(timeout: 8))
+        XCTAssertTrue(no.staticTexts["no"].waitForExistence(timeout: 8))
         XCTAssertTrue(no.staticTexts["Denied."].waitForExistence(timeout: 4), "no did not get the mock deny reply")
         XCTAssertTrue(no.staticTexts["Update the parser"].exists)
         shot(no, "phone-off-no")

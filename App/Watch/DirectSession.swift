@@ -7,6 +7,8 @@ enum DirectKeychain {
     static let service = "com.lojo.WatchRemote.direct"
     private static let account = "pairing"
     private static let countersAccount = "counters"
+    private static var memory: DirectPairing?
+    private static var memoryCounters: (send: UInt64, recv: UInt64)?
 
     static func save(_ pairing: DirectPairing) {
         guard let text = pairing.jsonText(), let data = text.data(using: .utf8) else { return }
@@ -14,27 +16,34 @@ enum DirectKeychain {
     }
 
     static func load() -> DirectPairing? {
+        if let memory { return memory }
         guard let data = read(account: account), let text = String(data: data, encoding: .utf8) else { return nil }
         guard let pairing = DirectPairing.decode(text), !pairing.clear else { return nil }
         guard RelayMaterial.normalizeURL(pairing.relayURL) != nil, RelayMaterial.keyData(pairing.key) != nil else { return nil }
+        memory = pairing
         return pairing
     }
 
     static func delete() {
+        memory = nil
+        memoryCounters = nil
         SecItemDelete(base(account: account) as CFDictionary)
         SecItemDelete(base(account: countersAccount) as CFDictionary)
     }
 
     static func saveCounters(send: UInt64, recv: UInt64) {
         let text = #"{"recv":\#(recv),"send":\#(send)}"#
+        memoryCounters = (send, recv)
         write(Data(text.utf8), account: countersAccount)
     }
 
     static func counters() -> (send: UInt64, recv: UInt64) {
+        if let memoryCounters { return memoryCounters }
         guard let data = read(account: countersAccount),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (0, 0) }
         let send = (object["send"] as? NSNumber)?.uint64Value ?? 0
         let recv = (object["recv"] as? NSNumber)?.uint64Value ?? 0
+        memoryCounters = (send, recv)
         return (send, recv)
     }
 
@@ -45,6 +54,9 @@ enum DirectKeychain {
         item[kSecValueData as String] = data
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         SecItemAdd(item as CFDictionary, nil)
+        if account == Self.account, let text = String(data: data, encoding: .utf8), let pairing = DirectPairing.decode(text) {
+            memory = pairing
+        }
     }
 
     private static func read(account: String) -> Data? {

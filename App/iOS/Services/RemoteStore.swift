@@ -837,12 +837,19 @@ final class RemoteStore: ObservableObject {
             banner = nil
         } catch {
             if link != .needsPairing {
-                link = quiet ? .connecting : .offline
+                if quiet, live.isSessionActive {
+                    link = .connected
+                    statusLine = live.statusLine
+                } else {
+                    link = quiet ? .connecting : .offline
+                }
             }
-            approvalsAvailable = false
+            approvalsAvailable = live.isSessionActive && live.approvalsAvailable
             if quiet {
-                statusLine = "Reconnecting"
-            } else {
+                if !live.isSessionActive {
+                    statusLine = "Reconnecting"
+                }
+            } else if !ChatTranscript.isStatusNoise(error.localizedDescription) {
                 banner = error.localizedDescription
                 statusLine = live.statusLine
             }
@@ -1208,10 +1215,14 @@ final class RemoteStore: ObservableObject {
             statusLine = "Relay on the overlay."
             banner = nil
         } catch {
-            link = quiet ? .connecting : .offline
+            if !(quiet && link == .connected && !sessions.isEmpty) {
+                link = quiet ? .connecting : .offline
+            }
             if quiet {
-                statusLine = "Reconnecting"
-            } else {
+                if link != .connected {
+                    statusLine = "Reconnecting"
+                }
+            } else if !ChatTranscript.isStatusNoise(error.localizedDescription) {
                 banner = error.localizedDescription
             }
         }

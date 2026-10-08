@@ -288,6 +288,13 @@ struct VoiceChatView: View {
     @EnvironmentObject private var model: WatchModel
     @Environment(\.colorScheme) private var scheme
     @ObservedObject private var preferences = VoicePreferences.shared
+    @State private var followLatest = true
+    @State private var holdFollow = true
+    @State private var viewportHeight: CGFloat = 0
+    @State private var lastSample = VoiceEdgeSample()
+    @State private var followedToken = ""
+    /// Set once the latest line has actually sat at the bottom, so a bad first measurement cannot unpin.
+    @State private var sawBottom = false
 
     private var showSpeakAgain: Bool {
         switch model.voiceStatus {
@@ -317,7 +324,19 @@ struct VoiceChatView: View {
 
     var body: some View {
         SpeakBarPage {
-            historyList
+            VStack(spacing: 0) {
+                if !model.voiceStatus.isEmpty {
+                    Text(model.voiceStatus)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(LojoTheme.accent)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .accessibilityIdentifier("voice.status")
+                        .accessibilityLabel("Voice status")
+                        .accessibilityValue(model.voiceStatus)
+                }
+                historyList
+            }
         } bar: {
             VoiceConversationBar(showSpeak: showSpeakAgain || model.forcedScreen != nil)
         }
@@ -326,38 +345,143 @@ struct VoiceChatView: View {
         .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
     }
 
+    private var conversationLines: [String] {
+        var rows: [String] = []
+        let spoken = model.voiceLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !spoken.isEmpty, ChatTranscript.isConversation(spoken), !history.contains(spoken) {
+            rows.append(spoken)
+        }
+        rows.append(contentsOf: history.filter { ChatTranscript.isConversation($0) || ChatTranscript.isToolCard($0) || ChatTranscript.isNote($0) })
+        return rows
+    }
+
+    private var tailToken: String {
+        let lines = conversationLines
+        return "\(lines.count)|\(lines.last ?? "")|\(model.voiceLine)"
+    }
+
     private var historyList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                ListenTestHooks()
-                if model.forcedScreen == "voice-loop" {
-                    Text("Scripted check. The microphone stays off.")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(LojoTheme.accent)
-                        .fixedSize(horizontal: false, vertical: true)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(spacing: 0) {
+                    bubbleStack(proxy)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 8)
+                        .padding(.bottom, 8)
+                    Color.clear
+                        .frame(height: 1)
+                        .id("voice.bottom")
+                        .background {
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: VoiceBottomEdgeKey.self,
+                                    value: VoiceEdgeSample(
+                                        maxY: geo.frame(in: .named("voice.scroll")).maxY,
+                                        token: tailToken
+                                    )
+                                )
+                            }
+                        }
                 }
-                if !model.voiceStatus.isEmpty {
-                    Text(model.voiceStatus)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(LojoTheme.accent)
-                        .accessibilityIdentifier("voice.status")
-                        .accessibilityLabel("Voice status")
-                        .accessibilityValue(model.voiceStatus)
+            }
+            .defaultScrollAnchor(.bottom)
+            .coordinateSpace(name: "voice.scroll")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background {
+                GeometryReader { geo in
+                    Color.clear.preference(key: VoiceViewportKey.self, value: geo.size.height)
                 }
-                Text(model.voiceLine.isEmpty ? ListenEndpoint.hint(pauseSends: preferences.pauseSends) : model.voiceLine)
-                    .font(.footnote)
-                    .foregroundStyle(LojoTheme.readablePrimary(scheme))
+            }
+            .onPreferenceChange(VoiceBottomEdgeKey.self) { sample in
+                lastSample = sample
+                noteFollow(sample, viewport: viewportHeight)
+            }
+            .onPreferenceChange(VoiceViewportKey.self) { height in
+                viewportHeight = height
+                noteFollow(lastSample, viewport: height)
+            }
+            .accessibilityIdentifier("voice.history")
+            .contentMargins(.top, 4, for: .scrollContent)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 8).onChanged { value in
+                    if value.translation.height > 16 {
+                        followLatest = false
+                        holdFollow = false
+                    }
+                }
+            )
+            .onChange(of: tailToken) { _, _ in
+                guard followLatest else { return }
+                pin(proxy)
+            }
+            .onAppear {
+                pin(proxy)
+            }
+        }
+    }
+
+    private func pin(_ proxy: ScrollViewProxy) {
+        followLatest = true
+        holdFollow = true
+        proxy.scrollTo("voice.bottom", anchor: .bottom)
+        DispatchQueue.main.async {
+            guard self.followLatest else { return }
+            proxy.scrollTo("voice.bottom", anchor: .bottom)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard self.followLatest else { return }
+                self.holdFollow = false
+            }
+        }
+    }
+
+    private func holdRow(_ proxy: ScrollViewProxy, id: String) {
+        holdFollow = true
+        proxy.scrollTo(id, anchor: .center)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            self.holdFollow = false
+        }
+    }
+
+    private func noteFollow(_ sample: VoiceEdgeSample, viewport: CGFloat) {
+        guard viewport > 1, sample.maxY > 1 else { return }
+        if sample.token != followedToken {
+            followedToken = sample.token
+            return
+        }
+        guard !holdFollow else { return }
+        let gap = sample.maxY - viewport
+        if gap < 16 {
+            sawBottom = true
+            followLatest = true
+        } else if gap > 28, sawBottom {
+            followLatest = false
+        }
+    }
+
+    private func bubbleStack(_ proxy: ScrollViewProxy) -> some View {
+        let lines = conversationLines
+        let blocks = ChatTranscript.blocks(from: lines, toolsRunning: false)
+        return VStack(alignment: .leading, spacing: 8) {
+            ListenTestHooks()
+            if model.forcedScreen == "voice-loop" {
+                Text("Scripted check. The microphone stays off.")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(LojoTheme.accent)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("voice.line")
-                    .accessibilityLabel("Spoken")
-                    .accessibilityValue(model.voiceLine)
-                ForEach(Array(history.enumerated()), id: \.offset) { item in
-                    Text(item.element)
-                        .font(.caption2)
-                        .foregroundStyle(LojoTheme.readableSecondary(scheme))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("voice.line")
+            }
+            ForEach(blocks) { block in
+                WatchBubble(block: block) {
+                    let rowID = "voice.block.\(block.id)"
+                    DispatchQueue.main.async {
+                        if followLatest {
+                            pin(proxy)
+                        } else {
+                            holdRow(proxy, id: rowID)
+                        }
+                    }
                 }
+                .id("voice.block.\(block.id)")
+            }
                 Button("Chats") {
                     model.voiceModeActive = false
                 }
@@ -393,7 +517,7 @@ struct VoiceChatView: View {
                     .accessibilityLabel("Dictate")
                     .accessibilityHint("Opens the keyboard. That sheet still needs Done.")
                 }
-                if let banner = model.banner, !banner.isEmpty {
+                if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner) {
                     Text(banner)
                         .font(.caption2)
                         .foregroundStyle(LojoTheme.danger)
@@ -421,14 +545,95 @@ struct VoiceChatView: View {
                         .accessibilityIdentifier("session.row.\(session.id)")
                     }
                 }
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 8)
-            .padding(.bottom, 8)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityIdentifier("voice.history")
-        .contentMargins(.top, 4, for: .scrollContent)
+    }
+}
+
+private struct VoiceEdgeSample: Equatable {
+    var maxY: CGFloat = 0
+    var token: String = ""
+}
+
+private struct VoiceBottomEdgeKey: PreferenceKey {
+    static var defaultValue = VoiceEdgeSample()
+    static func reduce(value: inout VoiceEdgeSample, nextValue: () -> VoiceEdgeSample) {
+        value = nextValue()
+    }
+}
+
+private struct VoiceViewportKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private struct WatchBubble: View {
+    var block: ChatBlock
+    var onToggle: () -> Void = {}
+    @Environment(\.colorScheme) private var scheme
+    @State private var toolOpen = false
+
+    var body: some View {
+        switch block {
+        case .user(_, let text):
+            line(text, mine: true)
+        case .assistant(_, let text):
+            line(text, mine: false)
+        case .note(_, let text):
+            Text(text)
+                .font(.caption2)
+                .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                .frame(maxWidth: .infinity, alignment: .center)
+        case .tools(_, let steps, let running):
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    toolOpen.toggle()
+                    onToggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        if running {
+                            ProgressView()
+                        }
+                        Text(ChatTranscript.toolGroupTitle(count: steps.count))
+                            .font(.caption2.weight(.semibold))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("voice.tools")
+                .accessibilityLabel(ChatTranscript.toolGroupTitle(count: steps.count))
+                if toolOpen {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { item in
+                        Text(item.element.summary)
+                            .font(.caption2.weight(.semibold))
+                        Text(item.element.detail)
+                            .font(.caption2)
+                            .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                            .lineLimit(3)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func line(_ text: String, mine: Bool) -> some View {
+        HStack {
+            if mine { Spacer(minLength: 12) }
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(mine ? Color.white : LojoTheme.readablePrimary(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(mine ? LojoTheme.accent : (scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06)))
+                )
+                .accessibilityIdentifier("voice.line")
+            if !mine { Spacer(minLength: 12) }
+        }
     }
 }
 
@@ -665,8 +870,7 @@ extension WatchModel {
         case .ready:
             guard packet.utteranceID == prepareID else { return }
             prepareID = nil
-            let note = packet.text == "on-device" ? "On-device speech" : "Speech on iPhone"
-            remember(note)
+            voiceStatus = packet.text == "on-device" ? "On-device speech" : "Speech on iPhone"
             capture.start()
         case .failure:
             guard packet.utteranceID == prepareID || packet.utteranceID == expectID else { return }
@@ -689,7 +893,8 @@ extension WatchModel {
             expectID = nil
             if let command = VoiceTranscriptGate.commandText(packet.text, isFinal: true) {
                 missedTurns = 0
-                remember("Heard \(command)")
+                voiceLine = ""
+                remember("You: \(command)")
                 handleVoiceTurn(command)
             } else {
                 noteMissedUtterance()
@@ -734,7 +939,9 @@ extension WatchModel {
 
     private func beginCapture(attempt: Int) {
         voiceSink = .phone
-        capture.endsOnSilence = ListenEndpoint.endsOnSilence(pauseSends: VoicePreferences.shared.pauseSends)
+        capture.endsOnSilence = uiTest
+            ? ListenEndpoint.endsOnSilence(pauseSends: VoicePreferences.shared.pauseSends)
+            : true
         applyListenChrome()
         retainRuntime()
         capture.requestPermission { [weak self] granted in
@@ -792,10 +999,9 @@ extension WatchModel {
         prepareID = nil
         expectID = nil
         voiceModeActive = true
-        voiceLine = reason
-        voiceStatus = "Paused"
+        voiceLine = ""
+        voiceStatus = ChatTranscript.isStatusNoise(reason) ? "Couldn't use the saved login" : reason
         dictationOffered = true
-        remember(reason)
     }
 
     func fallBackToDictation(_ reason: String, presentSheet: Bool = false) {
@@ -806,10 +1012,9 @@ extension WatchModel {
         ListenRuntime.shared.end()
         prepareID = nil
         expectID = nil
-        voiceLine = reason
-        voiceStatus = presentSheet ? "Dictation" : "Paused"
+        voiceLine = ""
+        voiceStatus = ChatTranscript.isStatusNoise(reason) ? "Couldn't use the saved login" : reason
         dictationOffered = true
-        remember(reason)
         guard presentSheet else { return }
         presentDictationSheet()
     }
@@ -1018,10 +1223,10 @@ extension WatchModel {
 
     func remember(_ line: String) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, !ChatTranscript.isStatusNoise(trimmed) else { return }
         voiceLog.append(trimmed)
-        if voiceLog.count > 5 {
-            voiceLog.removeFirst(voiceLog.count - 5)
+        if voiceLog.count > 80 {
+            voiceLog.removeFirst(voiceLog.count - 80)
         }
     }
 

@@ -153,11 +153,13 @@ struct ChatListRow: View {
                 .font(.subheadline)
                 .foregroundStyle(LojoTheme.secondaryText)
                 .lineLimit(2)
-            HStack(spacing: 6) {
-                StatusMark(status: entry.status)
-                Text(entry.status.title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(LojoTheme.secondaryText)
+            if entry.status == .needsApproval || entry.status == .failed {
+                HStack(spacing: 6) {
+                    StatusMark(status: entry.status)
+                    Text(entry.status.title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(LojoTheme.secondaryText)
+                }
             }
         }
         .lojoCard()
@@ -180,7 +182,23 @@ struct ChatThreadView: View {
     var sessionID: String
     @EnvironmentObject private var store: RemoteStore
     @Environment(\.colorScheme) private var scheme
+    @FocusState private var composerFocused: Bool
     @State private var draft = ""
+    /// Stays true until the reader scrolls up to read older messages.
+    @State private var followLatest = true
+    /// Ignores bottom-edge updates caused by our own scrollTo.
+    @State private var holdFollow = true
+    @State private var viewportHeight: CGFloat = 0
+    @State private var lastSample = ChatEdgeSample()
+    @State private var followedToken = ""
+    /// Set once the latest line has actually sat at the bottom, so a bad first measurement cannot unpin.
+    @State private var sawBottom = false
+    @State private var pinRequest = 0
+
+    private var tailToken: String {
+        let lines = current?.transcript ?? []
+        return "\(lines.count)|\(lines.last ?? "")|\(current?.status.rawValue ?? "")"
+    }
 
     private var current: GrokSession? {
         store.sessions.first { $0.id == sessionID }
@@ -188,30 +206,146 @@ struct ChatThreadView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    statusRow
-                    transcript
-                    if let permission = current?.permission {
-                        permissionCard(permission)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        statusRow
+                        transcript(proxy)
+                        if let permission = current?.permission {
+                            permissionCard(permission)
+                        }
+                        if let banner = store.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner) {
+                            Text(banner)
+                                .font(.footnote)
+                                .foregroundStyle(LojoTheme.danger)
+                        }
+                        Color.clear
+                            .frame(height: 1)
+                            .id(Self.bottomID)
+                            .background {
+                                GeometryReader { geo in
+                                    Color.clear.preference(
+                                        key: ChatBottomEdgeKey.self,
+                                        value: ChatEdgeSample(maxY: geo.frame(in: .named("chat.scroll")).maxY, token: tailToken)
+                                    )
+                                }
+                            }
                     }
-                    if let banner = store.banner, !banner.isEmpty {
-                        Text(banner)
-                            .font(.footnote)
-                            .foregroundStyle(LojoTheme.danger)
+                    .padding(16)
+                }
+                .defaultScrollAnchor(.bottom)
+                .coordinateSpace(name: "chat.scroll")
+                .background {
+                    GeometryReader { geo in
+                        Color.clear.preference(key: ChatViewportKey.self, value: geo.size.height)
                     }
                 }
-                .padding(16)
+                .onPreferenceChange(ChatBottomEdgeKey.self) { sample in
+                    lastSample = sample
+                    noteFollow(sample, viewport: viewportHeight)
+                }
+                .onPreferenceChange(ChatViewportKey.self) { height in
+                    viewportHeight = height
+                    noteFollow(lastSample, viewport: height)
+                }
+                .accessibilityIdentifier("chat.history")
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 16).onChanged { value in
+                        if value.translation.height > 36 {
+                            followLatest = false
+                            holdFollow = false
+                        }
+                    }.onEnded { value in
+                        if value.translation.height < -36 {
+                            pin(proxy)
+                        }
+                    }
+                )
+                .onChange(of: pinRequest) { _, _ in
+                    pin(proxy)
+                }
+                .onChange(of: current?.transcript ?? []) { _, _ in
+                    guard followLatest else { return }
+                    pin(proxy)
+                }
+                .onChange(of: current?.status) { _, _ in
+                    guard followLatest else { return }
+                    pin(proxy)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
+                    guard followLatest else { return }
+                    pin(proxy)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidChangeFrameNotification)) { _ in
+                    guard followLatest else { return }
+                    pin(proxy)
+                }
+                .onAppear {
+                    pin(proxy)
+                }
             }
-            .accessibilityIdentifier("chat.history")
             composer
         }
         .background(canvas)
         .navigationTitle(current?.title ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: sessionID) {
+            followLatest = true
+            pinRequest += 1
             await store.resume(sessionID: sessionID)
+            pinRequest += 1
         }
+    }
+
+    private static let bottomID = "chat.bottom"
+
+    private func pin(_ proxy: ScrollViewProxy) {
+        followLatest = true
+        holdFollow = true
+        proxy.scrollTo(Self.bottomID, anchor: .bottom)
+        DispatchQueue.main.async {
+            guard self.followLatest else { return }
+            proxy.scrollTo(Self.bottomID, anchor: .bottom)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard self.followLatest else { return }
+                self.holdFollow = false
+            }
+        }
+    }
+
+    /// Keeps an expanded tool row on screen when the reader is looking through history.
+    private func holdRow(_ proxy: ScrollViewProxy, id: String) {
+        holdFollow = true
+        proxy.scrollTo(id, anchor: .center)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            self.holdFollow = false
+        }
+    }
+
+    private func noteFollow(_ sample: ChatEdgeSample, viewport: CGFloat) {
+        guard viewport > 1, sample.maxY > 1 else { return }
+        if sample.token != followedToken {
+            followedToken = sample.token
+            return
+        }
+        guard !holdFollow else { return }
+        let gap = sample.maxY - viewport
+        if gap < 24 {
+            sawBottom = true
+            followLatest = true
+        } else if gap > 48, sawBottom {
+            followLatest = false
+        }
+    }
+
+    private func sendDraft() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        draft = ""
+        composerFocused = false
+        followLatest = true
+        pinRequest += 1
+        Task { await store.start(prompt: text, sessionID: sessionID) }
     }
 
     private var canvas: Color {
@@ -223,7 +357,7 @@ struct ChatThreadView: View {
         if let current {
             HStack(spacing: 8) {
                 StatusMark(status: current.status)
-                Text(current.status.title)
+                Text(current.status == .idle ? "Chat" : current.status.title)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(LojoTheme.secondaryText)
                     .accessibilityIdentifier("chat.thread")
@@ -249,20 +383,33 @@ struct ChatThreadView: View {
     }
 
     @ViewBuilder
-    private var transcript: some View {
+    private func transcript(_ proxy: ScrollViewProxy) -> some View {
         let lines = current?.transcript ?? []
-        if lines.isEmpty, let summary = current?.summary, !summary.isEmpty {
-            ChatBubble(line: summary)
+        let blocks = ChatTranscript.blocks(from: lines.isEmpty ? summaryLines : lines, toolsRunning: current?.status == .running)
+        ForEach(blocks) { block in
+            ChatBlockRow(block: block, oldest: block.id == blocks.first?.id) {
+                let rowID = "chat.block.\(block.id)"
+                DispatchQueue.main.async {
+                    if followLatest {
+                        pin(proxy)
+                    } else {
+                        holdRow(proxy, id: rowID)
+                    }
+                }
+            }
+            .id("chat.block.\(block.id)")
         }
-        ForEach(Array(lines.enumerated()), id: \.offset) { item in
-            ChatBubble(line: item.element)
-        }
-        if current?.status == .running {
+        if current?.status == .running, !blocks.endsWithRunningTools {
             Text("…")
                 .font(.title3.weight(.bold))
                 .foregroundStyle(LojoTheme.secondaryText)
                 .accessibilityLabel("Reply streaming")
         }
+    }
+
+    private var summaryLines: [String] {
+        guard let summary = current?.summary, !summary.isEmpty else { return [] }
+        return [summary]
     }
 
     private func permissionCard(_ permission: PermissionRequest) -> some View {
@@ -294,6 +441,9 @@ struct ChatThreadView: View {
         HStack(alignment: .bottom, spacing: 10) {
             TextField("Message", text: $draft)
                 .textFieldStyle(.plain)
+                .focused($composerFocused)
+                .submitLabel(.send)
+                .onSubmit(sendDraft)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
                 .frame(minHeight: 48)
@@ -302,11 +452,7 @@ struct ChatThreadView: View {
                         .fill(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05))
                 )
                 .accessibilityIdentifier("chat.composer")
-            Button {
-                let text = draft
-                draft = ""
-                Task { await store.start(prompt: text, sessionID: sessionID) }
-            } label: {
+            Button(action: sendDraft) label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 32))
             }
@@ -320,59 +466,105 @@ struct ChatThreadView: View {
     }
 }
 
-struct ChatBubble: View {
-    var line: String
+private struct ChatEdgeSample: Equatable {
+    var maxY: CGFloat = 0
+    var token: String = ""
+}
+
+private struct ChatBottomEdgeKey: PreferenceKey {
+    static var defaultValue = ChatEdgeSample()
+    static func reduce(value: inout ChatEdgeSample, nextValue: () -> ChatEdgeSample) {
+        value = nextValue()
+    }
+}
+
+private struct ChatViewportKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+private extension Array where Element == ChatBlock {
+    var endsWithRunningTools: Bool {
+        guard let last = last else { return false }
+        if case .tools(_, _, true) = last { return true }
+        return false
+    }
+}
+
+struct ChatBlockRow: View {
+    var block: ChatBlock
+    var oldest: Bool
+    var onToggle: () -> Void
     @Environment(\.colorScheme) private var scheme
     @State private var toolOpen = false
 
     var body: some View {
-        if ChatTranscript.isToolCard(line) {
-            DisclosureGroup(isExpanded: $toolOpen) {
-                Text(String(line.dropFirst(ChatTranscript.toolPrefix.count)).trimmingCharacters(in: .whitespaces))
-                    .font(.footnote)
-                    .foregroundStyle(LojoTheme.secondaryText)
-            } label: {
-                Text(line)
-                    .font(.footnote.weight(.semibold))
+        switch block {
+        case .user(_, let text):
+            bubble(text, mine: true)
+        case .assistant(_, let text):
+            bubble(text, mine: false)
+        case .note(_, let text):
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(LojoTheme.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .center)
+        case .tools(_, let steps, let running):
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    toolOpen.toggle()
+                    onToggle()
+                } label: {
+                    HStack(spacing: 8) {
+                        if running {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(ChatTranscript.toolGroupTitle(count: steps.count))
+                            .font(.footnote.weight(.semibold))
+                        Spacer(minLength: 0)
+                        Image(systemName: toolOpen ? "chevron.up" : "chevron.down")
+                            .font(.caption2.weight(.bold))
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("chat.tools")
+                .accessibilityLabel(ChatTranscript.toolGroupTitle(count: steps.count))
+                if toolOpen {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { item in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.element.summary)
+                                .font(.caption.weight(.semibold))
+                            Text(item.element.detail)
+                                .font(.caption2)
+                                .foregroundStyle(LojoTheme.secondaryText)
+                                .lineLimit(4)
+                        }
+                    }
+                }
             }
             .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(scheme == .dark ? Color.white.opacity(0.06) : Color.black.opacity(0.04))
             )
-        } else if ChatTranscript.isNote(line) {
-            Text(line)
-                .font(.caption)
-                .foregroundStyle(LojoTheme.secondaryText)
-                .frame(maxWidth: .infinity, alignment: .center)
-        } else if line.hasPrefix("You:") {
-            Text(markdown(String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces)))
-                .font(.body)
-                .foregroundStyle(.white)
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(LojoTheme.accent)
-                )
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        } else {
-            Text(markdown(display))
-                .font(.body)
-                .foregroundStyle(.primary)
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05))
-                )
         }
     }
 
-    private var display: String {
-        if line.hasPrefix("Grok:") {
-            return String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-        }
-        return line
+    private func bubble(_ text: String, mine: Bool) -> some View {
+        Text(markdown(text))
+            .font(.body)
+            .foregroundStyle(mine ? Color.white : Color.primary)
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(mine ? LojoTheme.accent : (scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05)))
+            )
+            .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+            .accessibilityIdentifier(oldest ? "chat.oldest" : "chat.line")
     }
 
     private func markdown(_ source: String) -> AttributedString {
