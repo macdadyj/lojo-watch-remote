@@ -1712,13 +1712,16 @@ final class RemoteStore: ObservableObject {
         publish()
     }
 
-    /// The Watch simulator often activates after the first push. Keep sending the echo snapshot until it is listening.
+    /// The Watch app is installed after this process starts. Keep the echo snapshot
+    /// flowing until the tests finish, and send one immediately.
     private func scheduleEchoPublish() {
+        publish()
         echoPushTask?.cancel()
         echoPushTask = Task { [weak self] in
-            for _ in 0..<24 {
+            for _ in 0..<800 {
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
-                self?.publish()
+                guard let self, !Task.isCancelled else { return }
+                self.publish()
             }
         }
     }

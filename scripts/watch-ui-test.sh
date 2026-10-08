@@ -129,14 +129,14 @@ import json, subprocess, sys
 watch, phone = sys.argv[1], sys.argv[2]
 raw = subprocess.check_output(["xcrun", "simctl", "list", "pairs", "-j"], text=True)
 pairs = json.loads(raw).get("pairs") or {}
-matched = False
+matched_id = ""
 for pair_id, row in pairs.items():
     w = (row.get("watch") or {}).get("udid", "")
     p = (row.get("phone") or {}).get("udid", "")
     if not w or not p:
         continue
     if w == watch and p == phone:
-        matched = True
+        matched_id = str(pair_id)
         continue
     if w in (watch, phone) or p in (watch, phone):
         # simctl unpair takes the pair id. A device udid is "Invalid device pair".
@@ -144,11 +144,21 @@ for pair_id, row in pairs.items():
         code = subprocess.call(["xcrun", "simctl", "unpair", pair_id])
         if code != 0:
             subprocess.call(["xcrun", "simctl", "help", "unpair"])
-if matched:
-    print(f"already paired {watch} {phone}", flush=True)
+if matched_id:
+    print(f"already paired {watch} {phone} {matched_id}", flush=True)
+    subprocess.call(["xcrun", "simctl", "pair_activate", matched_id])
     raise SystemExit(0)
 print(f"pair {watch} {phone}", flush=True)
-raise SystemExit(subprocess.call(["xcrun", "simctl", "pair", watch, phone]))
+result = subprocess.run(["xcrun", "simctl", "pair", watch, phone], text=True, capture_output=True)
+sys.stdout.write(result.stdout)
+sys.stdout.write(result.stderr)
+sys.stdout.flush()
+if result.returncode != 0:
+    raise SystemExit(result.returncode)
+pair_id = result.stdout.strip().split()[-1] if result.stdout.strip() else ""
+if pair_id:
+    subprocess.call(["xcrun", "simctl", "pair_activate", pair_id])
+raise SystemExit(0)
 PY
 }
 
@@ -172,6 +182,10 @@ ensure_pair() {
 boot_pair() {
   local watch="$1"
   ensure_pair "${watch}" "${PHONE_UDID}"
+  # WatchConnectivity reads the pair at boot. A pair made while booted stays invisible.
+  xcrun simctl shutdown "${watch}" || true
+  xcrun simctl shutdown "${PHONE_UDID}" || true
+  sleep 2
   xcrun simctl boot "${watch}" || true
   xcrun simctl boot "${PHONE_UDID}" || true
   xcrun simctl bootstatus "${PHONE_UDID}" -b || true

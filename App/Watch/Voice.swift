@@ -303,6 +303,7 @@ struct VoiceChatView: View {
     @State private var followLatest = true
     @State private var holdFollow = true
     @State private var viewportHeight: CGFloat = 0
+    @State private var viewportOrigin: CGPoint = .zero
     @State private var lastSample = VoiceEdgeSample()
     @State private var followedToken = ""
     /// Set once the latest line has actually sat at the bottom, so a bad first measurement cannot unpin.
@@ -314,6 +315,7 @@ struct VoiceChatView: View {
     @State private var bottomPad: CGFloat = 0
     /// The hang `bottomPad` was applied for. A later reading that did not shrink means the pad cannot grow.
     @State private var paddedFor: CGFloat = 0
+    @State private var rowSpans: [ViewportSpan] = []
     @State private var showCompose = false
 
     private let bubbleSpacing: CGFloat = 4
@@ -429,9 +431,7 @@ struct VoiceChatView: View {
                         .padding(.horizontal, 6)
                         .padding(.top, 2)
                         .padding(.bottom, 2)
-                    Color.clear
-                        .frame(height: bottomPad)
-                        .accessibilityHidden(true)
+                        .offset(y: -bottomPad)
                     Color.clear
                         .frame(height: 1)
                         .id("voice.bottom")
@@ -453,7 +453,9 @@ struct VoiceChatView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 GeometryReader { geo in
-                    Color.clear.preference(key: VoiceViewportKey.self, value: geo.size.height)
+                    Color.clear
+                        .preference(key: VoiceViewportKey.self, value: geo.size.height)
+                        .preference(key: ViewportFrameKey.self, value: geo.frame(in: .global))
                 }
             }
             .onPreferenceChange(VoiceBottomEdgeKey.self) { sample in
@@ -464,11 +466,25 @@ struct VoiceChatView: View {
                 viewportHeight = height
                 noteFollow(lastSample, viewport: height)
             }
+            .onPreferenceChange(ViewportFrameKey.self) { frame in
+                let moved = abs(frame.origin.y - viewportOrigin.y) > 1 || abs(frame.origin.x - viewportOrigin.x) > 1
+                viewportOrigin = frame.origin
+                if frame.height > 1 {
+                    viewportHeight = frame.height
+                }
+                if moved {
+                    paddedFor = 0
+                    bottomPad = 0
+                }
+                noteRowSpans(rowSpans, origin: frame.origin)
+            }
             .accessibilityIdentifier("voice.history")
+            .accessibilityValue("\(Int(bottomPad.rounded()))")
             .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 0, for: .scrollContent)
             .onPreferenceChange(RowSpanKey.self) { spans in
-                noteRowSpans(spans)
+                rowSpans = spans
+                noteRowSpans(spans, origin: viewportOrigin)
             }
             .onChange(of: tailToken) { _, _ in
                 pin(proxy)
@@ -644,11 +660,17 @@ struct VoiceChatView: View {
         }
     }
 
-    /// A row that still crosses the top grows the spacer by that hang. Once the row is
-    /// fully above the viewport the hang drops and the spacer stays, so the list does not jump.
-    private func noteRowSpans(_ spans: [ViewportSpan]) {
+    /// A row that still crosses the top shifts the stack up by that hang. Once the row is
+    /// fully above the viewport the hang drops and the shift stays, so the list does not jump.
+    private func noteRowSpans(_ spans: [ViewportSpan], origin: CGPoint) {
         guard viewportHeight > 1 else { return }
-        let stub = VoiceChromeMetrics.topStub(spans)
+        let local = spans.map { span in
+            ViewportSpan(
+                minY: span.minY - origin.y,
+                maxY: span.maxY - origin.y
+            )
+        }
+        let stub = VoiceChromeMetrics.topStub(local)
         guard stub <= 48 else { return }
         if bottomPad > 0.5, paddedFor > 1, stub > paddedFor - 2 {
             return
@@ -697,6 +719,13 @@ private struct VoiceViewportKey: PreferenceKey {
     }
 }
 
+private struct ViewportFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        value = nextValue()
+    }
+}
+
 private struct RowSpanKey: PreferenceKey {
     static var defaultValue: [ViewportSpan] = []
     static func reduce(value: inout [ViewportSpan], nextValue: () -> [ViewportSpan]) {
@@ -708,7 +737,7 @@ private extension View {
     func reportRowSpan() -> some View {
         background {
             GeometryReader { geo in
-                let frame = geo.frame(in: .named("voice.scroll"))
+                let frame = geo.frame(in: .global)
                 Color.clear.preference(
                     key: RowSpanKey.self,
                     value: [ViewportSpan(minY: frame.minY, maxY: frame.maxY)]

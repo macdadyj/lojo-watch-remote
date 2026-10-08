@@ -176,7 +176,7 @@ final class WatchScaffoldUITests: XCTestCase {
         XCTAssertEqual(
             XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: settled, object: nil)], timeout: 6),
             .completed,
-            "restored chat wanted \(needed) whole bubbles in \(history.frame); \(self.bubblePlacement(in: history, app: app).full) full; \(self.bubblePlacement(in: history, app: app).clipped)",
+            "restored chat wanted \(needed) whole bubbles in \(history.frame) shift \(history.value); \(self.bubblePlacement(in: history, app: app).full) full; \(self.bubblePlacement(in: history, app: app).clipped)",
             file: file,
             line: line
         )
