@@ -403,14 +403,6 @@ struct VoiceChatView: View {
             }
             .accessibilityIdentifier("voice.history")
             .contentMargins(.top, 4, for: .scrollContent)
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 8).onChanged { value in
-                    if value.translation.height > 16 {
-                        followLatest = false
-                        holdFollow = false
-                    }
-                }
-            )
             .onChange(of: tailToken) { _, _ in
                 guard followLatest else { return }
                 pin(proxy)

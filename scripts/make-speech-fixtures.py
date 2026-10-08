@@ -79,11 +79,11 @@ def say_clip(phrase: str, trailing: float, path: Path) -> bool:
         samples = list(struct.unpack("<" + "h" * (len(raw) // 2), raw))
         samples.extend(silence(trailing))
         # A Mac without a speech voice can make `say` exit 0 and write almost no audio.
-        # Leave the clip for the tone fallback instead of failing the Watch UI job.
+        # long_enough returns a problem string, which is truthy, so a short clip must not be kept.
         if long_enough(path.stem, trailing, len(samples)):
-            write_pcm(path, samples)
-            return True
-        return False
+            return False
+        write_pcm(path, samples)
+        return True
     except (subprocess.CalledProcessError, wave.Error, struct.error):
         return False
     finally:

@@ -250,18 +250,6 @@ struct ChatThreadView: View {
                     noteFollow(lastSample, viewport: height)
                 }
                 .accessibilityIdentifier("chat.history")
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 16).onChanged { value in
-                        if value.translation.height > 36 {
-                            followLatest = false
-                            holdFollow = false
-                        }
-                    }.onEnded { value in
-                        if value.translation.height < -36 {
-                            pin(proxy)
-                        }
-                    }
-                )
                 .onChange(of: pinRequest) { _, _ in
                     pin(proxy)
                 }
