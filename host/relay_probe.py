@@ -68,6 +68,7 @@ def start_relay(port: int) -> subprocess.Popen:
     env = os.environ.copy()
     env["WATCHREMOTE_OUTBOUND_BIND"] = "127.0.0.1"
     env["WATCHREMOTE_OUTBOUND_PORT"] = str(port)
+    print(f"relay-spawning port={port}", flush=True)
     proc = subprocess.Popen(
         ["node", "relay/outbound/server.mjs"],
         cwd=ROOT,

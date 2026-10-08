@@ -55,12 +55,10 @@ echo "simulator small: ${SMALL_NAME} ${SMALL_UDID}"
 echo "simulator large: ${LARGE_NAME} ${LARGE_UDID}"
 echo "simulator phone: ${PHONE_NAME} ${PHONE_UDID}"
 
-xcrun simctl boot "${PHONE_UDID}" || true
-xcrun simctl bootstatus "${PHONE_UDID}" -b
-
 printf '%s\n' "${ROOT}" > /tmp/watchremote-repo-root
 export WATCHREMOTE_REPO_ROOT="${ROOT}"
 
+# Start the relay before the simulator migration. Node was not printing while the phone was booting.
 PROBE_LOG="${ROOT}/build/relay-probe.log"
 mkdir -p "${ROOT}/build"
 PYTHONUNBUFFERED=1 python3 "${ROOT}/host/relay_probe.py" --pairing-file "${ROOT}/build/relay-probe.json" --port 18765 --control-port 18766 >"${PROBE_LOG}" 2>&1 &
@@ -71,6 +69,10 @@ cleanup_probe() {
   fi
 }
 trap cleanup_probe EXIT
+
+xcrun simctl boot "${PHONE_UDID}" || true
+xcrun simctl bootstatus "${PHONE_UDID}" -b
+
 ready=0
 for _ in $(seq 1 60); do
   if grep -q "probe-ready" "${PROBE_LOG}" 2>/dev/null; then
