@@ -47,7 +47,9 @@ final class WatchScaffoldUITests: XCTestCase {
             app.staticTexts["The computer is reachable only on the private overlay."].waitForExistence(timeout: 4),
             "restored chat did not show the session summary"
         )
-        XCTAssertTrue(app.staticTexts["Worked · 3 steps"].waitForExistence(timeout: 4), "tool calls were not grouped")
+        let tools = app.buttons["voice.tools"]
+        XCTAssertTrue(tools.waitForExistence(timeout: 4), "tool calls were not grouped")
+        XCTAssertTrue(tools.label.contains("Worked"), "tool calls were not grouped")
         XCTAssertFalse(app.staticTexts["Tool: Tool"].exists, "a nameless tool row is still a transcript line")
         XCTAssertFalse(
             app.staticTexts["Execute curl -fsS https://example.invalid/weather"].exists,

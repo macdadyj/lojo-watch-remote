@@ -92,7 +92,7 @@ struct WatchListView: View {
                 // One short header so the first chat sits inside the scroll view, above Speak.
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
-                        StatusMark(status: headerMark, size: 8)
+                        StatusMark(status: headerMark, size: 10)
                         Text(model.snapshot.hostLabel)
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(LojoTheme.readablePrimary(scheme))
@@ -102,12 +102,12 @@ struct WatchListView: View {
                     }
                     HStack(spacing: 4) {
                         Text(headerTitle)
-                            .font(.caption2.weight(.semibold))
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(LojoTheme.readablePrimary(scheme))
                             .lineLimit(1)
                         Text(model.pathTitle)
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(pathColor)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readablePrimary(scheme))
                             .lineLimit(1)
                             .accessibilityLabel("Path \(model.pathTitle)")
                     }
@@ -116,8 +116,8 @@ struct WatchListView: View {
                     }
                     if showsApprovalNote {
                         Text("Tasks cannot ask for approval.")
-                            .font(.caption2)
-                            .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                            .font(.caption)
+                            .foregroundStyle(LojoTheme.readablePrimary(scheme))
                             .lineLimit(2)
                     }
                 }
@@ -138,7 +138,7 @@ struct WatchListView: View {
                     .accessibilityIdentifier("voice.repair")
                 }
                 ListenTestHooks()
-                if model.snapshot.sessions.isEmpty {
+                if model.snapshot.sessions.isEmpty, model.banner == nil, model.snapshot.banner == nil {
                     Text(emptyCopy)
                         .font(.caption)
                         .foregroundStyle(LojoTheme.readableSecondary(scheme))
@@ -209,10 +209,6 @@ struct WatchListView: View {
         return model.snapshot.link.title
     }
 
-    private var pathColor: Color {
-        model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readableSecondary(scheme)
-    }
-
     private var headerMark: SessionStatus {
         if phoneAway { return .unknown }
         switch model.snapshot.link {
@@ -257,7 +253,7 @@ struct WatchRow: View {
         VStack(alignment: .leading, spacing: 2) {
             if session.status == .needsApproval || session.status == .failed {
                 HStack(spacing: 4) {
-                    StatusMark(status: session.status, size: 8)
+                    StatusMark(status: session.status, size: 10)
                     Text(session.status.title)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(LojoTheme.readablePrimary(scheme))
@@ -269,8 +265,8 @@ struct WatchRow: View {
                 .foregroundStyle(LojoTheme.readablePrimary(scheme))
                 .lineLimit(1)
             Text(ChatTranscript.lastMessage(summary: session.summary, transcript: session.transcript))
-                .font(.caption2)
-                .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                .font(.footnote)
+                .foregroundStyle(LojoTheme.readablePrimary(scheme))
                 .lineLimit(1)
         }
         .lojoCard(padding: 6)
