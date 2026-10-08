@@ -89,10 +89,12 @@ struct WatchListView: View {
     private var sessionList: some View {
         VStack(alignment: .leading, spacing: 2) {
             listHeader
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 6)
             ScrollView {
                 sessionRows
             }
+            .layoutPriority(1)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .accessibilityIdentifier("session.list")
             .contentMargins(.top, 0, for: .scrollContent)

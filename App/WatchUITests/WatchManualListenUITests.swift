@@ -113,9 +113,11 @@ final class WatchManualListenUITests: XCTestCase {
     private func openIdle(_ app: XCUIApplication) {
         let list = app.scrollViews["session.list"]
         XCTAssertTrue(list.waitForExistence(timeout: 40), "home session list did not appear")
-        var row = app.buttons["session.row.\(Self.idleSessionID)"]
-        if !row.waitForExistence(timeout: 4) {
-            app.swipeUp()
+        let row = app.buttons["session.row.\(Self.idleSessionID)"]
+        if !row.waitForExistence(timeout: 4) || !row.isHittable {
+            for _ in 0..<4 where !(row.exists && row.isHittable) {
+                list.swipeUp()
+            }
         }
         XCTAssertTrue(row.waitForExistence(timeout: 8), "idle session row missing")
         row.tap()

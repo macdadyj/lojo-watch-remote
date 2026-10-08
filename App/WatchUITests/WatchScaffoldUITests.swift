@@ -30,10 +30,7 @@ final class WatchScaffoldUITests: XCTestCase {
         assertActionHintFits(app)
         shot(app, "scaffold-home")
 
-        var row = app.buttons["session.row.\(Self.idleSessionID)"]
-        if !row.waitForExistence(timeout: 4) {
-            app.swipeUp()
-        }
+        let row = reveal(app.buttons["session.row.\(Self.idleSessionID)"], in: list)
         XCTAssertTrue(row.waitForExistence(timeout: 8), "idle session row missing")
         row.tap()
 
@@ -128,11 +125,7 @@ final class WatchScaffoldUITests: XCTestCase {
         )
 
         let longID = "0199aaaa-0000-7000-8000-000000000005"
-        var row = app.buttons["session.row.\(longID)"]
-        if !row.waitForExistence(timeout: 2) {
-            list.swipeUp()
-            row = app.buttons["session.row.\(longID)"]
-        }
+        let row = reveal(app.buttons["session.row.\(longID)"], in: list)
         XCTAssertTrue(row.waitForExistence(timeout: 8), "long chat row missing")
         row.tap()
 
@@ -206,6 +199,15 @@ final class WatchScaffoldUITests: XCTestCase {
             file: file,
             line: line
         )
+    }
+
+    private func reveal(_ row: XCUIElement, in list: XCUIElement) -> XCUIElement {
+        if !row.waitForExistence(timeout: 4) || !row.isHittable {
+            for _ in 0..<4 where !(row.exists && row.isHittable) {
+                list.swipeUp()
+            }
+        }
+        return row
     }
 
     private func shown(_ element: XCUIElement, in scroll: XCUIElement) -> Bool {
