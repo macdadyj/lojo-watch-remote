@@ -137,18 +137,21 @@ final class WatchScaffoldUITests: XCTestCase {
         XCTAssertTrue(reply.waitForExistence(timeout: 8), "latest reply missing")
         XCTAssertTrue(mine.waitForExistence(timeout: 4), "user line missing")
 
-        let needed = app.frame.height >= 230 ? 3 : 2
-        let visibleEnough = NSPredicate { _, _ in
-            self.visibleBubbleCount(in: history, app: app) >= needed
+        let settled = NSPredicate { _, _ in
+            self.shown(reply, in: history) && self.shown(mine, in: history)
         }
         XCTAssertEqual(
-            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: visibleEnough, object: nil)], timeout: 6),
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: settled, object: nil)], timeout: 6),
             .completed,
-            "transcript shows \(visibleBubbleCount(in: history, app: app)) bubbles in \(history.frame); wanted \(needed); \(bubbleFrames(app))"
+            "latest bubbles stayed off screen \(reply.frame) \(mine.frame)"
         )
+        let needed = app.frame.height >= 230 ? 3 : 2
         let visible = visibleBubbleCount(in: history, app: app)
-        XCTAssertTrue(shown(reply, in: history), "latest reply is off screen")
-        XCTAssertTrue(shown(mine, in: history), "user line is off screen")
+        XCTAssertGreaterThanOrEqual(
+            visible,
+            needed,
+            "transcript shows \(visible) bubbles in \(history.frame); wanted \(needed); \(bubbleFrames(app))"
+        )
         XCTAssertGreaterThan(mine.frame.maxX, history.frame.midX, "user bubble is not on the right")
         XCTAssertLessThan(mine.frame.width, history.frame.width * 0.92, "user bubble fills the row")
         XCTAssertLessThan(reply.frame.minX, history.frame.midX, "assistant bubble does not start on the left")
