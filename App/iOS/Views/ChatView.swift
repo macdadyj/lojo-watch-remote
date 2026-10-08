@@ -194,6 +194,7 @@ struct ChatThreadView: View {
     /// Set once the latest line has actually sat at the bottom, so a bad first measurement cannot unpin.
     @State private var sawBottom = false
     @State private var pinRequest = 0
+    @State private var openToolIDs: Set<Int> = []
 
     private var tailToken: String {
         let lines = current?.transcript ?? []
@@ -387,8 +388,18 @@ struct ChatThreadView: View {
         let lines = current?.transcript ?? []
         let blocks = ChatTranscript.blocks(from: lines.isEmpty ? summaryLines : lines, toolsRunning: current?.status == .running)
         ForEach(blocks) { block in
-            ChatBlockRow(block: block, oldest: block.id == blocks.first?.id) {
-                let rowID = "chat.block.\(block.id)"
+            let rowID = "chat.block.\(block.id)"
+            ChatBlockRow(
+                block: block,
+                oldest: block.id == blocks.first?.id,
+                latest: block.id == blocks.last?.id,
+                toolsOpen: openToolIDs.contains(block.id)
+            ) {
+                if openToolIDs.contains(block.id) {
+                    openToolIDs.remove(block.id)
+                } else {
+                    openToolIDs.insert(block.id)
+                }
                 DispatchQueue.main.async {
                     if followLatest {
                         pin(proxy)
@@ -397,7 +408,7 @@ struct ChatThreadView: View {
                     }
                 }
             }
-            .id("chat.block.\(block.id)")
+            .id(rowID)
         }
         if current?.status == .running, !blocks.endsWithRunningTools {
             Text("…")
@@ -496,9 +507,10 @@ private extension Array where Element == ChatBlock {
 struct ChatBlockRow: View {
     var block: ChatBlock
     var oldest: Bool
+    var latest: Bool
+    var toolsOpen: Bool
     var onToggle: () -> Void
     @Environment(\.colorScheme) private var scheme
-    @State private var toolOpen = false
 
     var body: some View {
         switch block {
@@ -514,7 +526,6 @@ struct ChatBlockRow: View {
         case .tools(_, let steps, let running):
             VStack(alignment: .leading, spacing: 6) {
                 Button {
-                    toolOpen.toggle()
                     onToggle()
                 } label: {
                     HStack(spacing: 8) {
@@ -525,14 +536,14 @@ struct ChatBlockRow: View {
                         Text(ChatTranscript.toolGroupTitle(count: steps.count))
                             .font(.footnote.weight(.semibold))
                         Spacer(minLength: 0)
-                        Image(systemName: toolOpen ? "chevron.up" : "chevron.down")
+                        Image(systemName: toolsOpen ? "chevron.up" : "chevron.down")
                             .font(.caption2.weight(.bold))
                     }
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("chat.tools")
                 .accessibilityLabel(ChatTranscript.toolGroupTitle(count: steps.count))
-                if toolOpen {
+                if toolsOpen {
                     ForEach(Array(steps.enumerated()), id: \.offset) { item in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.element.summary)
@@ -564,7 +575,7 @@ struct ChatBlockRow: View {
                     .fill(mine ? LojoTheme.accent : (scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05)))
             )
             .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
-            .accessibilityIdentifier(oldest ? "chat.oldest" : "chat.line")
+            .accessibilityIdentifier(latest ? "chat.latest" : (oldest ? "chat.oldest" : "chat.line"))
     }
 
     private func markdown(_ source: String) -> AttributedString {

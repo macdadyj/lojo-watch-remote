@@ -459,7 +459,7 @@ final class WatchRemoteCoreTests: XCTestCase {
         let snapshot = DemoCatalog.snapshot().trimmed(summaryLimit: 40)
         let text = try? XCTUnwrap(LinkCodec.encodeSnapshot(snapshot))
         let decoded = text.flatMap(LinkCodec.decodeSnapshot)
-        XCTAssertEqual(decoded?.sessions.count, 3)
+        XCTAssertEqual(decoded?.sessions.count, 4)
         XCTAssertEqual(decoded?.hostLabel, "example-host")
         let command = PhoneCommand(kind: .approve, sessionID: DemoCatalog.approvalID, permissionID: "perm-demo")
         let resume = PhoneCommand(kind: .resume, sessionID: DemoCatalog.idleID)

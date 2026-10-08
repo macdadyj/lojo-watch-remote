@@ -98,16 +98,21 @@ final class PhoneChatUITests: XCTestCase {
         row.tap()
         let history = app.descendants(matching: .any)["chat.history"]
         XCTAssertTrue(history.waitForExistence(timeout: 8))
-        let latest = history.staticTexts["Yes. The latest line is this one."]
+        let latest = marked(history, "chat.latest")
         XCTAssertTrue(latest.waitForExistence(timeout: 8))
-        let oldest = history.staticTexts["oldest note in this chat"]
+        XCTAssertTrue(latest.label.contains("Yes. The latest line is this one."))
+        let oldest = marked(history, "chat.oldest")
         XCTAssertTrue(oldest.waitForExistence(timeout: 4), "the first message is missing from the chat")
         XCTAssertTrue(waitUntilVisible(latest, in: history), "opening a long chat hid the latest message")
         XCTAssertFalse(visible(oldest, in: history), "opening a long chat showed the first message")
         send(app, "ping the bottom")
-        let reply = history.staticTexts["Done. ping the bottom"]
-        XCTAssertTrue(reply.waitForExistence(timeout: 8), "the reply did not arrive")
-        XCTAssertTrue(waitUntilVisible(reply, in: history), "the latest message is off screen")
+        let replied = NSPredicate(format: "label CONTAINS %@", "Done. ping the bottom")
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: replied, object: latest)], timeout: 8),
+            .completed,
+            "the reply did not arrive"
+        )
+        XCTAssertTrue(waitUntilVisible(latest, in: history), "the latest message is off screen")
         XCTAssertFalse(visible(oldest, in: history), "sending jumped back to the start of the chat")
         shot(app, "phone-long-anchored")
     }
@@ -118,8 +123,10 @@ final class PhoneChatUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Worked · 3 steps"].waitForExistence(timeout: 6), "tool calls were not grouped")
         XCTAssertFalse(app.staticTexts["Tool: Tool"].exists)
         XCTAssertFalse(app.staticTexts["Execute curl -fsS https://example.invalid/weather"].exists)
-        app.buttons["chat.tools"].tap()
-        XCTAssertTrue(app.staticTexts["Ran a command"].waitForExistence(timeout: 4))
+        let tools = app.buttons["chat.tools"].firstMatch
+        XCTAssertTrue(tools.waitForExistence(timeout: 4))
+        tools.tap()
+        XCTAssertTrue(app.staticTexts["Ran a command"].firstMatch.waitForExistence(timeout: 4))
         XCTAssertTrue(app.staticTexts["Searched the web"].exists)
         XCTAssertTrue(app.staticTexts["Used a tool"].exists)
         shot(app, "phone-tools-collapsed")
@@ -164,6 +171,10 @@ final class PhoneChatUITests: XCTestCase {
         let view = app.textViews[identifier]
         if view.waitForExistence(timeout: 2) { return view }
         return field
+    }
+
+    private func marked(_ parent: XCUIElement, _ identifier: String) -> XCUIElement {
+        parent.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
     private func visible(_ element: XCUIElement, in container: XCUIElement) -> Bool {

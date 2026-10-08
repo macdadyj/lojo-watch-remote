@@ -295,6 +295,7 @@ struct VoiceChatView: View {
     @State private var followedToken = ""
     /// Set once the latest line has actually sat at the bottom, so a bad first measurement cannot unpin.
     @State private var sawBottom = false
+    @State private var openToolIDs: Set<Int> = []
 
     private var showSpeakAgain: Bool {
         switch model.voiceStatus {
@@ -470,8 +471,13 @@ struct VoiceChatView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(blocks) { block in
-                WatchBubble(block: block) {
-                    let rowID = "voice.block.\(block.id)"
+                let rowID = "voice.block.\(block.id)"
+                WatchBubble(block: block, toolsOpen: openToolIDs.contains(block.id)) {
+                    if openToolIDs.contains(block.id) {
+                        openToolIDs.remove(block.id)
+                    } else {
+                        openToolIDs.insert(block.id)
+                    }
                     DispatchQueue.main.async {
                         if followLatest {
                             pin(proxy)
@@ -480,7 +486,7 @@ struct VoiceChatView: View {
                         }
                     }
                 }
-                .id("voice.block.\(block.id)")
+                .id(rowID)
             }
                 Button("Chats") {
                     model.voiceModeActive = false
@@ -570,9 +576,9 @@ private struct VoiceViewportKey: PreferenceKey {
 
 private struct WatchBubble: View {
     var block: ChatBlock
+    var toolsOpen: Bool = false
     var onToggle: () -> Void = {}
     @Environment(\.colorScheme) private var scheme
-    @State private var toolOpen = false
 
     var body: some View {
         switch block {
@@ -588,7 +594,6 @@ private struct WatchBubble: View {
         case .tools(_, let steps, let running):
             VStack(alignment: .leading, spacing: 4) {
                 Button {
-                    toolOpen.toggle()
                     onToggle()
                 } label: {
                     HStack(spacing: 4) {
@@ -604,7 +609,7 @@ private struct WatchBubble: View {
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("voice.tools")
                 .accessibilityLabel(ChatTranscript.toolGroupTitle(count: steps.count))
-                if toolOpen {
+                if toolsOpen {
                     ForEach(Array(steps.enumerated()), id: \.offset) { item in
                         Text(item.element.summary)
                             .font(.caption2.weight(.semibold))
