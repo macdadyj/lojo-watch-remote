@@ -131,9 +131,10 @@ final class WatchScaffoldUITests: XCTestCase {
 
         let history = app.scrollViews["voice.history"]
         XCTAssertTrue(history.waitForExistence(timeout: 8), "long chat did not open")
-        let reply = app.staticTexts["Yes. The latest line is this one."]
+        let lines = app.staticTexts.matching(identifier: "voice.line")
+        let reply = lines.matching(NSPredicate(format: "label == %@", "Yes. The latest line is this one.")).firstMatch
+        let mine = lines.matching(NSPredicate(format: "label == %@", "Still with me?")).firstMatch
         XCTAssertTrue(reply.waitForExistence(timeout: 8), "latest reply missing")
-        let mine = app.staticTexts["Still with me?"]
         XCTAssertTrue(mine.waitForExistence(timeout: 4), "user line missing")
 
         let needed = app.frame.height >= 230 ? 3 : 2
@@ -201,14 +202,16 @@ final class WatchScaffoldUITests: XCTestCase {
 
     private func visibleBubbleCount(in history: XCUIElement, app: XCUIApplication) -> Int {
         let query = app.staticTexts.matching(identifier: "voice.line")
-        let total = min(query.count, 16)
-        return (0..<total).filter { shown(query.element(boundBy: $0), in: history) }.count
+        let total = query.count
+        let start = max(total - 12, 0)
+        return (start..<total).filter { shown(query.element(boundBy: $0), in: history) }.count
     }
 
     private func bubbleFrames(_ app: XCUIApplication) -> String {
         let query = app.staticTexts.matching(identifier: "voice.line")
-        let total = min(query.count, 6)
-        return (0..<total).map { "\($0) \(query.element(boundBy: $0).frame)" }.joined(separator: "; ")
+        let total = query.count
+        let start = max(total - 4, 0)
+        return (start..<total).map { "\($0) \(query.element(boundBy: $0).frame)" }.joined(separator: "; ")
     }
 
     private func reveal(_ row: XCUIElement, in list: XCUIElement) -> XCUIElement {
