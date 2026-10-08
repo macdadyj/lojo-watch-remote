@@ -50,13 +50,22 @@ final class PhoneChatUITests: XCTestCase {
         }
         XCTAssertFalse(app.secureTextFields["chat.composer"].exists, "the composer is a secure field")
         XCTAssertTrue(app.buttons["chat.dictate"].waitForExistence(timeout: 4), "dictate control is missing")
+        let sentBefore = history.staticTexts.matching(NSPredicate(format: "label == %@", "add a note")).count
+        let replyBefore = history.staticTexts.matching(NSPredicate(format: "label == %@", "Done. add a note")).count
         send(app, "add a note")
+        let arrived = NSPredicate { _, _ in
+            history.staticTexts.matching(NSPredicate(format: "label == %@", "add a note")).count > sentBefore
+                && history.staticTexts.matching(NSPredicate(format: "label == %@", "Done. add a note")).count > replyBefore
+        }
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: arrived, object: nil)], timeout: 8),
+            .completed,
+            "send did not show a new user bubble and reply"
+        )
         let sent = line(history, "add a note", last: true)
-        XCTAssertTrue(sent.waitForExistence(timeout: 8), "send did not show a user bubble")
         XCTAssertTrue(waitUntilVisible(sent, in: history), "the sent bubble is off screen")
         XCTAssertGreaterThan(sent.frame.maxX, history.frame.midX, "the sent bubble is not on the right")
         let answer = line(history, "Done. add a note", last: true)
-        XCTAssertTrue(answer.waitForExistence(timeout: 8), "send did not produce a reply")
         XCTAssertLessThan(answer.frame.minX, history.frame.midX, "the reply does not start on the left")
         XCTAssertTrue(waitUntilVisible(answer, in: history), "the reply is off screen")
         shot(app, "phone-reopened-history")
@@ -216,7 +225,8 @@ final class PhoneChatUITests: XCTestCase {
 
     private func line(_ parent: XCUIElement, _ label: String, last: Bool = false) -> XCUIElement {
         let matches = parent.staticTexts.matching(NSPredicate(format: "label == %@", label))
-        return last ? matches.lastMatch : matches.firstMatch
+        guard last, matches.count > 0 else { return matches.firstMatch }
+        return matches.element(boundBy: matches.count - 1)
     }
 
     private func visible(_ element: XCUIElement, in container: XCUIElement) -> Bool {
