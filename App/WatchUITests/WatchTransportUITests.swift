@@ -54,7 +54,7 @@ final class WatchTransportUITests: XCTestCase {
         app.launchArguments = ["-WatchRemotePhoneProbe"]
         app.launch()
         XCTAssertTrue(
-            app.staticTexts["I can hear you."].waitForExistence(timeout: 30),
+            app.staticTexts["I can hear you."].waitForExistence(timeout: 45),
             "the iPhone did not deliver a reply bubble"
         )
         XCTAssertFalse(app.staticTexts["Reconnecting…"].exists)

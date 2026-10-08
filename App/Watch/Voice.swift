@@ -310,6 +310,8 @@ struct VoiceChatView: View {
     @State private var openToolIDs: Set<Int> = []
     @State private var restoredCaption = false
     @State private var pinGeneration = 0
+    /// Empty space under the newest row so the top of the viewport falls between bubbles.
+    @State private var bottomPad: CGFloat = 0
     @State private var showCompose = false
 
     private let bubbleSpacing: CGFloat = 4
@@ -426,6 +428,8 @@ struct VoiceChatView: View {
                         .padding(.top, 2)
                         .padding(.bottom, 2)
                     Color.clear
+                        .frame(height: bottomPad)
+                    Color.clear
                         .frame(height: 1)
                         .id("voice.bottom")
                         .background {
@@ -460,7 +464,32 @@ struct VoiceChatView: View {
             .accessibilityIdentifier("voice.history")
             .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 0, for: .scrollContent)
+            .backgroundPreferenceValue(TranscriptRowKey.self) { anchors in
+                GeometryReader { geo in
+                    let frames = anchors.map { geo[$0] }
+                    let heights = frames.map(\.height).filter { $0 > 1 }
+                    let viewport = max(geo.size.height - 6, 1)
+                    let base = VoiceChromeMetrics.unclippedTailPad(
+                        viewport: viewport,
+                        heights: heights,
+                        spacing: bubbleSpacing
+                    )
+                    let stub = VoiceChromeMetrics.topStub(
+                        frames.map { ViewportSpan(minY: $0.minY, maxY: $0.maxY) }
+                    )
+                    let needed = min(viewport, max(base, stub))
+                    Color.clear.preference(key: TailPadKey.self, value: needed)
+                }
+            }
+            .onPreferenceChange(TailPadKey.self) { needed in
+                guard needed > bottomPad + 0.5 else { return }
+                bottomPad = needed
+            }
             .onChange(of: tailToken) { _, _ in
+                guard followLatest else { return }
+                pin(proxy)
+            }
+            .onChange(of: bottomPad) { _, _ in
                 guard followLatest else { return }
                 pin(proxy)
             }
@@ -530,22 +559,21 @@ struct VoiceChatView: View {
     private func bubbleStack(_ proxy: ScrollViewProxy) -> some View {
         let lines = conversationLines
         let blocks = ChatTranscript.blocks(from: lines, toolsRunning: false)
-        // 2 pt of bottom padding and the 1 pt anchor sit under the stack.
-        // The extra 3 pt keeps a rounding error from cutting the top bubble.
-        let viewport = max(viewportHeight - 6, 1)
-        return TailPinnedLayout(viewport: viewport, spacing: bubbleSpacing) {
+        return VStack(alignment: .leading, spacing: bubbleSpacing) {
             if !chatTitle.isEmpty {
                 Text(chatTitle)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(LojoTheme.readableSecondary(scheme))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .transcriptRow()
             }
             if model.forcedScreen == "voice-loop" {
                 Text("Scripted check. The microphone stays off.")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(LojoTheme.accent)
                     .fixedSize(horizontal: false, vertical: true)
+                    .transcriptRow()
             }
             if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner),
                banner != SessionResume.missingMessage {
@@ -554,6 +582,7 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.danger)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("voice.banner")
+                    .transcriptRow()
             }
             ForEach(blocks) { block in
                 let rowID = rowID(for: block)
@@ -572,6 +601,7 @@ struct VoiceChatView: View {
                     }
                 }
                 .id(rowID)
+                .transcriptRow()
             }
             if showsRestoredCaption || showsLiveStatus {
                 Text(model.voiceStatus)
@@ -585,6 +615,7 @@ struct VoiceChatView: View {
                     .onLongPressGesture(minimumDuration: 0.6) {
                         model.toggleTransportDiagnostics()
                     }
+                    .transcriptRow()
             }
             if model.showTransportDiagnostics {
                 Text(model.diagnosticsLine)
@@ -592,6 +623,7 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.readableSecondary(scheme))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("voice.diagnostics")
+                    .transcriptRow()
             }
             if model.pendingAllowSessionID != nil {
                 Button("Yes") {
@@ -602,6 +634,7 @@ struct VoiceChatView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .accessibilityLabel("Yes")
                 .accessibilityHint("Confirms the spoken allow. Saying yes does this too.")
+                .transcriptRow()
             }
             if model.dictationOffered {
                 Button("Dictate") {
@@ -612,6 +645,7 @@ struct VoiceChatView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .accessibilityLabel("Dictate")
                 .accessibilityHint("Opens the keyboard. That sheet still needs Done.")
+                .transcriptRow()
             }
             if model.repairOffered {
                 Button(RelayUserNotice.repairText) {
@@ -620,9 +654,11 @@ struct VoiceChatView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .accessibilityIdentifier("voice.repair")
+                .transcriptRow()
             }
             if model.uiShowHooks {
                 ListenTestHooks()
+                    .transcriptRow()
             }
         }
     }
@@ -664,55 +700,23 @@ private struct VoiceViewportKey: PreferenceKey {
     }
 }
 
-/// Pins the newest rows to the bottom and leaves empty space there so the top edge
-/// falls between bubbles. The pad is part of the first layout, from every row's real height.
-private struct TailPinnedLayout: Layout {
-    var viewport: CGFloat
-    var spacing: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width ?? 0
-        let metrics = metrics(width: width, subviews: subviews)
-        return CGSize(width: width, height: metrics.stack + metrics.pad)
+private struct TranscriptRowKey: PreferenceKey {
+    static var defaultValue: [Anchor<CGRect>] = []
+    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
+        value.append(contentsOf: nextValue())
     }
+}
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let width = proposal.width ?? bounds.width
-        let metrics = metrics(width: width, subviews: subviews)
-        var y = bounds.minY
-        for (offset, subview) in subviews.enumerated() {
-            guard offset < metrics.heights.count else { continue }
-            let height = metrics.heights[offset]
-            subview.place(
-                at: CGPoint(x: bounds.minX, y: y),
-                anchor: .topLeading,
-                proposal: ProposedViewSize(width: width > 1 ? width : bounds.width, height: nil)
-            )
-            y += height
-            if offset < subviews.count - 1 {
-                y += spacing
-            }
-        }
+private struct TailPadKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
     }
+}
 
-    private struct Metrics {
-        var heights: [CGFloat]
-        var stack: CGFloat
-        var pad: CGFloat
-    }
-
-    private func metrics(width: CGFloat, subviews: Subviews) -> Metrics {
-        let heights = subviews.map { subview in
-            subview.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
-        }
-        let gaps = spacing * CGFloat(max(heights.count - 1, 0))
-        let stack = heights.reduce(0, +) + gaps
-        let pad = VoiceChromeMetrics.unclippedTailPad(
-            viewport: viewport,
-            heights: heights,
-            spacing: spacing
-        )
-        return Metrics(heights: heights, stack: stack, pad: pad)
+private extension View {
+    func transcriptRow() -> some View {
+        anchorPreference(key: TranscriptRowKey.self, value: .bounds) { [$0] }
     }
 }
 

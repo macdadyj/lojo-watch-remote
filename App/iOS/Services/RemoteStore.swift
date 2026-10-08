@@ -170,6 +170,7 @@ final class RemoteStore: ObservableObject {
     private var resumeNoticeID: String?
     private var holdsLaunchFixture = false
     private var echoProbe = false
+    private var echoPushTask: Task<Void, Never>?
     private var userDisconnected = false
     private var heartbeatTask: Task<Void, Never>?
     private var autoApprovedPermissionIDs = Set<String>()
@@ -1711,6 +1712,17 @@ final class RemoteStore: ObservableObject {
         publish()
     }
 
+    /// The Watch simulator often activates after the first push. Keep sending the echo snapshot until it is listening.
+    private func scheduleEchoPublish() {
+        echoPushTask?.cancel()
+        echoPushTask = Task { [weak self] in
+            for _ in 0..<24 {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                self?.publish()
+            }
+        }
+    }
+
     private func applyLaunch() {
         let arguments = ProcessInfo.processInfo.arguments
         let environment = ProcessInfo.processInfo.environment
@@ -1732,6 +1744,7 @@ final class RemoteStore: ObservableObject {
                     transcript: ["You: earlier", "Grok: Ready."]
                 ),
             ]
+            scheduleEchoPublish()
             return
         }
         let screen = argument("-WatchRemoteScreen", arguments: arguments) ?? environment["WATCHREMOTE_SCREEN"]
@@ -1889,6 +1902,7 @@ final class PhoneBridge: NSObject, WCSessionDelegate {
             body["direct"] = direct
         }
         try? session.updateApplicationContext(body)
+        session.transferUserInfo(body)
         if session.isReachable {
             session.sendMessage(body, replyHandler: nil) { _ in }
         }

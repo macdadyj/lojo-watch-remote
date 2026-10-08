@@ -92,7 +92,7 @@ final class WatchModel: ObservableObject {
     var transportProbe: Bool { relayProbe || phoneProbe }
     @Published var showTransportDiagnostics = false
     private var probeStep: TransportProbeStep = .idle
-    private var phoneProbeSent = false
+    private var phoneProbeSentAt: Date?
 
     var promptIsQueued: Bool { pendingPrompt != nil }
 
@@ -773,13 +773,19 @@ final class WatchModel: ObservableObject {
     }
 
     private func considerPhoneProbe() {
-        guard phoneProbe, !phoneProbeSent else { return }
+        guard phoneProbe else { return }
+        if transcriptHas("I can hear you.") { return }
         guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
         guard let chat = snapshot.sessions.first else { return }
-        phoneProbeSent = true
+        let now = Date()
+        if let phoneProbeSentAt, now.timeIntervalSince(phoneProbeSentAt) < 2 { return }
+        let firstSend = phoneProbeSentAt == nil
+        phoneProbeSentAt = now
         voiceModeActive = true
         resumedSessionID = chat.id
-        absorbOpenTranscript(preferRestored: true)
+        if firstSend {
+            absorbOpenTranscript(preferRestored: true)
+        }
         voiceStatus = "Sending"
         if start("Can you hear me", continueRestored: true) {
             voiceStatus = "Sent"
