@@ -81,24 +81,22 @@ struct WatchListView: View {
             model.setAutoApprove(enabled)
         }
         .watchPage()
-        .navigationTitle("Remote")
-        .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear { model.refresh() }
     }
 
     private var sessionList: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            listHeader
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 6)
-            ScrollView {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 4) {
+                listHeader
                 sessionRows
             }
-            .layoutPriority(1)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityIdentifier("session.list")
-            .contentMargins(.top, 0, for: .scrollContent)
+            .padding(.horizontal, 6)
+            .padding(.bottom, 4)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("session.list")
+        .contentMargins(.top, 2, for: .scrollContent)
     }
 
     private var listHeader: some View {
@@ -191,8 +189,6 @@ struct WatchListView: View {
                 .accessibilityLabel("New task")
                 VoicePreferenceToggles()
         }
-        .padding(.horizontal, 6)
-        .padding(.bottom, 4)
     }
 
     private var computerSwitcher: some View {
