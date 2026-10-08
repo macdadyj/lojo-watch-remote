@@ -157,6 +157,30 @@ public enum VoiceChromeMetrics {
         }
         return 0
     }
+
+    /// How far a row that crosses the top of the viewport still hangs into it.
+    /// Spans use viewport coordinates. A row fully inside or fully above contributes nothing.
+    public static func topStub(_ spans: [ViewportSpan]) -> CGFloat {
+        var stub: CGFloat = 0
+        for span in spans {
+            if span.minY < -1, span.maxY > 1 {
+                stub = max(stub, span.maxY)
+            }
+        }
+        guard stub > 1 else { return 0 }
+        return stub + 1
+    }
+}
+
+/// A row's vertical span in the transcript viewport.
+public struct ViewportSpan: Equatable, Sendable {
+    public var minY: CGFloat
+    public var maxY: CGFloat
+
+    public init(minY: CGFloat, maxY: CGFloat) {
+        self.minY = minY
+        self.maxY = maxY
+    }
 }
 
 public struct VoiceChromeSpec: Equatable, Sendable {

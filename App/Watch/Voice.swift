@@ -309,7 +309,9 @@ struct VoiceChatView: View {
     @State private var sawBottom = false
     @State private var openToolIDs: Set<Int> = []
     @State private var restoredCaption = false
-    @State private var rowHeights: [String: CGFloat] = [:]
+    @State private var rowFrames: [String: RowFrameSample] = [:]
+    /// Extra space that pushes a bubble hanging over the top edge fully off.
+    @State private var topClearance: CGFloat = 0
     @State private var showCompose = false
 
     private let bubbleSpacing: CGFloat = 4
@@ -349,8 +351,7 @@ struct VoiceChatView: View {
                         .foregroundStyle(LojoTheme.readablePrimary(scheme))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)
-                        .padding(.top, 28)
-                        .padding(.bottom, 4)
+                        .padding(.vertical, 4)
                 }
                 historyList
             }
@@ -362,7 +363,6 @@ struct VoiceChatView: View {
             )
         }
         .watchPage()
-        .ignoresSafeArea(edges: .top)
         .navigationTitle(model.forcedScreen == "voice-loop" ? "Voice loop" : "")
         .toolbar(model.forcedScreen == "voice-loop" ? .automatic : .hidden, for: .navigationBar)
         .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
@@ -402,7 +402,16 @@ struct VoiceChatView: View {
             rows.append(spoken)
         }
         rows.append(contentsOf: history.filter { ChatTranscript.isConversation($0) || ChatTranscript.isToolCard($0) || ChatTranscript.isNote($0) })
-        return rows
+        let title = chatTitle
+        guard !title.isEmpty else { return rows }
+        return rows.filter { $0 != title }
+    }
+
+    /// The list row's title. It stays out of the bubbles so it is not a second copy of the chat.
+    private var chatTitle: String {
+        guard let id = model.resumedSessionID else { return "" }
+        return model.snapshot.sessions.first { $0.id == id }?.title
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
 
     private var tailToken: String {
@@ -452,13 +461,26 @@ struct VoiceChatView: View {
                 viewportHeight = height
                 noteFollow(lastSample, viewport: height)
             }
-            .onPreferenceChange(RowHeightKey.self) { heights in
-                rowHeights = heights
+            .onPreferenceChange(RowFrameKey.self) { frames in
+                rowFrames = frames
+                let spans = frames.compactMap { entry -> ViewportSpan? in
+                    guard entry.key.hasPrefix("voice.msg.") else { return nil }
+                    return ViewportSpan(minY: entry.value.minY, maxY: entry.value.maxY)
+                }
+                let stub = VoiceChromeMetrics.topStub(spans)
+                if stub > topClearance + 0.5 {
+                    topClearance = min(stub, max(viewportHeight, 1))
+                }
             }
             .accessibilityIdentifier("voice.history")
             .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 0, for: .scrollContent)
             .onChange(of: tailToken) { _, _ in
+                topClearance = 0
+                guard followLatest else { return }
+                pin(proxy)
+            }
+            .onChange(of: tailPad) { _, _ in
                 guard followLatest else { return }
                 pin(proxy)
             }
@@ -510,6 +532,14 @@ struct VoiceChatView: View {
         let lines = conversationLines
         let blocks = ChatTranscript.blocks(from: lines, toolsRunning: false)
         return VStack(alignment: .leading, spacing: bubbleSpacing) {
+            if !chatTitle.isEmpty {
+                Text(chatTitle)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .modifier(RowHeight(id: "voice.title"))
+            }
             if model.forcedScreen == "voice-loop" {
                 Text("Scripted check. The microphone stays off.")
                     .font(.caption2.weight(.semibold))
@@ -527,7 +557,7 @@ struct VoiceChatView: View {
                     .modifier(RowHeight(id: "voice.banner"))
             }
             ForEach(blocks) { block in
-                let rowID = "voice.block.\(block.id)"
+                let rowID = rowID(for: block)
                 WatchBubble(block: block, toolsOpen: openToolIDs.contains(block.id)) {
                     if openToolIDs.contains(block.id) {
                         openToolIDs.remove(block.id)
@@ -601,24 +631,46 @@ struct VoiceChatView: View {
     }
 
     /// Space under the newest rows so the viewport edge falls between bubbles.
+    /// Off-screen rows often never report a height, so the pad uses the measured
+    /// suffix. A bubble that still crosses the top grows `topClearance` until it is gone.
     private var tailPad: CGFloat {
         let blocks = ChatTranscript.blocks(from: conversationLines, toolsRunning: false)
         let ids = rowIDs(for: blocks)
-        let heights = ids.compactMap { id -> CGFloat? in
-            guard let height = rowHeights[id], height > 1 else { return nil }
-            return height
+        var measured: [CGFloat] = []
+        for id in ids.reversed() {
+            guard let height = rowFrames[id]?.height, height > 1 else { break }
+            measured.append(height)
         }
-        guard heights.count == ids.count else { return 0 }
-        return VoiceChromeMetrics.unclippedTailPad(
-            viewport: max(viewportHeight - 4, 1),
-            heights: heights,
-            spacing: bubbleSpacing
-        )
+        let raw: CGFloat
+        if measured.isEmpty || viewportHeight <= 1 {
+            raw = 0
+        } else {
+            raw = VoiceChromeMetrics.unclippedTailPad(
+                viewport: max(viewportHeight - 4, 1),
+                heights: Array(measured.reversed()),
+                spacing: bubbleSpacing
+            )
+        }
+        return raw + topClearance
+    }
+
+    private func rowID(for block: ChatBlock) -> String {
+        switch block {
+        case .user(let id, _), .assistant(let id, _):
+            return "voice.msg.\(id)"
+        case .tools(let id, _, _):
+            return "voice.toolsrow.\(id)"
+        case .note(let id, _):
+            return "voice.note.\(id)"
+        }
     }
 
     /// Visual order of the transcript rows. The tail pad uses these heights.
     private func rowIDs(for blocks: [ChatBlock]) -> [String] {
         var ids: [String] = []
+        if !chatTitle.isEmpty {
+            ids.append("voice.title")
+        }
         if model.forcedScreen == "voice-loop" {
             ids.append("voice.script")
         }
@@ -626,7 +678,7 @@ struct VoiceChatView: View {
            banner != SessionResume.missingMessage {
             ids.append("voice.banner")
         }
-        ids.append(contentsOf: blocks.map { "voice.block.\($0.id)" })
+        ids.append(contentsOf: blocks.map { rowID(for: $0) })
         if showsRestoredCaption || showsLiveStatus {
             ids.append("voice.status.row")
         }
@@ -665,9 +717,15 @@ private struct VoiceViewportKey: PreferenceKey {
     }
 }
 
-private struct RowHeightKey: PreferenceKey {
-    static var defaultValue: [String: CGFloat] = [:]
-    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+private struct RowFrameSample: Equatable {
+    var height: CGFloat = 0
+    var minY: CGFloat = 0
+    var maxY: CGFloat = 0
+}
+
+private struct RowFrameKey: PreferenceKey {
+    static var defaultValue: [String: RowFrameSample] = [:]
+    static func reduce(value: inout [String: RowFrameSample], nextValue: () -> [String: RowFrameSample]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
 }
@@ -678,7 +736,17 @@ private struct RowHeight: ViewModifier {
     func body(content: Content) -> some View {
         content.background {
             GeometryReader { geo in
-                Color.clear.preference(key: RowHeightKey.self, value: [id: geo.size.height])
+                let frame = geo.frame(in: .named("voice.scroll"))
+                Color.clear.preference(
+                    key: RowFrameKey.self,
+                    value: [
+                        id: RowFrameSample(
+                            height: geo.size.height,
+                            minY: frame.minY,
+                            maxY: frame.maxY
+                        ),
+                    ]
+                )
             }
         }
     }

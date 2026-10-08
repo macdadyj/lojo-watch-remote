@@ -877,6 +877,13 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(VoiceChromeMetrics.unclippedTailPad(viewport: 200, heights: [40, 40, 40], spacing: 4), 0)
         XCTAssertEqual(VoiceChromeMetrics.unclippedTailPad(viewport: 30, heights: [40], spacing: 4), 0)
         XCTAssertEqual(VoiceChromeMetrics.unclippedTailPad(viewport: 0, heights: [40], spacing: 4), 0)
+        XCTAssertEqual(VoiceChromeMetrics.topStub([]), 0)
+        XCTAssertEqual(VoiceChromeMetrics.topStub([ViewportSpan(minY: 8, maxY: 34)]), 0)
+        XCTAssertEqual(VoiceChromeMetrics.topStub([ViewportSpan(minY: -40, maxY: -4)]), 0)
+        XCTAssertEqual(
+            VoiceChromeMetrics.topStub([ViewportSpan(minY: -12.5, maxY: 13.5)]),
+            14.5
+        )
         XCTAssertFalse(VoiceConversationFixture.history.isEmpty)
         XCTAssertEqual(
             VoiceListenPolicy.route(
