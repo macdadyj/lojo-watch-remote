@@ -73,19 +73,29 @@ def start_relay(port: int) -> subprocess.Popen:
         cwd=ROOT,
         env=env,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
         text=True,
     )
     assert proc.stdout is not None
-    deadline = time.time() + 8
+    seen: list[str] = []
+    deadline = time.time() + 20
     while time.time() < deadline:
         line = proc.stdout.readline()
-        if '"listening"' in line and f'"port":{port}' in line.replace(" ", ""):
+        if line == "" and proc.poll() is not None:
+            detail = "".join(seen)[-400:]
+            raise SystemExit(f"relay exited early: {detail}")
+        if not line:
+            continue
+        seen.append(line)
+        print(line, end="", flush=True)
+        compact = line.replace(" ", "")
+        if '"listening"' in line and f'"port":{port}' in compact:
             return proc
         if '"listening"' in line and port == 0:
             return proc
     proc.terminate()
-    raise SystemExit("relay did not start")
+    detail = "".join(seen)[-400:]
+    raise SystemExit(f"relay did not start: {detail}")
 
 
 def stop_node() -> None:
@@ -191,7 +201,12 @@ def main() -> int:
     STATE["agent"] = outbound.MemoryAgent(rows=[dict(SEED)])
     if counters.exists():
         counters.unlink()
-    control = ThreadingHTTPServer(("127.0.0.1", args.control_port), ControlHandler)
+    print("probe-starting", flush=True)
+    try:
+        control = ThreadingHTTPServer(("127.0.0.1", args.control_port), ControlHandler)
+    except OSError as error:
+        print(f"probe control bind failed: {error}", flush=True)
+        return 1
     threading.Thread(target=control.serve_forever, daemon=True).start()
     STATE["node"] = start_relay(args.port)
     write_meta(pairing, args.port, counters, args.control_port)

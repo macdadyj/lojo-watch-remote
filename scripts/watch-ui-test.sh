@@ -63,7 +63,7 @@ export WATCHREMOTE_REPO_ROOT="${ROOT}"
 
 PROBE_LOG="${ROOT}/build/relay-probe.log"
 mkdir -p "${ROOT}/build"
-python3 "${ROOT}/host/relay_probe.py" --pairing-file "${ROOT}/build/relay-probe.json" --port 18765 --control-port 18766 >"${PROBE_LOG}" 2>&1 &
+PYTHONUNBUFFERED=1 python3 "${ROOT}/host/relay_probe.py" --pairing-file "${ROOT}/build/relay-probe.json" --port 18765 --control-port 18766 >"${PROBE_LOG}" 2>&1 &
 PROBE_PID=$!
 cleanup_probe() {
   if [[ -n "${PROBE_PID:-}" ]]; then
@@ -72,7 +72,7 @@ cleanup_probe() {
 }
 trap cleanup_probe EXIT
 ready=0
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+for _ in $(seq 1 60); do
   if grep -q "probe-ready" "${PROBE_LOG}" 2>/dev/null; then
     ready=1
     break

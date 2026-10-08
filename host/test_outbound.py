@@ -271,7 +271,7 @@ class HandleTests(unittest.TestCase):
                     break
             else:
                 self.fail("relay did not start")
-            with tempfile.TemporaryDirectory() as directory:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
                 counters = Path(directory) / "outbound-counters.json"
                 agent = outbound.MemoryAgent()
                 config = {
@@ -336,6 +336,12 @@ class HandleTests(unittest.TestCase):
                 self.assertIn("You: Can you hear me", followed["sessions"][0]["transcript"])
                 self.assertEqual(followed["sessions"][0]["transcript"][-1], "Grok: I can hear you.")
                 again.close()
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                thread.join(timeout=2)
         finally:
             proc.terminate()
             try:
