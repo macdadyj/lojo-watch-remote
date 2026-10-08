@@ -79,24 +79,8 @@ struct VoiceConversationBar: View {
 
     /// Chats, End, and New task stay off the transcript. Session rows still resume from here.
     private var chatMenu: some View {
-        Menu {
-            Button("Chats") {
-                model.voiceModeActive = false
-            }
-            .accessibilityIdentifier("chat.back")
-            Button("End chat") {
-                model.endChat()
-            }
-            .accessibilityIdentifier("chat.end")
-            Button("New task", action: onNewTask)
-            if !model.snapshot.sessions.isEmpty {
-                Divider()
-                ForEach(model.snapshot.sessions) { session in
-                    Button(session.title) {
-                        onOpenSession(session)
-                    }
-                }
-            }
+        NavigationLink {
+            ChatActionsPage(onNewTask: onNewTask, onOpenSession: onOpenSession)
         } label: {
             Image(systemName: "ellipsis")
                 .font(.caption.weight(.semibold))
@@ -106,6 +90,36 @@ struct VoiceConversationBar: View {
         .frame(width: 22, height: 22)
         .fixedSize()
         .accessibilityLabel("Chat actions")
+    }
+}
+
+/// watchOS has no Menu. These actions open on their own page so the transcript stays bubbles.
+private struct ChatActionsPage: View {
+    var onNewTask: () -> Void
+    var onOpenSession: (GrokSession) -> Void
+    @EnvironmentObject private var model: WatchModel
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                Button("Chats") {
+                    model.voiceModeActive = false
+                }
+                .accessibilityIdentifier("chat.back")
+                Button("End chat") {
+                    model.endChat()
+                }
+                .accessibilityIdentifier("chat.end")
+                Button("New task", action: onNewTask)
+                ForEach(model.snapshot.sessions) { session in
+                    Button(session.title) {
+                        onOpenSession(session)
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
+        }
+        .navigationTitle("Chat")
     }
 }
 
