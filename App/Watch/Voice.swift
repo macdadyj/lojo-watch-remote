@@ -337,7 +337,17 @@ struct VoiceChatView: View {
 
     var body: some View {
         SpeakBarPage {
-            historyList
+            VStack(spacing: 0) {
+                if model.banner == SessionResume.missingMessage {
+                    Text(SessionResume.missingMessage)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                }
+                historyList
+            }
         } bar: {
             VoiceConversationBar(showSpeak: showSpeakAgain || model.forcedScreen != nil)
         }
@@ -498,7 +508,8 @@ struct VoiceChatView: View {
                 .accessibilityLabel("Dictate")
                 .accessibilityHint("Opens the keyboard. That sheet still needs Done.")
             }
-            if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner) {
+            if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner),
+               banner != SessionResume.missingMessage {
                 Text(banner)
                     .font(.caption2)
                     .foregroundStyle(LojoTheme.danger)
