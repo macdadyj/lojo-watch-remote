@@ -92,6 +92,8 @@ struct WatchListView: View {
                 sessionRows
             }
             .padding(.horizontal, 6)
+            // The watch keeps a tall top inset after the title is hidden. Pull the list up so a second chat sits above the mic.
+            .padding(.top, -64)
             .padding(.bottom, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
