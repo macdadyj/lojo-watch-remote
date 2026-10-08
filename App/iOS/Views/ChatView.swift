@@ -452,7 +452,7 @@ struct ChatThreadView: View {
                         .fill(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05))
                 )
                 .accessibilityIdentifier("chat.composer")
-            Button(action: sendDraft) label: {
+            Button(action: sendDraft) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 32))
             }
