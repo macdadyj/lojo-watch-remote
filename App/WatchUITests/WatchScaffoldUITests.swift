@@ -137,17 +137,15 @@ final class WatchScaffoldUITests: XCTestCase {
         XCTAssertTrue(mine.waitForExistence(timeout: 4), "user line missing")
 
         let needed = app.frame.height >= 230 ? 3 : 2
-        let query = app.staticTexts.matching(identifier: "voice.line")
-        let total = min(query.count, 16)
-        var visible = 0
-        for index in 0..<total where shown(query.element(boundBy: index), in: history) {
-            visible += 1
+        let visibleEnough = NSPredicate { _, _ in
+            self.visibleBubbleCount(in: history, app: app) >= needed
         }
-        XCTAssertGreaterThanOrEqual(
-            visible,
-            needed,
-            "transcript shows \(visible) bubbles in \(history.frame); wanted \(needed)"
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: visibleEnough, object: nil)], timeout: 6),
+            .completed,
+            "transcript shows \(visibleBubbleCount(in: history, app: app)) bubbles in \(history.frame); wanted \(needed); \(bubbleFrames(app))"
         )
+        let visible = visibleBubbleCount(in: history, app: app)
         XCTAssertTrue(shown(reply, in: history), "latest reply is off screen")
         XCTAssertTrue(shown(mine, in: history), "user line is off screen")
         XCTAssertGreaterThan(mine.frame.maxX, history.frame.midX, "user bubble is not on the right")
@@ -199,6 +197,18 @@ final class WatchScaffoldUITests: XCTestCase {
             file: file,
             line: line
         )
+    }
+
+    private func visibleBubbleCount(in history: XCUIElement, app: XCUIApplication) -> Int {
+        let query = app.staticTexts.matching(identifier: "voice.line")
+        let total = min(query.count, 16)
+        return (0..<total).filter { shown(query.element(boundBy: $0), in: history) }.count
+    }
+
+    private func bubbleFrames(_ app: XCUIApplication) -> String {
+        let query = app.staticTexts.matching(identifier: "voice.line")
+        let total = min(query.count, 6)
+        return (0..<total).map { "\($0) \(query.element(boundBy: $0).frame)" }.joined(separator: "; ")
     }
 
     private func reveal(_ row: XCUIElement, in list: XCUIElement) -> XCUIElement {
