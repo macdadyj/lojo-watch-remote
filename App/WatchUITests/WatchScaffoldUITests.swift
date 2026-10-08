@@ -119,6 +119,9 @@ final class WatchScaffoldUITests: XCTestCase {
         XCTAssertTrue(speak.waitForExistence(timeout: 8), "Speak missing", file: file, line: line)
         let scroll = app.scrollViews[scrollID]
         XCTAssertTrue(scroll.exists, "missing \(scrollID)", file: file, line: line)
+        for _ in 0..<4 where !elements.contains(where: { shown($0, in: scroll) }) {
+            scroll.swipeUp()
+        }
         let scrollOverlap = speak.frame.intersection(scroll.frame)
         XCTAssertFalse(
             scrollOverlap.width > 1 && scrollOverlap.height > 1,
@@ -127,12 +130,15 @@ final class WatchScaffoldUITests: XCTestCase {
             line: line
         )
         let visible = elements.compactMap { element -> (XCUIElement, CGRect)? in
-            guard element.exists else { return nil }
-            let shown = element.frame.intersection(scroll.frame)
-            guard shown.width > 2, shown.height > 2 else { return nil }
-            return (element, shown)
+            guard shown(element, in: scroll) else { return nil }
+            return (element, element.frame.intersection(scroll.frame))
         }
-        XCTAssertFalse(visible.isEmpty, "no visible row or transcript text", file: file, line: line)
+        XCTAssertFalse(
+            visible.isEmpty,
+            "no visible row or transcript text in \(scroll.frame)",
+            file: file,
+            line: line
+        )
         guard let last = visible.max(by: { $0.1.maxY < $1.1.maxY }) else { return }
         let overlap = speak.frame.intersection(last.1)
         XCTAssertFalse(
@@ -141,6 +147,12 @@ final class WatchScaffoldUITests: XCTestCase {
             file: file,
             line: line
         )
+    }
+
+    private func shown(_ element: XCUIElement, in scroll: XCUIElement) -> Bool {
+        guard element.exists else { return false }
+        let overlap = element.frame.intersection(scroll.frame)
+        return overlap.width > 2 && overlap.height > 2
     }
 
     private func assertActionHintFits(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {

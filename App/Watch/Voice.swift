@@ -462,6 +462,70 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.accent)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Button("Chats") {
+                model.voiceModeActive = false
+            }
+            .buttonStyle(QuietButtonStyle(compact: true))
+            .accessibilityIdentifier("chat.back")
+            .accessibilityLabel("Chats")
+            Button("End chat") {
+                model.endChat()
+            }
+            .buttonStyle(QuietButtonStyle(compact: true))
+            .accessibilityIdentifier("chat.end")
+            .accessibilityLabel("End chat")
+            if model.pendingAllowSessionID != nil {
+                Button("Yes") {
+                    model.confirmSpokenAllow()
+                }
+                .buttonStyle(PrimaryButtonStyle(compact: true))
+                .accessibilityLabel("Yes")
+                .accessibilityHint("Confirms the spoken allow. Saying yes does this too.")
+            }
+            NavigationLink {
+                WatchComposeView()
+            } label: {
+                Label("New task", systemImage: "plus")
+            }
+            .buttonStyle(QuietButtonStyle(compact: true))
+            .accessibilityLabel("New task")
+            if model.dictationOffered {
+                Button("Dictate") {
+                    model.presentDictationSheet()
+                }
+                .buttonStyle(QuietButtonStyle(compact: true))
+                .accessibilityLabel("Dictate")
+                .accessibilityHint("Opens the keyboard. That sheet still needs Done.")
+            }
+            if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner) {
+                Text(banner)
+                    .font(.caption2)
+                    .foregroundStyle(LojoTheme.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("voice.banner")
+            }
+            if model.repairOffered {
+                Button(RelayUserNotice.repairText) {
+                    model.requestPhonePairing()
+                }
+                .buttonStyle(QuietButtonStyle(compact: true))
+                .accessibilityIdentifier("voice.repair")
+            }
+            if !model.snapshot.sessions.isEmpty {
+                Text("Tasks")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                ForEach(model.snapshot.sessions) { session in
+                    Button {
+                        model.openHistory(session)
+                    } label: {
+                        WatchRow(session: session)
+                    }
+                    .buttonStyle(.borderless)
+                    .contentShape(Rectangle())
+                    .accessibilityIdentifier("session.row.\(session.id)")
+                }
+            }
             ForEach(blocks) { block in
                 let rowID = "voice.block.\(block.id)"
                 WatchBubble(block: block, toolsOpen: openToolIDs.contains(block.id)) {
@@ -480,69 +544,6 @@ struct VoiceChatView: View {
                 }
                 .id(rowID)
             }
-                Button("Chats") {
-                    model.voiceModeActive = false
-                }
-                .buttonStyle(QuietButtonStyle(compact: true))
-                .accessibilityIdentifier("chat.back")
-                .accessibilityLabel("Chats")
-                Button("End chat") {
-                    model.endChat()
-                }
-                .buttonStyle(QuietButtonStyle(compact: true))
-                .accessibilityIdentifier("chat.end")
-                .accessibilityLabel("End chat")
-                if model.pendingAllowSessionID != nil {
-                    Button("Yes") {
-                        model.confirmSpokenAllow()
-                    }
-                    .buttonStyle(PrimaryButtonStyle(compact: true))
-                    .accessibilityLabel("Yes")
-                    .accessibilityHint("Confirms the spoken allow. Saying yes does this too.")
-                }
-                NavigationLink {
-                    WatchComposeView()
-                } label: {
-                    Label("New task", systemImage: "plus")
-                }
-                .buttonStyle(QuietButtonStyle(compact: true))
-                .accessibilityLabel("New task")
-                if model.dictationOffered {
-                    Button("Dictate") {
-                        model.presentDictationSheet()
-                    }
-                    .buttonStyle(QuietButtonStyle(compact: true))
-                    .accessibilityLabel("Dictate")
-                    .accessibilityHint("Opens the keyboard. That sheet still needs Done.")
-                }
-                if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner) {
-                    Text(banner)
-                        .font(.caption2)
-                        .foregroundStyle(LojoTheme.danger)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("voice.banner")
-                }
-                if model.repairOffered {
-                    Button(RelayUserNotice.repairText) {
-                        model.requestPhonePairing()
-                    }
-                    .buttonStyle(QuietButtonStyle(compact: true))
-                    .accessibilityIdentifier("voice.repair")
-                }
-                if !model.snapshot.sessions.isEmpty {
-                    Text("Tasks")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(LojoTheme.readableSecondary(scheme))
-                    ForEach(model.snapshot.sessions) { session in
-                        Button {
-                            model.openHistory(session)
-                        } label: {
-                            WatchRow(session: session)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("session.row.\(session.id)")
-                    }
-                }
         }
     }
 }

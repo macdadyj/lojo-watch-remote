@@ -88,37 +88,41 @@ struct WatchListView: View {
 
     private var sessionList: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(model.snapshot.hostLabel)
-                        .font(.headline)
-                        .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 6) {
-                        StatusMark(status: headerMark, size: 10)
-                        Text(headerTitle)
-                            .font(.caption.weight(.semibold))
+            VStack(alignment: .leading, spacing: 6) {
+                // One short header so the first chat sits inside the scroll view, above Speak.
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        StatusMark(status: headerMark, size: 8)
+                        Text(model.snapshot.hostLabel)
+                            .font(.footnote.weight(.semibold))
                             .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        if model.snapshot.mode == .demo { DemoBadge(compact: true) }
                     }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel(headerTitle)
-                    Text(model.pathTitle)
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(pathColor)
-                        .accessibilityLabel("Path \(model.pathTitle)")
+                    HStack(spacing: 4) {
+                        Text(headerTitle)
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                            .lineLimit(1)
+                        Text(model.pathTitle)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(pathColor)
+                            .lineLimit(1)
+                            .accessibilityLabel("Path \(model.pathTitle)")
+                    }
                     if model.snapshot.computers.count > 1 {
                         computerSwitcher
                     }
-                    if model.snapshot.mode == .demo { DemoBadge(compact: true) }
                     if showsApprovalNote {
                         Text("Tasks cannot ask for approval.")
                             .font(.caption2)
                             .foregroundStyle(LojoTheme.readableSecondary(scheme))
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(2)
                     }
                 }
-                .lojoCard(padding: 12)
-                .padding(.top, 8)
+                .accessibilityElement(children: .contain)
+                .padding(.top, 2)
                 if let banner = model.banner ?? model.snapshot.banner {
                     Text(banner)
                         .font(.caption2)
@@ -147,7 +151,8 @@ struct WatchListView: View {
                     } label: {
                         WatchRow(session: session)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.borderless)
+                    .contentShape(Rectangle())
                     .accessibilityIdentifier("session.row.\(session.id)")
                 }
                 NavigationLink {
@@ -164,7 +169,7 @@ struct WatchListView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityIdentifier("session.list")
-        .contentMargins(.top, 10, for: .scrollContent)
+        .contentMargins(.top, 2, for: .scrollContent)
     }
 
     private var computerSwitcher: some View {
@@ -249,32 +254,26 @@ struct WatchRow: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 2) {
             if session.status == .needsApproval || session.status == .failed {
-                HStack(spacing: 6) {
-                    StatusMark(status: session.status, size: 10)
+                HStack(spacing: 4) {
+                    StatusMark(status: session.status, size: 8)
                     Text(session.status.title)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                        .lineLimit(1)
                 }
             }
             Text(session.title)
-                .font(.headline)
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                .lineLimit(4)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
             Text(ChatTranscript.lastMessage(summary: session.summary, transcript: session.transcript))
                 .font(.caption2)
                 .foregroundStyle(LojoTheme.readableSecondary(scheme))
-                .lineLimit(4)
-                .fixedSize(horizontal: false, vertical: true)
-            if let updated = session.updatedAt {
-                Text(updated, style: .relative)
-                    .font(.caption2)
-                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
-            }
+                .lineLimit(1)
         }
-        .lojoCard(padding: 12)
+        .lojoCard(padding: 6)
         .accessibilityElement(children: .combine)
     }
 }
