@@ -308,6 +308,11 @@ struct VoiceChatView: View {
     /// Set once the latest line has actually sat at the bottom, so a bad first measurement cannot unpin.
     @State private var sawBottom = false
     @State private var openToolIDs: Set<Int> = []
+    @State private var restoredCaption = false
+    @State private var rowHeights: [String: CGFloat] = [:]
+    @State private var showCompose = false
+
+    private let bubbleSpacing: CGFloat = 4
 
     private var showSpeakAgain: Bool {
         switch model.voiceStatus {
@@ -344,16 +349,50 @@ struct VoiceChatView: View {
                         .foregroundStyle(LojoTheme.readablePrimary(scheme))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
+                        .padding(.top, 28)
+                        .padding(.bottom, 4)
                 }
                 historyList
             }
         } bar: {
-            VoiceConversationBar(showSpeak: showSpeakAgain || model.forcedScreen != nil)
+            VoiceConversationBar(
+                showSpeak: showSpeakAgain || model.forcedScreen != nil,
+                onNewTask: { showCompose = true },
+                onOpenSession: { model.openHistory($0) }
+            )
         }
         .watchPage()
-        .navigationTitle(model.forcedScreen == "voice-loop" ? "Voice loop" : "Voice")
+        .ignoresSafeArea(edges: .top)
+        .navigationTitle(model.forcedScreen == "voice-loop" ? "Voice loop" : "")
+        .toolbar(model.forcedScreen == "voice-loop" ? .automatic : .hidden, for: .navigationBar)
         .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
+        .navigationDestination(isPresented: $showCompose) {
+            WatchComposeView()
+        }
+        .onAppear {
+            noteRestoredCaption(model.voiceStatus)
+        }
+        .onChange(of: model.voiceStatus) { _, status in
+            noteRestoredCaption(status)
+        }
+    }
+
+    private var showsRestoredCaption: Bool {
+        restoredCaption && (model.voiceStatus == "Restored" || model.voiceStatus == "Restoring")
+    }
+
+    private func noteRestoredCaption(_ status: String) {
+        guard status == "Restored" || status == "Restoring" else {
+            restoredCaption = false
+            return
+        }
+        restoredCaption = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+            guard self.model.voiceStatus == status else { return }
+            withAnimation(.easeOut(duration: 0.35)) {
+                self.restoredCaption = false
+            }
+        }
     }
 
     private var conversationLines: [String] {
@@ -376,9 +415,11 @@ struct VoiceChatView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     bubbleStack(proxy)
-                        .padding(.horizontal, 8)
-                        .padding(.top, 8)
-                        .padding(.bottom, 8)
+                        .padding(.horizontal, 6)
+                        .padding(.top, 2)
+                        .padding(.bottom, 2)
+                    Color.clear
+                        .frame(height: tailPad)
                     Color.clear
                         .frame(height: 1)
                         .id("voice.bottom")
@@ -411,8 +452,11 @@ struct VoiceChatView: View {
                 viewportHeight = height
                 noteFollow(lastSample, viewport: height)
             }
+            .onPreferenceChange(RowHeightKey.self) { heights in
+                rowHeights = heights
+            }
             .accessibilityIdentifier("voice.history")
-            .contentMargins(.top, 4, for: .scrollContent)
+            .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 0, for: .scrollContent)
             .onChange(of: tailToken) { _, _ in
                 guard followLatest else { return }
@@ -465,48 +509,13 @@ struct VoiceChatView: View {
     private func bubbleStack(_ proxy: ScrollViewProxy) -> some View {
         let lines = conversationLines
         let blocks = ChatTranscript.blocks(from: lines, toolsRunning: false)
-        return VStack(alignment: .leading, spacing: 8) {
-            ListenTestHooks()
+        return VStack(alignment: .leading, spacing: bubbleSpacing) {
             if model.forcedScreen == "voice-loop" {
                 Text("Scripted check. The microphone stays off.")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(LojoTheme.accent)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-            Button("Chats") {
-                model.voiceModeActive = false
-            }
-            .buttonStyle(QuietButtonStyle(compact: true))
-            .accessibilityIdentifier("chat.back")
-            .accessibilityLabel("Chats")
-            Button("End chat") {
-                model.endChat()
-            }
-            .buttonStyle(QuietButtonStyle(compact: true))
-            .accessibilityIdentifier("chat.end")
-            .accessibilityLabel("End chat")
-            if model.pendingAllowSessionID != nil {
-                Button("Yes") {
-                    model.confirmSpokenAllow()
-                }
-                .buttonStyle(PrimaryButtonStyle(compact: true))
-                .accessibilityLabel("Yes")
-                .accessibilityHint("Confirms the spoken allow. Saying yes does this too.")
-            }
-            NavigationLink {
-                WatchComposeView()
-            } label: {
-                Label("New task", systemImage: "plus")
-            }
-            .buttonStyle(QuietButtonStyle(compact: true))
-            .accessibilityLabel("New task")
-            if model.dictationOffered {
-                Button("Dictate") {
-                    model.presentDictationSheet()
-                }
-                .buttonStyle(QuietButtonStyle(compact: true))
-                .accessibilityLabel("Dictate")
-                .accessibilityHint("Opens the keyboard. That sheet still needs Done.")
+                    .modifier(RowHeight(id: "voice.script"))
             }
             if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner),
                banner != SessionResume.missingMessage {
@@ -515,28 +524,7 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.danger)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("voice.banner")
-            }
-            if model.repairOffered {
-                Button(RelayUserNotice.repairText) {
-                    model.requestPhonePairing()
-                }
-                .buttonStyle(QuietButtonStyle(compact: true))
-                .accessibilityIdentifier("voice.repair")
-            }
-            if !model.snapshot.sessions.isEmpty {
-                Text("Tasks")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
-                ForEach(model.snapshot.sessions) { session in
-                    Button {
-                        model.openHistory(session)
-                    } label: {
-                        WatchRow(session: session)
-                    }
-                    .buttonStyle(.borderless)
-                    .contentShape(Rectangle())
-                    .accessibilityIdentifier("session.row.\(session.id)")
-                }
+                    .modifier(RowHeight(id: "voice.banner"))
             }
             ForEach(blocks) { block in
                 let rowID = "voice.block.\(block.id)"
@@ -555,8 +543,9 @@ struct VoiceChatView: View {
                     }
                 }
                 .id(rowID)
+                .modifier(RowHeight(id: rowID))
             }
-            if !model.voiceStatus.isEmpty {
+            if showsRestoredCaption || showsLiveStatus {
                 Text(model.voiceStatus)
                     .font(.caption2)
                     .foregroundStyle(LojoTheme.readableSecondary(scheme))
@@ -565,8 +554,95 @@ struct VoiceChatView: View {
                     .accessibilityIdentifier("voice.status")
                     .accessibilityLabel("Voice status")
                     .accessibilityValue(model.voiceStatus)
+                    .modifier(RowHeight(id: "voice.status.row"))
+            }
+            if model.pendingAllowSessionID != nil {
+                Button("Yes") {
+                    model.confirmSpokenAllow()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityLabel("Yes")
+                .accessibilityHint("Confirms the spoken allow. Saying yes does this too.")
+                .modifier(RowHeight(id: "voice.yes"))
+            }
+            if model.dictationOffered {
+                Button("Dictate") {
+                    model.presentDictationSheet()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
+                .accessibilityLabel("Dictate")
+                .accessibilityHint("Opens the keyboard. That sheet still needs Done.")
+                .modifier(RowHeight(id: "voice.dictate"))
+            }
+            if model.repairOffered {
+                Button(RelayUserNotice.repairText) {
+                    model.requestPhonePairing()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("voice.repair")
+                .modifier(RowHeight(id: "voice.repair"))
+            }
+            if model.uiShowHooks {
+                ListenTestHooks()
+                    .modifier(RowHeight(id: "voice.hooks"))
             }
         }
+    }
+
+    private var showsLiveStatus: Bool {
+        let status = model.voiceStatus
+        guard !status.isEmpty else { return false }
+        return status != "Restored" && status != "Restoring"
+    }
+
+    /// Space under the newest rows so the viewport edge falls between bubbles.
+    private var tailPad: CGFloat {
+        let blocks = ChatTranscript.blocks(from: conversationLines, toolsRunning: false)
+        let ids = rowIDs(for: blocks)
+        let heights = ids.compactMap { id -> CGFloat? in
+            guard let height = rowHeights[id], height > 1 else { return nil }
+            return height
+        }
+        guard heights.count == ids.count else { return 0 }
+        return VoiceChromeMetrics.unclippedTailPad(
+            viewport: max(viewportHeight - 4, 1),
+            heights: heights,
+            spacing: bubbleSpacing
+        )
+    }
+
+    /// Visual order of the transcript rows. The tail pad uses these heights.
+    private func rowIDs(for blocks: [ChatBlock]) -> [String] {
+        var ids: [String] = []
+        if model.forcedScreen == "voice-loop" {
+            ids.append("voice.script")
+        }
+        if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner),
+           banner != SessionResume.missingMessage {
+            ids.append("voice.banner")
+        }
+        ids.append(contentsOf: blocks.map { "voice.block.\($0.id)" })
+        if showsRestoredCaption || showsLiveStatus {
+            ids.append("voice.status.row")
+        }
+        if model.pendingAllowSessionID != nil {
+            ids.append("voice.yes")
+        }
+        if model.dictationOffered {
+            ids.append("voice.dictate")
+        }
+        if model.repairOffered {
+            ids.append("voice.repair")
+        }
+        if model.uiShowHooks {
+            ids.append("voice.hooks")
+        }
+        return ids
     }
 }
 
@@ -586,6 +662,25 @@ private struct VoiceViewportKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+private struct RowHeightKey: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
+private struct RowHeight: ViewModifier {
+    var id: String
+
+    func body(content: Content) -> some View {
+        content.background {
+            GeometryReader { geo in
+                Color.clear.preference(key: RowHeightKey.self, value: [id: geo.size.height])
+            }
+        }
     }
 }
 
@@ -642,18 +737,19 @@ private struct WatchBubble: View {
 
     private func line(_ text: String, mine: Bool) -> some View {
         HStack {
-            if mine { Spacer(minLength: 12) }
+            if mine { Spacer(minLength: 8) }
             Text(text)
                 .font(.footnote)
                 .foregroundStyle(mine ? Color.white : LojoTheme.readablePrimary(scheme))
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(8)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(mine ? LojoTheme.accent : (scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06)))
                 )
                 .accessibilityIdentifier("voice.line")
-            if !mine { Spacer(minLength: 12) }
+            if !mine { Spacer(minLength: 8) }
         }
     }
 }

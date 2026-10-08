@@ -873,6 +873,10 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertFalse(VoiceChromeMetrics.speakBarCoversContent(barHeight: 36, contentHeight: 180))
         XCTAssertTrue(VoiceChromeMetrics.speakBarCoversContent(barHeight: 160, contentHeight: 180))
         XCTAssertLessThanOrEqual(VoiceChromeMetrics.maxSpeakBarHeight, 44)
+        XCTAssertEqual(VoiceChromeMetrics.unclippedTailPad(viewport: 100, heights: [40, 40, 40], spacing: 4), 16)
+        XCTAssertEqual(VoiceChromeMetrics.unclippedTailPad(viewport: 200, heights: [40, 40, 40], spacing: 4), 0)
+        XCTAssertEqual(VoiceChromeMetrics.unclippedTailPad(viewport: 30, heights: [40], spacing: 4), 0)
+        XCTAssertEqual(VoiceChromeMetrics.unclippedTailPad(viewport: 0, heights: [40], spacing: 4), 0)
         XCTAssertFalse(VoiceConversationFixture.history.isEmpty)
         XCTAssertEqual(
             VoiceListenPolicy.route(

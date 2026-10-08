@@ -135,6 +135,28 @@ public enum VoiceChromeMetrics {
         if barHeight > maxSpeakBarHeight { return true }
         return barHeight > contentHeight * 0.45
     }
+
+    /// Empty space under the newest rows so a pinned transcript never cuts a bubble in half.
+    /// Rows are top to bottom. A row taller than the viewport is left alone.
+    public static func unclippedTailPad(viewport: CGFloat, heights: [CGFloat], spacing: CGFloat) -> CGFloat {
+        guard viewport > 1, !heights.isEmpty else { return 0 }
+        var used: CGFloat = 0
+        var index = heights.count - 1
+        while index >= 0 {
+            let row = heights[index]
+            if row > viewport, used == 0 {
+                return 0
+            }
+            let gap: CGFloat = used > 0 ? spacing : 0
+            if used + gap + row <= viewport + 0.5 {
+                used += gap + row
+                index -= 1
+            } else {
+                return max(0, viewport - used)
+            }
+        }
+        return 0
+    }
 }
 
 public struct VoiceChromeSpec: Equatable, Sendable {

@@ -98,6 +98,7 @@ final class WatchModel: ObservableObject {
         let environment = ProcessInfo.processInfo.environment
         uiTest = Self.isUITest(arguments: arguments, environment: environment)
         if uiTest {
+            VoicePreferences.shared.actionHintSeen = false
             snapshot = DemoCatalog.snapshot()
             uiPhoneOff = arguments.contains("-WatchRemotePhoneOff") || environment["WATCHREMOTE_PHONE_OFF"] == "1"
             let hostMissing = arguments.contains("-WatchRemoteHostMissing") || environment["WATCHREMOTE_HOST_MISSING"] == "1"

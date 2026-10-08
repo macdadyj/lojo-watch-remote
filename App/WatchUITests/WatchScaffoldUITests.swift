@@ -58,9 +58,10 @@ final class WatchScaffoldUITests: XCTestCase {
         )
         let speak = app.buttons["voice.speak"]
         XCTAssertTrue(speak.waitForExistence(timeout: 8), "restored chat did not stay open")
+        assertRestoredTranscript(in: restored, app: app)
+        shot(app, "scaffold-restored")
         assertSpeakClearsLastVisible(Self.transcriptLines(app), in: app, scrollID: "voice.history")
         assertActionHintFits(app)
-        shot(app, "scaffold-restored")
         speak.tap()
 
         let status = app.staticTexts["voice.status"]
@@ -145,20 +146,81 @@ final class WatchScaffoldUITests: XCTestCase {
             .completed,
             "latest bubbles stayed off screen \(reply.frame) \(mine.frame)"
         )
-        let needed = app.frame.height >= 230 ? 3 : 2
-        let visible = visibleBubbleCount(in: history, app: app)
-        XCTAssertGreaterThanOrEqual(
-            visible,
-            needed,
-            "transcript shows \(visible) bubbles in \(history.frame); wanted \(needed); \(bubbleFrames(app))"
-        )
+        assertRestoredTranscript(in: history, app: app)
         XCTAssertGreaterThan(mine.frame.maxX, history.frame.midX, "user bubble is not on the right")
         XCTAssertLessThan(mine.frame.width, history.frame.width * 0.92, "user bubble fills the row")
         XCTAssertLessThan(reply.frame.minX, history.frame.midX, "assistant bubble does not start on the left")
         let status = app.staticTexts["voice.status"]
-        XCTAssertTrue(status.waitForExistence(timeout: 4), "delivery status missing")
-        XCTAssertGreaterThan(status.frame.midY, reply.frame.midY, "delivery status is not under the last bubble")
+        if status.exists {
+            let overlap = status.frame.intersection(reply.frame)
+            XCTAssertFalse(
+                overlap.width > 2 && overlap.height > 2,
+                "status covers the last bubble \(status.frame) \(reply.frame)"
+            )
+        }
         shot(app, "scaffold-bubbles")
+    }
+
+    /// A restored chat keeps whole teal and gray bubbles on screen and a corner mic.
+    private func assertRestoredTranscript(
+        in history: XCUIElement,
+        app: XCUIApplication,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let needed = app.frame.height >= 230 ? 3 : 2
+        let settled = NSPredicate { _, _ in
+            let placement = self.bubblePlacement(in: history, app: app)
+            return placement.full >= needed && placement.clipped.isEmpty
+        }
+        XCTAssertEqual(
+            XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: settled, object: nil)], timeout: 6),
+            .completed,
+            "restored chat wanted \(needed) whole bubbles in \(history.frame); \(self.bubblePlacement(in: history, app: app).full) full; \(self.bubblePlacement(in: history, app: app).clipped)",
+            file: file,
+            line: line
+        )
+        let speak = app.buttons["voice.speak"]
+        XCTAssertTrue(speak.waitForExistence(timeout: 4), "Speak missing", file: file, line: line)
+        XCTAssertLessThan(
+            speak.frame.width,
+            history.frame.width * 0.45,
+            "Speak is a full-width pill \(speak.frame)",
+            file: file,
+            line: line
+        )
+        XCTAssertLessThan(speak.frame.height, 56, "Speak is taller than a corner mic \(speak.frame)", file: file, line: line)
+        let action = app.buttons["voice.action"]
+        XCTAssertTrue(action.waitForExistence(timeout: 4), "Action Button control is missing", file: file, line: line)
+        XCTAssertLessThan(
+            action.frame.height,
+            46,
+            "Action Button hint covers the chat \(action.frame)",
+            file: file,
+            line: line
+        )
+    }
+
+    private func bubblePlacement(in history: XCUIElement, app: XCUIApplication) -> (full: Int, clipped: String) {
+        let query = app.staticTexts.matching(identifier: "voice.line")
+        let total = query.count
+        let start = max(total - 12, 0)
+        let bounds = history.frame.insetBy(dx: -2, dy: -2)
+        var full = 0
+        var clipped: [String] = []
+        for index in start..<total {
+            let element = query.element(boundBy: index)
+            guard element.exists else { continue }
+            let frame = element.frame
+            let overlap = frame.intersection(history.frame)
+            guard overlap.width > 2, overlap.height > 2 else { continue }
+            if bounds.contains(frame) {
+                full += 1
+            } else if overlap.height > 3, overlap.width > 3 {
+                clipped.append("\(element.label) \(frame)")
+            }
+        }
+        return (full, clipped.joined(separator: "; "))
     }
 
     /// Speak sits under the scroll view. Its frame must not cross the scroll view or the visible part of the lowest row.
@@ -201,20 +263,6 @@ final class WatchScaffoldUITests: XCTestCase {
             file: file,
             line: line
         )
-    }
-
-    private func visibleBubbleCount(in history: XCUIElement, app: XCUIApplication) -> Int {
-        let query = app.staticTexts.matching(identifier: "voice.line")
-        let total = query.count
-        let start = max(total - 12, 0)
-        return (start..<total).filter { shown(query.element(boundBy: $0), in: history) }.count
-    }
-
-    private func bubbleFrames(_ app: XCUIApplication) -> String {
-        let query = app.staticTexts.matching(identifier: "voice.line")
-        let total = query.count
-        let start = max(total - 4, 0)
-        return (start..<total).map { "\($0) \(query.element(boundBy: $0).frame)" }.joined(separator: "; ")
     }
 
     private func reveal(_ row: XCUIElement, in list: XCUIElement) -> XCUIElement {
