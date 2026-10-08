@@ -165,6 +165,9 @@ final class RemoteStore: ObservableObject {
     @Published var showCompose = false
     @Published var selectedSessionID: String?
     @Published var autoApproveTools = false
+    /// One-line state when a saved chat cannot be loaded or a send cannot be delivered.
+    @Published var resumeNotice: String?
+    private var resumeNoticeID: String?
     private var holdsLaunchFixture = false
     private var userDisconnected = false
     private var heartbeatTask: Task<Void, Never>?
@@ -655,6 +658,32 @@ final class RemoteStore: ObservableObject {
         Task { await resume(sessionID: id) }
     }
 
+    func resumeNotice(for sessionID: String) -> String? {
+        guard resumeNoticeID == sessionID else { return nil }
+        let text = resumeNotice?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return text.isEmpty ? nil : text
+    }
+
+    func retryChat(_ sessionID: String) async {
+        let pending = undeliveredPrompt(sessionID)
+        await resume(sessionID: sessionID)
+        guard let pending else { return }
+        dropTrailingUserLine(sessionID, matching: pending)
+        await continueSession(sessionID, prompt: pending)
+    }
+
+    func continueInNewChat(_ sessionID: String) async {
+        let history = sessions.first { $0.id == sessionID }?.transcript ?? []
+        let pending = undeliveredPrompt(sessionID) ?? ChatTranscript.spokenText(history.last { $0.hasPrefix("You:") } ?? "")
+        let prompt = pending.isEmpty ? "Continue this chat." : pending
+        var prior = history
+        if prior.last == "You: \(prompt)" {
+            prior.removeLast()
+        }
+        clearResumeNotice(sessionID)
+        await respawn(threadID: sessionID, prompt: prompt, history: prior)
+    }
+
     func endChat(_ sessionID: String) {
         let existing = sessions.first { $0.id == sessionID }?.transcript ?? []
         mirrorDemo(sessionID)
@@ -883,20 +912,28 @@ final class RemoteStore: ObservableObject {
         let source = sessions.first(where: { $0.id == sessionID }) ?? engine.sessions.first(where: { $0.id == sessionID })
         guard let source else {
             banner = SessionResume.missingMessage
+            setResumeNotice(sessionID, SessionResume.missingMessage)
             publish()
             return
         }
-        let lines = SessionResume.displayLines(title: source.title, summary: source.summary, transcript: source.transcript ?? [])
+        let visible = sessions.first(where: { $0.id == sessionID })?.transcript ?? []
+        let cached = engine.sessions.first(where: { $0.id == sessionID })?.transcript ?? []
+        let chosen = SessionResume.choose(local: visible.count >= cached.count ? visible : cached, loaded: [], replayed: [])
         if sessions.contains(where: { $0.id == sessionID }) {
             update(sessionID) { session in
-                if session.transcript == nil || session.transcript?.isEmpty == true {
-                    session.transcript = lines
+                if !chosen.isEmpty {
+                    session.transcript = chosen
                 }
             }
         } else {
             var copy = source
-            copy.transcript = lines
+            copy.transcript = chosen
             sessions.insert(copy, at: 0)
+        }
+        if chosen.isEmpty {
+            setResumeNotice(sessionID, SessionResume.unavailableMessage)
+        } else {
+            clearResumeNotice(sessionID)
         }
         banner = nil
         mirrorDemo(sessionID)
@@ -926,11 +963,18 @@ final class RemoteStore: ObservableObject {
                 pin: keys.secret(account: "relay-pin"),
                 sessionID: sessionID
             )
-            let shown = lines.isEmpty
-                ? SessionResume.displayLines(title: local?.title ?? "", summary: local?.summary ?? "", transcript: local?.transcript ?? [])
-                : lines
+            let cached = local?.transcript ?? []
+            let chosen = SessionResume.choose(local: cached, loaded: lines, replayed: [])
+            let merged = SessionResume.keeping(sessions.first { $0.id == sessionID }?.transcript ?? cached, onto: chosen)
             if sessions.contains(where: { $0.id == sessionID }) {
-                update(sessionID) { $0.transcript = shown }
+                update(sessionID) { session in
+                    if !merged.isEmpty { session.transcript = merged }
+                }
+            }
+            if merged.isEmpty || sendingFailed(sessionID) {
+                setResumeNotice(sessionID, merged.isEmpty ? SessionResume.unavailableMessage : (resumeNotice(for: sessionID) ?? SessionResume.unavailableMessage))
+            } else {
+                clearResumeNotice(sessionID)
             }
             link = .connected
             statusLine = "Relay on the overlay."
@@ -938,11 +982,17 @@ final class RemoteStore: ObservableObject {
         } catch {
             guard let local else {
                 banner = SessionResume.missingMessage
+                setResumeNotice(sessionID, SessionResume.missingMessage)
                 publish()
                 return
             }
-            let lines = SessionResume.displayLines(title: local.title, summary: local.summary, transcript: local.transcript ?? [])
-            update(sessionID) { $0.transcript = lines }
+            let chosen = SessionResume.chatLines(local.transcript ?? [])
+            if !chosen.isEmpty {
+                update(sessionID) { $0.transcript = chosen }
+                clearResumeNotice(sessionID)
+            } else {
+                setResumeNotice(sessionID, SessionResume.unavailableMessage)
+            }
             banner = nil
         }
         publish()
@@ -950,6 +1000,7 @@ final class RemoteStore: ObservableObject {
 
     private func continueRelay(sessionID: String, prompt: String) async {
         let history = sessions.first(where: { $0.id == sessionID })?.transcript ?? []
+        rememberOutgoing(sessionID, prompt: prompt)
         do {
             let session = try await relay.prompt(
                 url: relayURL,
@@ -963,7 +1014,6 @@ final class RemoteStore: ObservableObject {
                 update(sessionID) { item in
                     item.summary = session.summary
                     item.status = session.status
-                    item.transcript = ChatTranscript.append("You: \(prompt)", to: item.transcript ?? [])
                     item.updatedAt = Date()
                 }
             } else {
@@ -974,13 +1024,16 @@ final class RemoteStore: ObservableObject {
             selectedSessionID = sessionID
             link = .connected
             banner = nil
+            clearResumeNotice(sessionID)
         } catch {
             let text = error.localizedDescription
+            settleOutgoing(sessionID)
             if text.contains("no longer") || text.contains("Not found") || text.contains("404") {
-                await respawn(threadID: sessionID, prompt: prompt, history: history)
+                setResumeNotice(sessionID, SessionResume.missingMessage)
             } else {
-                banner = text
+                setResumeNotice(sessionID, SessionResume.unavailableMessage)
             }
+            banner = nil
         }
     }
 
@@ -1029,86 +1082,181 @@ final class RemoteStore: ObservableObject {
     private func resumeSSH(_ sessionID: String) async {
         guard let live else {
             banner = SessionResume.missingMessage
+            setResumeNotice(sessionID, SessionResume.missingMessage)
             publish()
             return
         }
+        let cached = sessions.first(where: { $0.id == sessionID })?.transcript ?? []
         do {
             try await ensureSSH()
             let listed = try await live.list(cwd: cwd.isEmpty ? nil : cwd)
             guard let known = listed.first(where: { $0.id == sessionID }) else {
-                banner = SessionResume.missingMessage
+                if sendingFailed(sessionID) || SessionResume.chatLines(cached).isEmpty {
+                    banner = SessionResume.missingMessage
+                    setResumeNotice(sessionID, SessionResume.missingMessage)
+                } else {
+                    banner = nil
+                    clearResumeNotice(sessionID)
+                }
                 publish()
                 return
             }
-            let raw = try await live.loadSessionRaw(sessionID: sessionID, cwd: known.cwd ?? cwd)
-            let lines = SessionResume.displayLines(
-                title: known.title,
-                summary: known.summary,
-                transcript: SessionResume.transcriptLines(inLoadJSON: raw)
-            )
+            let loaded = try await live.loadSessionCaptured(sessionID: sessionID, cwd: known.cwd ?? cwd)
+            let merged = mergedTranscript(sessionID, cached: cached, raw: loaded.raw, replay: loaded.replay)
             if sessions.contains(where: { $0.id == sessionID }) {
                 update(sessionID) { session in
-                    session.title = known.title
-                    session.summary = known.summary
-                    session.status = known.status
-                    session.cwd = known.cwd
-                    session.transcript = lines
+                    session.title = known.title.isEmpty ? session.title : known.title
+                    if !known.summary.isEmpty, session.summary == "Sending." || session.summary.isEmpty {
+                        session.summary = known.summary
+                    }
+                    if session.summary != "Sending." {
+                        session.status = known.status
+                    }
+                    session.cwd = known.cwd ?? session.cwd
+                    if !merged.isEmpty { session.transcript = merged }
                 }
             } else {
                 var copy = known
-                copy.transcript = lines
+                copy.transcript = merged
                 sessions.insert(copy, at: 0)
+            }
+            if merged.isEmpty || sendingFailed(sessionID) {
+                setResumeNotice(sessionID, merged.isEmpty ? SessionResume.unavailableMessage : (resumeNotice(for: sessionID) ?? SessionResume.unavailableMessage))
+            } else {
+                clearResumeNotice(sessionID)
             }
             link = .connected
             approvalsAvailable = live.approvalsAvailable
             statusLine = live.statusLine
             banner = nil
         } catch {
-            banner = error.localizedDescription
+            if sendingFailed(sessionID) || SessionResume.chatLines(cached).isEmpty {
+                setResumeNotice(sessionID, SessionResume.unavailableMessage)
+            } else {
+                clearResumeNotice(sessionID)
+            }
             if link != .needsPairing, live.isSessionActive != true {
                 link = .offline
             }
             statusLine = live.statusLine
+            banner = nil
         }
         publish()
     }
 
     private func continueSSH(sessionID: String, prompt: String) async {
         guard let live else {
-            banner = SessionResume.missingMessage
+            rememberOutgoing(sessionID, prompt: prompt)
+            setResumeNotice(sessionID, SessionResume.missingMessage)
             publish()
             return
         }
+        rememberOutgoing(sessionID, prompt: prompt)
         do {
             try await ensureSSH()
             let listed = try await live.list(cwd: cwd.isEmpty ? nil : cwd)
             guard let known = listed.first(where: { $0.id == sessionID }) else {
-                let history = sessions.first(where: { $0.id == sessionID })?.transcript ?? []
-                await respawn(threadID: sessionID, prompt: prompt, history: history)
+                settleOutgoing(sessionID)
+                setResumeNotice(sessionID, SessionResume.missingMessage)
+                publish()
                 return
             }
             if !sessions.contains(where: { $0.id == sessionID }) {
                 sessions.insert(known, at: 0)
-            }
-            update(sessionID) { session in
-                session.status = .running
-                session.summary = "Continuing."
+                rememberOutgoing(sessionID, prompt: prompt)
             }
             publish()
-            try await live.resumePrompt(sessionID: sessionID, prompt: prompt, cwd: known.cwd ?? cwd)
+            let replay = try await live.resumePrompt(sessionID: sessionID, prompt: prompt, cwd: known.cwd ?? cwd)
+            let merged = mergedTranscript(sessionID, cached: sessions.first { $0.id == sessionID }?.transcript ?? [], raw: "", replay: replay)
+            if !merged.isEmpty {
+                update(sessionID) { session in
+                    session.transcript = merged
+                    if session.summary == "Sending." {
+                        session.status = .running
+                    }
+                }
+            }
             approvalsAvailable = live.approvalsAvailable
             statusLine = live.statusLine
             link = .connected
             banner = nil
+            clearResumeNotice(sessionID)
         } catch {
+            settleOutgoing(sessionID)
+            setResumeNotice(sessionID, SessionResume.unavailableMessage)
             if link != .needsPairing, live.isSessionActive != true {
                 link = .offline
             }
             approvalsAvailable = false
-            banner = error.localizedDescription
             statusLine = live.statusLine
+            banner = nil
         }
         publish()
+    }
+
+    private func mergedTranscript(_ sessionID: String, cached: [String], raw: String, replay: [StreamEvent]) -> [String] {
+        let replayed = replay.reduce(into: [String]()) { lines, event in
+            lines = SessionResume.folding(event, into: lines)
+        }
+        let latest = sessions.first(where: { $0.id == sessionID })?.transcript ?? cached
+        let chosen = SessionResume.choose(
+            local: latest.count >= cached.count ? latest : cached,
+            loaded: SessionResume.transcriptLines(inLoadJSON: raw),
+            replayed: replayed
+        )
+        return SessionResume.keeping(latest, onto: chosen)
+    }
+
+    private func rememberOutgoing(_ sessionID: String, prompt: String) {
+        update(sessionID) { session in
+            session.transcript = ChatTranscript.append("You: \(prompt)", to: session.transcript ?? [])
+            session.status = .running
+            session.summary = "Sending."
+        }
+        clearResumeNotice(sessionID)
+        publish()
+    }
+
+    private func settleOutgoing(_ sessionID: String) {
+        update(sessionID) { session in
+            if session.status == .running {
+                session.status = .idle
+            }
+            if session.summary == "Sending." {
+                session.summary = "Not sent."
+            }
+        }
+    }
+
+    private func sendingFailed(_ sessionID: String) -> Bool {
+        sessions.first { $0.id == sessionID }?.summary == "Not sent."
+    }
+
+    private func undeliveredPrompt(_ sessionID: String) -> String? {
+        guard resumeNoticeID == sessionID else { return nil }
+        guard let last = sessions.first(where: { $0.id == sessionID })?.transcript?.last, last.hasPrefix("You:") else {
+            return nil
+        }
+        let text = ChatTranscript.spokenText(last)
+        return text.isEmpty ? nil : text
+    }
+
+    private func dropTrailingUserLine(_ sessionID: String, matching prompt: String) {
+        update(sessionID) { session in
+            guard session.transcript?.last == "You: \(prompt)" else { return }
+            session.transcript?.removeLast()
+        }
+    }
+
+    private func setResumeNotice(_ sessionID: String, _ message: String) {
+        resumeNoticeID = sessionID
+        resumeNotice = message
+    }
+
+    private func clearResumeNotice(_ sessionID: String) {
+        guard resumeNoticeID == sessionID else { return }
+        resumeNoticeID = nil
+        resumeNotice = nil
     }
 
     private func startSSH(prompt: String) async {
@@ -1306,6 +1454,9 @@ final class RemoteStore: ObservableObject {
     private func applyStream(sessionID: String, event: StreamEvent) {
         update(sessionID) { session in
             switch event {
+            case .user(let text):
+                session.transcript = ChatTranscript.mergingUserEcho(text, into: session.transcript ?? [])
+                session.status = .running
             case .text(let text):
                 session.transcript = ChatTranscript.streamingAssistant(text, in: session.transcript ?? [])
                 session.summary = PhoneSnapshot.clip(
@@ -1331,6 +1482,7 @@ final class RemoteStore: ObservableObject {
             case .error(let message):
                 session.status = .failed
                 session.summary = message
+                setResumeNotice(sessionID, SessionResume.unavailableMessage)
             case .ignored:
                 break
             }
@@ -1428,8 +1580,47 @@ final class RemoteStore: ObservableObject {
         guard let data = try? Data(contentsOf: threadsFile()),
               let saved = try? JSONDecoder().decode([GrokSession].self, from: data),
               !saved.isEmpty else { return }
+        if uiTestLaunch {
+            mergeDemoCache(saved)
+            sessions = engine.sessions.map { session in
+                var copy = session
+                copy.transcript = nil
+                return copy
+            }
+            return
+        }
         sessions = saved
         engine = MockEngine(sessions: saved)
+    }
+
+    /// UI tests reopen a chat whose row has no transcript. The engine still holds the saved lines.
+    private func mergeDemoCache(_ saved: [GrokSession]) {
+        if engine.sessions.isEmpty {
+            engine = MockEngine(preview: true)
+        }
+        var merged = engine.sessions
+        for session in saved {
+            let cached = merged.first { $0.id == session.id }?.transcript ?? []
+            let prior = session.transcript ?? []
+            let richer = prior.count >= cached.count ? prior : cached
+            let chosen = SessionResume.choose(local: richer, loaded: [], replayed: [])
+            if let index = merged.firstIndex(where: { $0.id == session.id }) {
+                if !chosen.isEmpty { merged[index].transcript = chosen }
+                if !session.title.isEmpty { merged[index].title = session.title }
+                merged[index].autoApprove = session.autoApprove ?? merged[index].autoApprove
+            } else if !chosen.isEmpty {
+                var copy = session
+                copy.transcript = chosen
+                merged.insert(copy, at: 0)
+            }
+        }
+        engine = MockEngine(sessions: merged)
+    }
+
+    private var uiTestLaunch: Bool {
+        let arguments = ProcessInfo.processInfo.arguments
+        let environment = ProcessInfo.processInfo.environment
+        return arguments.contains("-WatchRemoteUITest") || environment["WATCHREMOTE_UI_TEST"] == "1"
     }
 
     private func mergeThreads(_ listed: [GrokSession]) -> [GrokSession] {
@@ -1510,8 +1701,14 @@ final class RemoteStore: ObservableObject {
                 if uiTest {
                     engine = MockEngine(preview: true)
                     appearance = .dark
+                    sessions = engine.sessions.map { session in
+                        var copy = session
+                        copy.transcript = nil
+                        return copy
+                    }
+                } else {
+                    sessions = engine.sessions
                 }
-                sessions = engine.sessions
                 link = .demo
                 approvalsAvailable = true
                 statusLine = "Demo on this iPhone. Nothing is sent."

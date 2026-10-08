@@ -181,8 +181,12 @@ public struct ACPCodec: Sendable {
     private func updateEvent(_ value: Any?) -> StreamEvent {
         guard let update = value as? [String: Any] else { return .ignored }
         let kind = update["sessionUpdate"] as? String ?? ""
-        let text = contentText(update["content"])
+        var text = contentText(update["content"])
+        if text.isEmpty { text = contentText(update["text"]) }
+        if text.isEmpty { text = contentText(update["message"]) }
         switch kind {
+        case "user_message_chunk", "user_message":
+            return .user(text)
         case "agent_message_chunk", "agent_message":
             return .text(text)
         case "agent_thought_chunk", "agent_thought":

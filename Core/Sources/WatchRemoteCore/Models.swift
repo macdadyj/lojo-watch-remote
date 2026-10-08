@@ -222,7 +222,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
                 item.permission = permission
             }
             if let transcript = item.transcript {
-                item.transcript = Array(transcript.prefix(6)).map { Self.clip($0, limit: 120) }
+                item.transcript = Array(transcript.suffix(8)).map { Self.clip($0, limit: 160) }
             }
             return item
         }

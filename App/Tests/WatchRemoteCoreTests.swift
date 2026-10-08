@@ -953,7 +953,47 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(longLines.last, "Grok: Yes. The latest line is this one.")
         XCTAssertFalse(longLines.contains("You: oldest note in this chat"))
         XCTAssertEqual(SessionResume.missingMessage, "That chat is no longer on this computer.")
+        XCTAssertEqual(SessionResume.unavailableMessage, "Couldn't load this chat.")
         XCTAssertFalse(SessionResume.unsupportedMessage.isEmpty)
+        let cached = ["You: earlier", "Grok: the saved reply"]
+        XCTAssertEqual(
+            SessionResume.choose(local: cached, loaded: ["Grok Build Mode"], replayed: []),
+            cached
+        )
+        var replayed: [String] = []
+        replayed = SessionResume.folding(.user("note the route"), into: replayed)
+        replayed = SessionResume.folding(.text("noted"), into: replayed)
+        XCTAssertEqual(replayed, ["You: note the route", "Grok: noted"])
+        XCTAssertEqual(SessionResume.choose(local: [], loaded: [], replayed: replayed), replayed)
+        XCTAssertEqual(
+            SessionResume.keeping(["You: add a note"], onto: replayed),
+            ["You: note the route", "Grok: noted", "You: add a note"]
+        )
+        XCTAssertEqual(
+            SessionResume.keeping(replayed + ["You: add a note", "Grok: done"], onto: replayed),
+            replayed + ["You: add a note", "Grok: done"]
+        )
+        XCTAssertEqual(
+            ChatTranscript.mergingUserEcho("add a note", into: ["You: add a note"]),
+            ["You: add a note"]
+        )
+        XCTAssertEqual(
+            ChatTranscript.mergingUserEcho(" there", into: ["Grok: Hello"]),
+            ["Grok: Hello", "You: there"]
+        )
+        XCTAssertTrue(SessionResume.chatLines(["Just the title"]).isEmpty)
+        let userUpdate = """
+        {"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hello"}}}}
+        """
+        var codec = ACPCodec()
+        guard case .update(_, let userEvent) = codec.parse(userUpdate) else {
+            return XCTFail("expected a user update")
+        }
+        XCTAssertEqual(userEvent, .user("hello"))
+        let trimmedSnapshot = DemoCatalog.snapshot().trimmed()
+        let trimmedLong = trimmedSnapshot.sessions.first { $0.id == DemoCatalog.longID }
+        XCTAssertEqual(trimmedLong?.transcript?.last, "Grok: Yes. The latest line is this one.")
+        XCTAssertFalse(trimmedLong?.transcript?.contains("You: oldest note in this chat") == true)
         var engine = MockEngine(preview: true)
         XCTAssertTrue(engine.continueSession(sessionID: DemoCatalog.idleID, prompt: "add a note"))
         XCTAssertEqual(engine.sessions.first { $0.id == DemoCatalog.idleID }?.summary, "add a note")

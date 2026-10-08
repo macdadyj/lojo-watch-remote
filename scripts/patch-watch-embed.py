@@ -11,6 +11,9 @@ it at PlugIns, then checks an .app bundle the same way.
 
 from __future__ import annotations
 
+import plistlib
+import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -56,6 +59,38 @@ def enforce_phase(text: str) -> str:
     return updated
 
 
+def assert_watch_metadata(watch: Path) -> None:
+    """A missing or too-new MinimumOSVersion leaves TestFlight spinning on install."""
+    plist_path = watch / "Info.plist"
+    if not plist_path.is_file():
+        return
+    info = plistlib.loads(plist_path.read_bytes())
+    if info.get("WKApplication") is not True:
+        raise SystemExit("Watch app Info.plist must set WKApplication true.")
+    companion = info.get("WKCompanionAppBundleIdentifier")
+    if companion != "com.lojo.WatchRemote":
+        raise SystemExit("Watch companion id must be com.lojo.WatchRemote.")
+    minimum = str(info.get("MinimumOSVersion") or "")
+    if not minimum:
+        raise SystemExit(
+            "Watch app is missing MinimumOSVersion. TestFlight can stay on Installing on Apple Watch."
+        )
+    major_text = minimum.split(".", 1)[0]
+    if not major_text.isdigit() or int(major_text) > 10:
+        raise SystemExit(
+            f"Watch MinimumOSVersion {minimum} is newer than watchOS 10. "
+            "A Watch Ultra on watchOS 10 would not finish installing."
+        )
+    binary = watch / "WatchRemoteWatch"
+    lipo = shutil.which("lipo")
+    if binary.is_file() and lipo:
+        archs = subprocess.check_output([lipo, "-archs", str(binary)], text=True)
+        if "arm64" not in archs.split():
+            raise SystemExit(f"Watch binary is missing arm64: {archs.strip()}")
+        size = sum(path.stat().st_size for path in watch.rglob("*") if path.is_file())
+        print(f"Watch app {size} bytes, archs {archs.strip()}")
+
+
 def assert_archived_app(app: Path, watch_name: str = WATCH_APP) -> None:
     if not app.is_dir():
         raise SystemExit(f"App bundle does not exist: {app}")
@@ -71,6 +106,7 @@ def assert_archived_app(app: Path, watch_name: str = WATCH_APP) -> None:
             raise SystemExit(
                 "PlugIns must not contain the watch app. Found: " + ", ".join(extra)
             )
+    assert_watch_metadata(watch)
 
 
 def _expect_failure(action) -> None:
@@ -108,7 +144,27 @@ def self_test() -> None:
         good = root / "WatchRemote.app"
         (good / "Watch" / "WatchRemoteWatch.app").mkdir(parents=True)
         (good / "PlugIns").mkdir()
+        good_plist = good / "Watch" / "WatchRemoteWatch.app" / "Info.plist"
+        with good_plist.open("wb") as handle:
+            plistlib.dump(
+                {
+                    "WKApplication": True,
+                    "WKCompanionAppBundleIdentifier": "com.lojo.WatchRemote",
+                    "MinimumOSVersion": "10.0",
+                },
+                handle,
+            )
         assert_archived_app(good)
+        with good_plist.open("wb") as handle:
+            plistlib.dump(
+                {
+                    "WKApplication": True,
+                    "WKCompanionAppBundleIdentifier": "com.lojo.WatchRemote",
+                    "MinimumOSVersion": "26.0",
+                },
+                handle,
+            )
+        _expect_failure(lambda: assert_archived_app(good))
         bad = root / "Bad.app"
         (bad / "PlugIns" / "WatchRemoteWatch.app").mkdir(parents=True)
         _expect_failure(lambda: assert_archived_app(bad))

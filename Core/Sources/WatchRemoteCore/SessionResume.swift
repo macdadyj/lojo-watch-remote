@@ -5,6 +5,7 @@ import Foundation
 public enum SessionResume {
     public static let missingMessage = "That chat is no longer on this computer."
     public static let unsupportedMessage = "This connection cannot reopen that chat."
+    public static let unavailableMessage = "Couldn't load this chat."
 
     public static func displayLines(title: String, summary: String, transcript: [String]) -> [String] {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -33,11 +34,66 @@ public enum SessionResume {
     }
 
     /// Spoken lines from a JSON-RPC `session/load` body. Empty when the payload has none.
+    /// The newest lines are kept. A title-only payload is not a transcript.
     public static func transcriptLines(inLoadJSON text: String) -> [String] {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let data = cleaned.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) else { return [] }
-        return Array(lines(in: json).prefix(8))
+        return Array(lines(in: json).suffix(80))
+    }
+
+    /// The longest real conversation among the computer's replay, the load body, and the phone cache.
+    /// A title or summary by itself is not a conversation. Replay wins ties.
+    public static func choose(local: [String], loaded: [String], replayed: [String]) -> [String] {
+        var best: [String] = []
+        for lines in [replayed, loaded, local] {
+            let chat = chatLines(lines)
+            if chat.count > best.count {
+                best = chat
+            }
+        }
+        return best
+    }
+
+    /// Keeps lines that arrived while history was loading, including the message just sent.
+    public static func keeping(_ latest: [String], onto base: [String]) -> [String] {
+        let live = chatLines(latest)
+        if base.isEmpty {
+            return live
+        }
+        if live.count >= base.count, Array(live.prefix(base.count)) == base {
+            return live
+        }
+        var extra = live.filter { !base.contains($0) }
+        if extra.isEmpty, let last = live.last, last.hasPrefix("You:"), base.last != last {
+            extra = [last]
+        }
+        return extra.isEmpty ? base : base + extra
+    }
+
+    /// Folds one ACP session update into chat lines. User chunks stay on the right. Agent chunks stay on the left.
+    public static func folding(_ event: StreamEvent, into lines: [String]) -> [String] {
+        switch event {
+        case .user(let text):
+            return ChatTranscript.streamingSpeaker(prefix: "You:", text, in: lines)
+        case .text(let text):
+            return ChatTranscript.streamingAssistant(text, in: lines)
+        case .tool(let title):
+            return ChatTranscript.append(ChatTranscript.toolCard(title), to: lines)
+        case .thought, .toolUpdate, .usage, .end, .error, .ignored:
+            return lines
+        }
+    }
+
+    /// Lines that name a speaker or a tool. A bare title does not.
+    public static func chatLines(_ lines: [String]) -> [String] {
+        let cleaned = lines
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !ChatTranscript.isStatusNoise($0) }
+        let marked = cleaned.contains { line in
+            line.hasPrefix("You:") || line.hasPrefix("Grok:") || ChatTranscript.isToolCard(line) || ChatTranscript.isNote(line)
+        }
+        return marked ? cleaned : []
     }
 
     private static func lines(in json: Any) -> [String] {
@@ -53,13 +109,17 @@ public enum SessionResume {
             return rows
         }
         guard let object = root as? [String: Any] else { return [] }
-        for key in ["messages", "conversation", "transcript", "history"] {
+        for key in ["messages", "conversation", "transcript", "history", "turns", "entries", "items"] {
             if let rows = object[key] as? [Any] {
                 return rows
             }
             if let nested = object[key] as? [String: Any], let rows = nested["messages"] as? [Any] {
                 return rows
             }
+        }
+        if let session = object["session"] as? [String: Any] {
+            let nested = messageRows(in: session)
+            if !nested.isEmpty { return nested }
         }
         if let rows = object["content"] as? [Any] {
             return rows

@@ -117,6 +117,56 @@ class AgentDoorTests(unittest.TestCase):
         self.assertIn("no longer", rejected["error"]["message"])
         self.assertNotIn("missing", sessions)
 
+    def test_headless_load_replays_stored_lines_before_the_result(self) -> None:
+        left, right = socket.socketpair()
+        left.settimeout(2)
+        sessions: dict = {}
+
+        buffer = b""
+
+        def take(count: int) -> list[dict]:
+            nonlocal buffer
+            found: list[dict] = []
+            while len(found) < count:
+                chunk = left.recv(4096)
+                self.assertTrue(chunk)
+                buffer += chunk
+                while True:
+                    parsed = agentdoor._parse(buffer)
+                    if parsed is None:
+                        break
+                    _opcode, payload, size = parsed
+                    buffer = buffer[size:]
+                    found.append(json.loads(payload))
+            return found
+
+        try:
+            agentdoor._handle(right, "grok", sessions, {}, {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session/new",
+                "params": {"cwd": "/work", "mcpServers": []},
+            })
+            created = take(1)
+            session_id = created[0]["result"]["sessionId"]
+            sessions[session_id].lines = ["You: note the route", "Grok: noted"]
+            agentdoor._handle(right, "grok", sessions, {}, {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "session/load",
+                "params": {"sessionId": session_id, "cwd": "/work", "mcpServers": []},
+            })
+            loaded = take(3)
+        finally:
+            left.close()
+            right.close()
+        self.assertEqual(loaded[0]["method"], "session/update")
+        self.assertEqual(loaded[0]["params"]["update"]["sessionUpdate"], "user_message_chunk")
+        self.assertEqual(loaded[0]["params"]["update"]["content"]["text"], "note the route")
+        self.assertEqual(loaded[1]["method"], "session/update")
+        self.assertEqual(loaded[1]["params"]["update"]["content"]["text"], "noted")
+        self.assertEqual(loaded[2]["result"]["sessionId"], session_id)
+
     def test_cwd_resolution_stays_on_the_computer(self) -> None:
         home = Path("/home/user")
         self.assertEqual(agentdoor.resolve_cwd("", home), "/home/user")

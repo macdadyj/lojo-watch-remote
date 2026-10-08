@@ -157,6 +157,9 @@ final class WatchSpeechRelay {
         current.task?.cancel()
         let id = current.id
         active = nil
+        DispatchQueue.main.async {
+            ComposerSpeech.releaseIdleSession()
+        }
         guard sendTranscript else { return }
         send(VoicePacket(kind: .transcript, utteranceID: id, isLast: true, text: text))
     }

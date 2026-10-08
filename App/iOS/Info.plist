@@ -28,7 +28,9 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Watch Remote turns what you say on Apple Watch into a task or an approval.</string>
+	<string>Watch Remote turns what you say on Apple Watch into a task or an approval, and types what you dictate into a message.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Watch Remote uses the microphone only while Dictate is on, to type a message. It releases the microphone when dictation stops so the keyboard can dictate too.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Watch Remote reaches your computer on your private network.</string>
 	<key>NSCameraUsageDescription</key>

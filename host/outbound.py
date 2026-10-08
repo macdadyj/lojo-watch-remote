@@ -330,6 +330,8 @@ class ACPAgent:
         self.permissions: dict[str, dict] = {}
         self.pending_push = False
         self.push_n = 0
+        self.capture_replay = False
+        self.replay_lines: list[str] = []
 
     def open(self) -> None:
         # The secret is a header so a proxy access log cannot record it from the URL.
@@ -403,18 +405,22 @@ class ACPAgent:
         if match is None:
             raise RuntimeError(MISSING_SESSION)
         directory = str(match.get("cwd") or Path.home())
-        loaded = self.request("session/load", {
-            "sessionId": session_id,
-            "cwd": directory,
-            "mcpServers": [],
-        })
-        lines = transcript_lines(loaded.get("result"))
-        if lines:
-            return lines
-        title = str(match.get("title") or "").strip()
-        summary = str(match.get("summary") or "").strip()
-        fallback = [part for part in (title, summary) if part]
-        return fallback or ["Session"]
+        self.replay_lines = []
+        self.capture_replay = True
+        try:
+            loaded = self.request("session/load", {
+                "sessionId": session_id,
+                "cwd": directory,
+                "mcpServers": [],
+            })
+        finally:
+            self.capture_replay = False
+        stored = match.get("lines") if isinstance(match.get("lines"), list) else []
+        chosen = best_transcript(self.replay_lines, transcript_lines(loaded.get("result")), stored)
+        if chosen:
+            match["lines"] = chosen
+            return chosen
+        return []
 
     def continue_session(self, session_id: str, prompt: str, cwd: str) -> str:
         self.restore(session_id)
@@ -563,7 +569,11 @@ class ACPAgent:
         session_id = str(params.get("sessionId") or "")
         update = params.get("update") if isinstance(params.get("update"), dict) else {}
         kind = str(update.get("sessionUpdate") or "")
-        if kind not in {"agent_message_chunk", "agent_message"}:
+        if kind in {"user_message_chunk", "user_message"}:
+            prefix = "You:"
+        elif kind in {"agent_message_chunk", "agent_message"}:
+            prefix = "Grok:"
+        else:
             return
         content = update.get("content")
         text = ""
@@ -573,9 +583,13 @@ class ACPAgent:
             text = content
         if not text:
             return
+        if self.capture_replay:
+            self.replay_lines = fold_speaker(self.replay_lines, prefix, text)
         for row in self.rows:
             if row.get("id") == session_id:
-                row["summary"] = clip((row.get("summary") or "") + text)
+                if prefix == "Grok:":
+                    row["summary"] = clip((row.get("summary") or "") + text)
+                row["lines"] = fold_speaker(list(row.get("lines") or []), prefix, text)
 
     def _apply_permissions(self) -> None:
         for row in self.rows:
@@ -608,7 +622,30 @@ def transcript_lines(result: object) -> list[str]:
         line = _transcript_line(row)
         if line:
             lines.append(line)
-    return lines[:8]
+    return lines[-80:]
+
+
+def fold_speaker(lines: list[str], prefix: str, text: str) -> list[str]:
+    if lines and lines[-1].startswith(prefix):
+        lines[-1] = (lines[-1] + text)[:8000]
+        return lines
+    body = " ".join(text.split())
+    if not body:
+        return lines
+    lines.append(f"{prefix} {body}")
+    return lines
+
+
+def best_transcript(*groups: list) -> list[str]:
+    """Prefer a real conversation over a title or summary standing in for one."""
+    best: list[str] = []
+    for group in groups:
+        lines = [str(line) for line in group if str(line).strip()]
+        if not any(line.startswith(("You:", "Grok:", "Tool:", "Auto-approved:")) for line in lines):
+            continue
+        if len(lines) >= len(best):
+            best = lines
+    return best
 
 
 def _message_rows(root: object) -> list:

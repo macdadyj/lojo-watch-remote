@@ -50,6 +50,8 @@ final class ACPPipe: @unchecked Sendable {
     private let onEvent: @Sendable (ACPInbound) -> Void
     private let onDead: @Sendable () -> Void
     private var failed = false
+    private var captureReplay = false
+    private var replayBuffer: [StreamEvent] = []
 
     var isUsable: Bool {
         lock.lock()
@@ -112,8 +114,32 @@ final class ACPPipe: @unchecked Sendable {
         try await roundTrip(timeout: true) { $0.loadSession(sessionID: sessionID, cwd: cwd) }
     }
 
+    /// `session/load` replays the conversation as `session/update` before the result.
+    /// Those updates are returned here and are not applied as a new live turn.
+    func loadSessionCaptured(sessionID: String, cwd: String) async throws -> (raw: String, replay: [StreamEvent]) {
+        lock.lock()
+        captureReplay = true
+        replayBuffer = []
+        lock.unlock()
+        do {
+            let raw = try await loadSessionRaw(sessionID: sessionID, cwd: cwd)
+            lock.lock()
+            let replay = replayBuffer
+            replayBuffer = []
+            captureReplay = false
+            lock.unlock()
+            return (raw, replay)
+        } catch {
+            lock.lock()
+            replayBuffer = []
+            captureReplay = false
+            lock.unlock()
+            throw error
+        }
+    }
+
     func loadSession(sessionID: String, cwd: String) async throws {
-        _ = try await loadSessionRaw(sessionID: sessionID, cwd: cwd)
+        _ = try await loadSessionCaptured(sessionID: sessionID, cwd: cwd)
     }
 
     func sessionUsage(sessionID: String) async throws -> String? {
@@ -301,7 +327,13 @@ final class ACPPipe: @unchecked Sendable {
             resume(id: id, result: .success(raw))
         case .failure(let id, _, let message):
             resume(id: id, result: .failure(SSHClientError.disconnected(message)))
-        case .update, .permission, .notification:
+        case .update(_, let event):
+            lock.lock()
+            let capture = captureReplay
+            if capture { replayBuffer.append(event) }
+            lock.unlock()
+            if !capture { onEvent(inbound) }
+        case .permission, .notification:
             onEvent(inbound)
         }
     }
@@ -457,10 +489,15 @@ final class LiveLink {
     }
 
     func loadSessionRaw(sessionID: String, cwd: String?) async throws -> String {
+        let loaded = try await loadSessionCaptured(sessionID: sessionID, cwd: cwd)
+        return loaded.raw
+    }
+
+    func loadSessionCaptured(sessionID: String, cwd: String?) async throws -> (raw: String, replay: [StreamEvent]) {
         let pipe = try requirePipe()
         let directory = agentCwd(cwd)
         do {
-            return try await pipe.loadSessionRaw(sessionID: sessionID, cwd: directory)
+            return try await pipe.loadSessionCaptured(sessionID: sessionID, cwd: directory)
         } catch {
             if pipe.isUsable == false { noteAgentClosed() }
             throw error
@@ -499,11 +536,14 @@ final class LiveLink {
         return sessionID
     }
 
-    func resumePrompt(sessionID: String, prompt: String, cwd: String?) async throws {
+    /// Loads the session, returns the replayed history, then sends the prompt on that session.
+    func resumePrompt(sessionID: String, prompt: String, cwd: String?) async throws -> [StreamEvent] {
         let pipe = try requirePipe()
         let directory = agentCwd(cwd)
+        let replay: [StreamEvent]
         do {
-            try await pipe.loadSession(sessionID: sessionID, cwd: directory)
+            let loaded = try await pipe.loadSessionCaptured(sessionID: sessionID, cwd: directory)
+            replay = loaded.replay
         } catch {
             if pipe.isUsable == false { noteAgentClosed() }
             throw error
@@ -517,6 +557,7 @@ final class LiveLink {
                 self.onCLI(sessionID, .error(error.localizedDescription))
             }
         }
+        return replay
     }
 
     func respond(_ request: PermissionRequest, allow: Bool) async -> Bool {

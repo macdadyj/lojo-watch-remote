@@ -230,15 +230,39 @@ public enum ChatTranscript {
 
     /// Grows the latest assistant line while a reply streams. A new chunk starts a line.
     public static func streamingAssistant(_ chunk: String, in lines: [String]) -> [String] {
+        streamingSpeaker(prefix: "Grok:", chunk, in: lines)
+    }
+
+    /// A prompt we already showed should not grow again when the computer echoes it.
+    public static func mergingUserEcho(_ chunk: String, into lines: [String]) -> [String] {
+        let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return lines }
+        guard let last = lines.last, last.hasPrefix("You:") else {
+            return streamingSpeaker(prefix: "You:", chunk, in: lines)
+        }
+        let spoken = spokenText(last)
+        if spoken == trimmed || (trimmed.count <= spoken.count && (spoken.hasPrefix(trimmed) || spoken.hasSuffix(trimmed))) {
+            return lines
+        }
+        if spoken.count < trimmed.count, trimmed.hasPrefix(spoken) {
+            var copy = lines
+            copy[copy.count - 1] = "You: \(trimmed)"
+            return copy
+        }
+        return streamingSpeaker(prefix: "You:", chunk, in: lines)
+    }
+
+    /// Grows the latest line with `prefix` ("You:" or "Grok:") while a turn streams.
+    public static func streamingSpeaker(prefix: String, _ chunk: String, in lines: [String]) -> [String] {
         guard !chunk.isEmpty else { return lines }
         var copy = lines
-        if let last = copy.last, last.hasPrefix("Grok:") {
-            copy[copy.count - 1] = String((last + chunk).prefix(4000))
+        if let last = copy.last, last.hasPrefix(prefix) {
+            copy[copy.count - 1] = String((last + chunk).prefix(8000))
             return copy
         }
         let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return lines }
-        copy.append("Grok: \(trimmed)")
+        copy.append("\(prefix) \(trimmed)")
         return copy
     }
 

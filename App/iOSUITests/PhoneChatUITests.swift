@@ -31,6 +31,37 @@ final class PhoneChatUITests: XCTestCase {
         shot(again, "phone-relaunch-follow-up")
     }
 
+    func testReopenedChatShowsHistoryBubblesAndASend() throws {
+        let app = launch()
+        openIdle(app)
+        let history = app.descendants(matching: .any)["chat.history"]
+        XCTAssertTrue(history.waitForExistence(timeout: 8))
+        let mine = line(history, "Where does this computer live?")
+        XCTAssertTrue(mine.waitForExistence(timeout: 8), "reopened chat did not show the saved user bubble")
+        XCTAssertFalse(app.staticTexts["Couldn't load this chat."].exists, "reopened chat failed to load")
+        if waitUntilVisible(mine, in: history, timeout: 1) {
+            XCTAssertLessThan(mine.frame.width, history.frame.width * 0.85, "user bubble is full width")
+            XCTAssertGreaterThan(mine.frame.maxX, history.frame.midX, "user bubble is not on the right")
+        }
+        let reply = line(history, "The computer is reachable only on the private overlay.")
+        XCTAssertTrue(reply.waitForExistence(timeout: 4), "reopened chat did not show the saved reply")
+        if waitUntilVisible(reply, in: history, timeout: 1) {
+            XCTAssertLessThan(reply.frame.minX, history.frame.midX, "assistant reply does not start on the left")
+        }
+        XCTAssertFalse(app.secureTextFields["chat.composer"].exists, "the composer is a secure field")
+        XCTAssertTrue(app.buttons["chat.dictate"].waitForExistence(timeout: 4), "dictate control is missing")
+        send(app, "add a note")
+        let sent = line(history, "add a note", last: true)
+        XCTAssertTrue(sent.waitForExistence(timeout: 8), "send did not show a user bubble")
+        XCTAssertTrue(waitUntilVisible(sent, in: history), "the sent bubble is off screen")
+        XCTAssertGreaterThan(sent.frame.maxX, history.frame.midX, "the sent bubble is not on the right")
+        let answer = line(history, "Done. add a note", last: true)
+        XCTAssertTrue(answer.waitForExistence(timeout: 8), "send did not produce a reply")
+        XCTAssertLessThan(answer.frame.minX, history.frame.midX, "the reply does not start on the left")
+        XCTAssertTrue(waitUntilVisible(answer, in: history), "the reply is off screen")
+        shot(app, "phone-reopened-history")
+    }
+
     func testNewChatShowsTheReply() throws {
         let app = launch()
         let newChat = app.buttons["chat.new"]
@@ -183,8 +214,9 @@ final class PhoneChatUITests: XCTestCase {
         return field
     }
 
-    private func line(_ parent: XCUIElement, _ label: String) -> XCUIElement {
-        parent.staticTexts.matching(NSPredicate(format: "label == %@", label)).firstMatch
+    private func line(_ parent: XCUIElement, _ label: String, last: Bool = false) -> XCUIElement {
+        let matches = parent.staticTexts.matching(NSPredicate(format: "label == %@", label))
+        return last ? matches.lastMatch : matches.firstMatch
     }
 
     private func visible(_ element: XCUIElement, in container: XCUIElement) -> Bool {

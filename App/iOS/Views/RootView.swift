@@ -30,6 +30,7 @@ struct RootView: View {
 struct ComposeView: View {
     @EnvironmentObject private var store: RemoteStore
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var dictation = ComposerDictation()
     @State private var prompt = ""
 
     var body: some View {
@@ -40,8 +41,20 @@ struct ComposeView: View {
                 TextField("Dictate or type a task", text: $prompt, axis: .vertical)
                     .lineLimit(8, reservesSpace: true)
                     .textFieldStyle(.roundedBorder)
+                    .keyboardType(.default)
+                    .textContentType(nil)
+                    .textInputAutocapitalization(.sentences)
+                    .autocorrectionDisabled(false)
                     .frame(minHeight: 140, alignment: .topLeading)
                     .accessibilityIdentifier("chat.prompt")
+                Button {
+                    dictation.toggle { spoken in
+                        prompt = spoken
+                    }
+                } label: {
+                    Label(dictation.listening ? "Stop dictation" : "Dictate", systemImage: dictation.listening ? "stop.circle" : "mic")
+                }
+                .accessibilityIdentifier("chat.dictate")
                 Text(store.cwd.isEmpty ? "Working directory: the computer’s home" : "Working directory: \(store.cwd)")
                     .font(.footnote)
                     .foregroundStyle(LojoTheme.secondaryText)
@@ -66,10 +79,14 @@ struct ComposeView: View {
                 }
             }
             .onAppear {
+                ComposerSpeech.releaseIdleSession()
                 if ProcessInfo.processInfo.environment["WATCHREMOTE_SCREEN"] == "compose"
                     || ProcessInfo.processInfo.arguments.contains("compose") {
                     prompt = "Summarize the open changes"
                 }
+            }
+            .onDisappear {
+                dictation.stop()
             }
         }
     }

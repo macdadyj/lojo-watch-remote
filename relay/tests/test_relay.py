@@ -8,7 +8,14 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-from watchremote_relay.adapters.acp import client_frame, handshake_request, pop_server_frame
+from watchremote_relay.adapters.acp import (
+    ACPAdapter,
+    best_transcript,
+    client_frame,
+    fold_update,
+    handshake_request,
+    pop_server_frame,
+)
 from watchremote_relay.adapters.cli import CLIAdapter
 from watchremote_relay.adapters.mock import MockAdapter
 from watchremote_relay.server import TokenStore, bind_address, build_adapter, configured_bind, main, make_handler
@@ -130,6 +137,30 @@ class RelayTests(unittest.TestCase):
         self.assertNotIn("?", request.split("\r\n", 1)[0])
         with self.assertRaises(RuntimeError):
             handshake_request("bad\nsecret", "127.0.0.1", 2419, "abc")
+
+    def test_acp_replay_is_a_conversation_and_a_title_is_not(self):
+        lines: list[str] = []
+        lines = fold_update(lines, {
+            "sessionUpdate": "user_message_chunk",
+            "content": {"type": "text", "text": "note the route"},
+        })
+        lines = fold_update(lines, {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {"type": "text", "text": "noted"},
+        })
+        self.assertEqual(lines, ["You: note the route", "Grok: noted"])
+        self.assertEqual(best_transcript(["Grok Build Mode"], lines), lines)
+        self.assertEqual(best_transcript(["Just the title"]), [])
+        adapter = ACPAdapter()
+        adapter._capture = True
+        adapter._note({
+            "method": "session/update",
+            "params": {
+                "sessionId": "s",
+                "update": {"sessionUpdate": "user_message_chunk", "content": {"text": "hello"}},
+            },
+        })
+        self.assertEqual(adapter._replay, ["You: hello"])
 
     def test_a_chat_stays_live_after_ten_minutes(self):
         self.assertIsNone(__import__("keepalive", fromlist=["IDLE_TIMEOUT"]).IDLE_TIMEOUT)

@@ -120,6 +120,11 @@ class HandleTests(unittest.TestCase):
             ],
         })
         self.assertEqual(lines, ["You: note the route", "Grok: noted"])
+        self.assertEqual(
+            outbound.best_transcript(["Grok Build Mode"], ["You: note it", "Grok: noted"]),
+            ["You: note it", "Grok: noted"],
+        )
+        self.assertEqual(outbound.best_transcript(["Just the title"]), [])
 
     def test_transcribe_returns_text_and_empty_audio_errors(self) -> None:
         agent = outbound.MemoryAgent()

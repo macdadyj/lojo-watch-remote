@@ -341,6 +341,7 @@ class _Session:
         self.status = "idle"
         self.usage: dict | None = None
         self.stop_reason = "end_turn"
+        self.lines: list[str] = []
 
 
 def _fallback(client: socket.socket, binary: str) -> None:
@@ -435,6 +436,8 @@ def _handle(
             return None
         cwd = resolve_cwd(str(params.get("cwd") or "")) or session.cwd
         session.cwd = cwd
+        for line in session.lines[-80:]:
+            _send_stored_line(client, session_id, line)
         _send_json(client, {"jsonrpc": "2.0", "id": ident, "result": {"sessionId": session_id}})
         return None
     if method == "session/cancel":
@@ -472,6 +475,7 @@ def _handle(
             return None
         session.status = "running"
         session.title = " ".join(prompt.split()[:6]) or "Task"
+        _fold_speaker(session.lines, "You:", prompt)
         argv = headless_argv(binary, prompt, session.cwd, session.resume)
         try:
             proc = subprocess.Popen(
@@ -564,6 +568,7 @@ def _emit_line(client: socket.socket, session_id: str, sessions: dict[str, _Sess
         text = str(event.get("data") or "")
         if session is not None:
             session.summary = (session.summary + text)[:280]
+            _fold_speaker(session.lines, "Grok:", text)
         _send_json(client, {
             "jsonrpc": "2.0",
             "method": "session/update",
@@ -586,6 +591,9 @@ def _emit_line(client: socket.socket, session_id: str, sessions: dict[str, _Sess
         title = str(event.get("title") or event.get("toolName") or "a tool")
         if session is not None:
             session.summary = f"Using {title}."
+            body = " ".join(title.split())
+            if body:
+                session.lines.append(f"Tool: {body}")
         _send_json(client, {
             "jsonrpc": "2.0",
             "method": "session/update",
@@ -618,6 +626,31 @@ def _finish_prompt(
 
 def _error(client: socket.socket, ident: object, message: str) -> None:
     _send_json(client, {"jsonrpc": "2.0", "id": ident, "error": {"message": message}})
+
+
+def _fold_speaker(lines: list[str], prefix: str, text: str) -> None:
+    if lines and lines[-1].startswith(prefix):
+        lines[-1] = (lines[-1] + text)[:8000]
+        return
+    body = " ".join(str(text).split())
+    if body:
+        lines.append(f"{prefix} {body}")
+
+
+def _send_stored_line(client: socket.socket, session_id: str, line: str) -> None:
+    if line.startswith("You:"):
+        update = {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": line[len("You:"):].strip()}}
+    elif line.startswith("Grok:"):
+        update = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": line[len("Grok:"):].strip()}}
+    elif line.startswith("Tool:"):
+        update = {"sessionUpdate": "tool_call", "title": line[len("Tool:"):].strip() or "Tool"}
+    else:
+        return
+    _send_json(client, {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {"sessionId": session_id, "update": update},
+    })
 
 
 def _send_json(client: socket.socket, obj: dict) -> None:

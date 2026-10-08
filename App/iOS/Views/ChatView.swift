@@ -183,6 +183,7 @@ struct ChatThreadView: View {
     @EnvironmentObject private var store: RemoteStore
     @Environment(\.colorScheme) private var scheme
     @FocusState private var composerFocused: Bool
+    @StateObject private var dictation = ComposerDictation()
     @State private var draft = ""
     /// Stays true until the reader scrolls up to read older messages.
     @State private var followLatest = true
@@ -281,8 +282,12 @@ struct ChatThreadView: View {
         .task(id: sessionID) {
             followLatest = true
             pinRequest += 1
+            ComposerSpeech.releaseIdleSession()
             await store.resume(sessionID: sessionID)
             pinRequest += 1
+        }
+        .onDisappear {
+            dictation.stop()
         }
     }
 
@@ -374,7 +379,20 @@ struct ChatThreadView: View {
     @ViewBuilder
     private func transcript(_ proxy: ScrollViewProxy) -> some View {
         let lines = current?.transcript ?? []
-        let blocks = ChatTranscript.blocks(from: lines.isEmpty ? summaryLines : lines, toolsRunning: current?.status == .running)
+        let conversation = SessionResume.chatLines(lines)
+        if conversation.isEmpty {
+            recovery(loading: true)
+        } else {
+            bubbles(proxy, lines: lines)
+            if store.resumeNotice(for: sessionID) != nil {
+                recovery(loading: false)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func bubbles(_ proxy: ScrollViewProxy, lines: [String]) -> some View {
+        let blocks = ChatTranscript.blocks(from: lines, toolsRunning: current?.status == .running)
         ForEach(blocks) { block in
             let rowID = "chat.block.\(block.id)"
             ChatBlockRow(
@@ -406,9 +424,35 @@ struct ChatThreadView: View {
         }
     }
 
-    private var summaryLines: [String] {
-        guard let summary = current?.summary, !summary.isEmpty else { return [] }
-        return [summary]
+    @ViewBuilder
+    private func recovery(loading: Bool) -> some View {
+        let notice = store.resumeNotice(for: sessionID)
+        VStack(alignment: .leading, spacing: 8) {
+            if loading, notice == nil {
+                Text("Loading this chat…")
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.secondaryText)
+                    .accessibilityIdentifier("chat.loading")
+            } else {
+                Text(notice ?? SessionResume.unavailableMessage)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("chat.resume")
+                HStack(spacing: 12) {
+                    Button("Retry") {
+                        Task { await store.retryChat(sessionID) }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("chat.retry")
+                    Button("Continue in new chat") {
+                        Task { await store.continueInNewChat(sessionID) }
+                    }
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("chat.continueNew")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func permissionCard(_ permission: PermissionRequest) -> some View {
@@ -442,6 +486,10 @@ struct ChatThreadView: View {
                 .textFieldStyle(.plain)
                 .focused($composerFocused)
                 .submitLabel(.send)
+                .keyboardType(.default)
+                .textContentType(nil)
+                .textInputAutocapitalization(.sentences)
+                .autocorrectionDisabled(false)
                 .onSubmit(sendDraft)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
@@ -451,6 +499,16 @@ struct ChatThreadView: View {
                         .fill(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05))
                 )
                 .accessibilityIdentifier("chat.composer")
+            Button {
+                dictation.toggle { spoken in
+                    draft = spoken
+                }
+            } label: {
+                Image(systemName: dictation.listening ? "stop.circle.fill" : "mic.circle.fill")
+                    .font(.system(size: 32))
+            }
+            .accessibilityLabel(dictation.listening ? "Stop dictation" : "Dictate")
+            .accessibilityIdentifier("chat.dictate")
             Button(action: sendDraft) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 32))

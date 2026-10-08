@@ -24,6 +24,8 @@ class ACPAdapter:
         self._ready = False
         self._error: str | None = None
         self._thread: threading.Thread | None = None
+        self._capture = False
+        self._replay: list[str] = []
 
     def list_sessions(self) -> list[dict]:
         try:
@@ -95,8 +97,40 @@ class ACPAdapter:
         source = listed or stored
         if source is None:
             raise RuntimeError("That chat is no longer on this computer.")
-        lines = [part for part in (str(source.get("title") or ""), str(source.get("summary") or "")) if part]
-        return {"lines": lines, "session": source}
+        directory = str(source.get("cwd") or "/")
+        with self._lock:
+            self._replay = []
+            self._capture = True
+        loaded: dict | None = None
+        error: Exception | None = None
+        try:
+            loaded = self._call("session/load", {
+                "sessionId": session_id,
+                "cwd": directory,
+                "mcpServers": [],
+            })
+        except Exception as exc:  # noqa: BLE001 — a cached transcript is still the chat
+            error = exc
+        finally:
+            with self._lock:
+                replay = list(self._replay)
+                self._replay = []
+                self._capture = False
+        cached = list(source.get("lines") or []) if isinstance(source.get("lines"), list) else []
+        if error is not None:
+            kept = chat_lines(cached)
+            if kept:
+                return {"lines": kept, "session": source}
+            raise error
+        chosen = best_transcript(replay, transcript_lines(loaded), cached)
+        if chosen:
+            source = dict(source)
+            source["lines"] = chosen
+            with self._lock:
+                current = self.sessions.get(session_id)
+                if current is not None:
+                    current["lines"] = chosen
+        return {"lines": chosen, "session": source}
 
     def continue_session(self, session_id: str, prompt: str, cwd: str) -> dict:
         restored = self.restore(session_id)
@@ -254,6 +288,14 @@ class ACPAdapter:
         method = incoming.get("method")
         params = incoming.get("params") or {}
         session_id = str(params.get("sessionId") or "")
+        if method == "session/update":
+            update = params.get("update") if isinstance(params.get("update"), dict) else {}
+            with self._lock:
+                capturing = self._capture
+                if capturing:
+                    self._replay = fold_update(self._replay, update)
+            if capturing:
+                return
         with self._lock:
             session = self.sessions.get(session_id)
         if session is None:
@@ -328,6 +370,122 @@ def _extension_body(result: object) -> object:
             continue
         break
     return current
+
+
+def fold_update(lines: list[str], update: dict) -> list[str]:
+    """Turn one ACP session update into a chat line. A title is not a line."""
+    kind = str(update.get("sessionUpdate") or "")
+    if kind in {"user_message_chunk", "user_message"}:
+        return _fold_speaker(lines, "You:", _update_text(update))
+    if kind in {"agent_message_chunk", "agent_message"}:
+        return _fold_speaker(lines, "Grok:", _update_text(update))
+    if kind == "tool_call":
+        tool = update.get("toolCall") if isinstance(update.get("toolCall"), dict) else {}
+        title = str(update.get("title") or tool.get("title") or "Tool")
+        body = " ".join(title.split())
+        if body:
+            lines.append(f"Tool: {body}")
+        return lines
+    return lines
+
+
+def best_transcript(*groups: list) -> list[str]:
+    """The longest real conversation. A title or summary by itself does not count."""
+    best: list[str] = []
+    for group in groups:
+        lines = chat_lines([str(line) for line in group])
+        if len(lines) > len(best):
+            best = lines
+    return best
+
+
+def chat_lines(lines: list[str]) -> list[str]:
+    cleaned = [line.strip() for line in lines if str(line).strip()]
+    if not any(line.startswith(("You:", "Grok:", "Tool:", "Auto-approved:")) for line in cleaned):
+        return []
+    return cleaned
+
+
+def transcript_lines(result: object) -> list[str]:
+    root = result
+    if isinstance(root, dict) and isinstance(root.get("result"), (dict, list)):
+        root = root["result"]
+    lines: list[str] = []
+    for row in _message_rows(root):
+        line = _transcript_line(row)
+        if line:
+            lines.append(line)
+    return lines[-80:]
+
+
+def _fold_speaker(lines: list[str], prefix: str, text: str) -> list[str]:
+    if not text:
+        return lines
+    if lines and lines[-1].startswith(prefix):
+        lines[-1] = (lines[-1] + text)[:8000]
+        return lines
+    body = " ".join(text.split())
+    if not body:
+        return lines
+    lines.append(f"{prefix} {body}")
+    return lines
+
+
+def _update_text(update: dict) -> str:
+    for key in ("content", "text", "message"):
+        text = _text_body(update.get(key))
+        if text:
+            return text
+    return ""
+
+
+def _text_body(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(_text_body(item) for item in value)
+    if isinstance(value, dict):
+        if isinstance(value.get("text"), str) and value.get("text"):
+            return str(value["text"])
+        return _text_body(value.get("content"))
+    return ""
+
+
+def _message_rows(root: object) -> list:
+    if isinstance(root, list):
+        return root
+    if not isinstance(root, dict):
+        return []
+    for key in ("messages", "conversation", "transcript", "history", "turns", "entries", "items"):
+        value = root.get(key)
+        if isinstance(value, list):
+            return value
+    session = root.get("session")
+    if isinstance(session, dict):
+        nested = _message_rows(session)
+        if nested:
+            return nested
+    return []
+
+
+def _transcript_line(row: object) -> str | None:
+    if isinstance(row, str):
+        text = row.strip()
+        return text or None
+    if not isinstance(row, dict):
+        return None
+    role = str(row.get("role") or row.get("type") or "").lower()
+    body = _text_body(row.get("content")) or _text_body(row.get("text")) or _text_body(row.get("message"))
+    body = " ".join(body.split())
+    if not body:
+        return None
+    if role in {"user", "human"}:
+        return f"You: {body}"
+    if role in {"assistant", "agent", "model"}:
+        return f"Grok: {body}"
+    if role in {"", "text", "message"}:
+        return body
+    return f"{role}: {body}"
 
 
 def handshake_request(secret: str, host: str, port: int, key: str) -> str:

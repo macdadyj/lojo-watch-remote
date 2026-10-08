@@ -161,6 +161,7 @@ public enum GrokOutput {
 }
 
 public enum StreamEvent: Equatable, Sendable {
+    case user(String)
     case text(String)
     case thought(String)
     case tool(title: String)
