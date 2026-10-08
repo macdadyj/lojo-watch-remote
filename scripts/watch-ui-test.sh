@@ -121,6 +121,56 @@ export_shots() {
   find "${result}" -name '*.png' -exec cp {} "${dest}/" \; || true
 }
 
+# A runner watch is often already paired with a different phone. `simctl pair` then
+# fails with "maximum number of supported devices" and WatchConnectivity never connects.
+pair_watch() {
+  python3 - "$1" "$2" <<'PY'
+import json, subprocess, sys
+watch, phone = sys.argv[1], sys.argv[2]
+raw = subprocess.check_output(["xcrun", "simctl", "list", "pairs", "-j"], text=True)
+pairs = json.loads(raw).get("pairs") or {}
+matched = False
+for row in pairs.values():
+    w = (row.get("watch") or {}).get("udid", "")
+    p = (row.get("phone") or {}).get("udid", "")
+    if not w or not p:
+        continue
+    if w == watch and p == phone:
+        matched = True
+        continue
+    if w in (watch, phone) or p in (watch, phone):
+        print(f"unpair {w} {p}", flush=True)
+        subprocess.call(["xcrun", "simctl", "unpair", w, p])
+if matched:
+    print(f"already paired {watch} {phone}", flush=True)
+    raise SystemExit(0)
+print(f"pair {watch} {phone}", flush=True)
+raise SystemExit(subprocess.call(["xcrun", "simctl", "pair", watch, phone]))
+PY
+}
+
+ensure_pair() {
+  local watch="$1"
+  local phone="$2"
+  if pair_watch "${watch}" "${phone}"; then
+    return 0
+  fi
+  echo "Pairing failed. Shutting the simulators down and trying once more." >&2
+  xcrun simctl shutdown "${watch}" || true
+  xcrun simctl shutdown "${phone}" || true
+  sleep 2
+  pair_watch "${watch}" "${phone}"
+}
+
+boot_pair() {
+  local watch="$1"
+  ensure_pair "${watch}" "${PHONE_UDID}"
+  xcrun simctl boot "${watch}" || true
+  xcrun simctl boot "${PHONE_UDID}" || true
+  xcrun simctl bootstatus "${PHONE_UDID}" -b || true
+  xcrun simctl bootstatus "${watch}" -b || true
+}
+
 run_class() {
   local kind="$1"
   local udid="$2"
@@ -131,7 +181,7 @@ run_class() {
   rm -rf "${result}"
   xcrun simctl boot "${udid}" || true
   xcrun simctl bootstatus "${udid}" -b || true
-  xcrun simctl pair "${udid}" "${PHONE_UDID}" || true
+  boot_pair "${udid}"
   xcrun simctl install "${PHONE_UDID}" "${PHONE_APP}"
   xcrun simctl terminate "${PHONE_UDID}" com.lojo.WatchRemote >/dev/null 2>&1 || true
   xcrun simctl launch "${PHONE_UDID}" com.lojo.WatchRemote -WatchRemoteEchoProbe
@@ -155,9 +205,7 @@ run_class() {
     echo "Watch UI test failed on ${kind} (${label}). Rebooting the simulator and trying once more." >&2
     xcrun simctl shutdown "${udid}" || true
     sleep 2
-    xcrun simctl boot "${udid}" || true
-    xcrun simctl bootstatus "${udid}" -b || true
-    xcrun simctl pair "${udid}" "${PHONE_UDID}" || true
+    boot_pair "${udid}"
     xcrun simctl install "${PHONE_UDID}" "${PHONE_APP}"
     xcrun simctl terminate "${PHONE_UDID}" com.lojo.WatchRemote >/dev/null 2>&1 || true
     xcrun simctl launch "${PHONE_UDID}" com.lojo.WatchRemote -WatchRemoteEchoProbe

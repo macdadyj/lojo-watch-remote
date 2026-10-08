@@ -310,8 +310,10 @@ struct VoiceChatView: View {
     @State private var openToolIDs: Set<Int> = []
     @State private var restoredCaption = false
     @State private var pinGeneration = 0
-    /// Empty space under the newest row so the top of the viewport falls between bubbles.
+    /// Empty space under the newest row. It grows until the top edge falls between bubbles.
     @State private var bottomPad: CGFloat = 0
+    /// The hang `bottomPad` was applied for. A later reading that did not shrink means the pad cannot grow.
+    @State private var paddedFor: CGFloat = 0
     @State private var showCompose = false
 
     private let bubbleSpacing: CGFloat = 4
@@ -429,6 +431,7 @@ struct VoiceChatView: View {
                         .padding(.bottom, 2)
                     Color.clear
                         .frame(height: bottomPad)
+                        .accessibilityHidden(true)
                     Color.clear
                         .frame(height: 1)
                         .id("voice.bottom")
@@ -464,45 +467,30 @@ struct VoiceChatView: View {
             .accessibilityIdentifier("voice.history")
             .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 0, for: .scrollContent)
-            .backgroundPreferenceValue(TranscriptRowKey.self) { anchors in
-                GeometryReader { geo in
-                    let frames = anchors.map { geo[$0] }
-                    let heights = frames.map(\.height).filter { $0 > 1 }
-                    let viewport = max(geo.size.height - 6, 1)
-                    let base = VoiceChromeMetrics.unclippedTailPad(
-                        viewport: viewport,
-                        heights: heights,
-                        spacing: bubbleSpacing
-                    )
-                    let stub = VoiceChromeMetrics.topStub(
-                        frames.map { ViewportSpan(minY: $0.minY, maxY: $0.maxY) }
-                    )
-                    let needed = min(viewport, max(base, stub))
-                    Color.clear.preference(key: TailPadKey.self, value: needed)
-                }
-            }
-            .onPreferenceChange(TailPadKey.self) { needed in
-                guard needed > bottomPad + 0.5 else { return }
-                bottomPad = needed
+            .onPreferenceChange(RowSpanKey.self) { spans in
+                noteRowSpans(spans)
             }
             .onChange(of: tailToken) { _, _ in
-                guard followLatest else { return }
                 pin(proxy)
             }
             .onChange(of: bottomPad) { _, _ in
-                guard followLatest else { return }
                 pin(proxy)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    self.pin(proxy)
+                }
             }
             .onChange(of: viewportHeight) { old, height in
                 guard height > 1, abs(height - old) > 0.5, followLatest else { return }
                 pin(proxy)
             }
             .onChange(of: restoredCaption) { _, shown in
-                guard followLatest else { return }
+                if !shown {
+                    bottomPad = 0
+                    paddedFor = 0
+                }
                 pin(proxy)
                 guard !shown else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                    guard self.followLatest else { return }
                     self.pin(proxy)
                 }
             }
@@ -566,14 +554,13 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.readableSecondary(scheme))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .transcriptRow()
+                    .reportRowSpan()
             }
             if model.forcedScreen == "voice-loop" {
                 Text("Scripted check. The microphone stays off.")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(LojoTheme.accent)
                     .fixedSize(horizontal: false, vertical: true)
-                    .transcriptRow()
             }
             if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner),
                banner != SessionResume.missingMessage {
@@ -582,7 +569,6 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.danger)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("voice.banner")
-                    .transcriptRow()
             }
             ForEach(blocks) { block in
                 let rowID = rowID(for: block)
@@ -601,7 +587,7 @@ struct VoiceChatView: View {
                     }
                 }
                 .id(rowID)
-                .transcriptRow()
+                .reportRowSpan()
             }
             if showsRestoredCaption || showsLiveStatus {
                 Text(model.voiceStatus)
@@ -615,7 +601,7 @@ struct VoiceChatView: View {
                     .onLongPressGesture(minimumDuration: 0.6) {
                         model.toggleTransportDiagnostics()
                     }
-                    .transcriptRow()
+                    .reportRowSpan()
             }
             if model.showTransportDiagnostics {
                 Text(model.diagnosticsLine)
@@ -623,7 +609,6 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.readableSecondary(scheme))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("voice.diagnostics")
-                    .transcriptRow()
             }
             if model.pendingAllowSessionID != nil {
                 Button("Yes") {
@@ -634,7 +619,6 @@ struct VoiceChatView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .accessibilityLabel("Yes")
                 .accessibilityHint("Confirms the spoken allow. Saying yes does this too.")
-                .transcriptRow()
             }
             if model.dictationOffered {
                 Button("Dictate") {
@@ -645,7 +629,6 @@ struct VoiceChatView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .accessibilityLabel("Dictate")
                 .accessibilityHint("Opens the keyboard. That sheet still needs Done.")
-                .transcriptRow()
             }
             if model.repairOffered {
                 Button(RelayUserNotice.repairText) {
@@ -654,13 +637,27 @@ struct VoiceChatView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .accessibilityIdentifier("voice.repair")
-                .transcriptRow()
             }
             if model.uiShowHooks {
                 ListenTestHooks()
-                    .transcriptRow()
             }
         }
+    }
+
+    /// A row that still crosses the top grows the spacer by that hang. Once the row is
+    /// fully above the viewport the hang drops and the spacer stays, so the list does not jump.
+    private func noteRowSpans(_ spans: [ViewportSpan]) {
+        guard viewportHeight > 1 else { return }
+        let stub = VoiceChromeMetrics.topStub(spans)
+        guard stub <= 48 else { return }
+        if bottomPad > 0.5, paddedFor > 1, stub > paddedFor - 2 {
+            return
+        }
+        guard stub > 1 else { return }
+        let needed = min(stub, viewportHeight)
+        guard needed > bottomPad + 0.5 else { return }
+        paddedFor = stub
+        bottomPad = needed
     }
 
     private var showsLiveStatus: Bool {
@@ -700,23 +697,24 @@ private struct VoiceViewportKey: PreferenceKey {
     }
 }
 
-private struct TranscriptRowKey: PreferenceKey {
-    static var defaultValue: [Anchor<CGRect>] = []
-    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) {
+private struct RowSpanKey: PreferenceKey {
+    static var defaultValue: [ViewportSpan] = []
+    static func reduce(value: inout [ViewportSpan], nextValue: () -> [ViewportSpan]) {
         value.append(contentsOf: nextValue())
     }
 }
 
-private struct TailPadKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
-
 private extension View {
-    func transcriptRow() -> some View {
-        anchorPreference(key: TranscriptRowKey.self, value: .bounds) { [$0] }
+    func reportRowSpan() -> some View {
+        background {
+            GeometryReader { geo in
+                let frame = geo.frame(in: .named("voice.scroll"))
+                Color.clear.preference(
+                    key: RowSpanKey.self,
+                    value: [ViewportSpan(minY: frame.minY, maxY: frame.maxY)]
+                )
+            }
+        }
     }
 }
 
