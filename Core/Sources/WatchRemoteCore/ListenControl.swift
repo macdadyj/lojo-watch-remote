@@ -114,3 +114,13 @@ public enum RelayUserNotice: Equatable, Sendable {
         return .pairingRejected
     }
 }
+
+/// One line for a field report. It names the path and the last error, never a host, token, or key.
+public enum WatchTransportDiagnostics {
+    public static func line(path: String, phase: String, lastError: String) -> String {
+        let parts = [path, phase, lastError]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.joined(separator: " · ")
+    }
+}

@@ -222,7 +222,8 @@ jobs:
           path: build/phone-ui-screenshots
           if-no-files-found: warn
 
-  # Upload waits for the Watch and phone UI tests. It still does not wait for the screenshot job.
+  # Upload waits for the Watch and phone UI tests, including the relay and phone-reachable
+  # transport probes in watch-ui, and the live relay round trip in the direct-relay step.
   testflight:
     needs: [watch-ui, phone-ui]
     if: github.event_name != 'pull_request'

@@ -169,6 +169,7 @@ final class RemoteStore: ObservableObject {
     @Published var resumeNotice: String?
     private var resumeNoticeID: String?
     private var holdsLaunchFixture = false
+    private var echoProbe = false
     private var userDisconnected = false
     private var heartbeatTask: Task<Void, Never>?
     private var autoApprovedPermissionIDs = Set<String>()
@@ -792,6 +793,10 @@ final class RemoteStore: ObservableObject {
         case .refresh:
             Task { await refresh() }
         case .start:
+            if echoProbe {
+                echoStart(prompt: command.prompt ?? "", sessionID: command.sessionID)
+                return
+            }
             Task { await start(prompt: command.prompt ?? "", sessionID: command.sessionID) }
         case .approve:
             if let id = command.sessionID { allow(id) }
@@ -1686,9 +1691,49 @@ final class RemoteStore: ObservableObject {
         }
     }
 
+    private func echoStart(prompt: String, sessionID: String?) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = sessionID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? sessionID!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : (sessions.first?.id ?? "echo-1")
+        if !sessions.contains(where: { $0.id == id }) {
+            sessions.insert(GrokSession(id: id, title: "New chat", summary: "Starting.", status: .running), at: 0)
+        }
+        if !trimmed.isEmpty {
+            rememberOutgoing(id, prompt: trimmed)
+        }
+        update(id) { session in
+            session.transcript = ChatTranscript.append("Grok: I can hear you.", to: session.transcript ?? [])
+            session.status = .idle
+            session.summary = "I can hear you."
+            session.updatedAt = Date()
+        }
+        publish()
+    }
+
     private func applyLaunch() {
         let arguments = ProcessInfo.processInfo.arguments
         let environment = ProcessInfo.processInfo.environment
+        if arguments.contains("-WatchRemoteEchoProbe") || environment["WATCHREMOTE_ECHO_PROBE"] == "1" {
+            holdsLaunchFixture = true
+            echoProbe = true
+            mode = .ssh
+            link = .connected
+            approvalsAvailable = true
+            host.label = "example-host"
+            statusLine = "Connected"
+            banner = nil
+            sessions = [
+                GrokSession(
+                    id: "echo-1",
+                    title: "Greeting and Current Weather Inquiry",
+                    summary: "Ready.",
+                    status: .idle,
+                    transcript: ["You: earlier", "Grok: Ready."]
+                ),
+            ]
+            return
+        }
         let screen = argument("-WatchRemoteScreen", arguments: arguments) ?? environment["WATCHREMOTE_SCREEN"]
         let appearanceName = argument("-WatchRemoteAppearance", arguments: arguments) ?? environment["WATCHREMOTE_APPEARANCE"]
         if let appearanceName, let choice = AppearanceChoice(rawValue: appearanceName) {
@@ -1844,6 +1889,9 @@ final class PhoneBridge: NSObject, WCSessionDelegate {
             body["direct"] = direct
         }
         try? session.updateApplicationContext(body)
+        if session.isReachable {
+            session.sendMessage(body, replyHandler: nil) { _ in }
+        }
     }
 
     func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {

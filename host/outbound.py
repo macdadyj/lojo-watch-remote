@@ -75,13 +75,15 @@ class AgentDown:
 class MemoryAgent:
     """In-memory stand-in used by tests. The shape matches what the Watch decodes."""
 
-    def __init__(self) -> None:
+    def __init__(self, rows: list | None = None) -> None:
         self.available = True
-        self.rows: list[dict] = []
+        self.rows = [dict(row) for row in rows] if rows else []
         self.started: list[str] = []
         self.decisions: list[tuple[str, str, bool]] = []
         self.stopped: list[str] = []
         self._push: dict | None = None
+        self._queued: list[tuple[str, str]] = []
+        self._push_n = 0
 
     def list_sessions(self) -> list[dict]:
         return self.rows
@@ -96,6 +98,7 @@ class MemoryAgent:
             "status": "running",
             "cwd": cwd,
         })
+        self._queued.append((session_id, prompt))
         return session_id
 
     def decide(self, session_id: str, permission_id: str, allow: bool) -> None:
@@ -137,6 +140,7 @@ class MemoryAgent:
                 row["summary"] = clip(prompt) or "Continuing."
                 if cwd:
                     row["cwd"] = cwd
+                self._queued.append((session_id, prompt))
                 return session_id
         raise RuntimeError(MISSING_SESSION)
 
@@ -147,7 +151,82 @@ class MemoryAgent:
         return "list sessions"
 
     def take_update(self) -> dict | None:
-        return None
+        if not self._queued:
+            return None
+        session_id, prompt = self._queued.pop(0)
+        reply = reply_line(prompt)
+        spoken = reply.split(":", 1)[-1].strip()
+        you = f"You: {prompt}" if prompt else ""
+        for row in self.rows:
+            if row.get("id") != session_id:
+                continue
+            lines = [str(item) for item in (row.get("lines") or []) if str(item).strip()]
+            if you and (not lines or lines[-1] != you):
+                lines.append(you)
+            lines.append(reply)
+            row["lines"] = lines
+            row["status"] = "idle"
+            row["summary"] = spoken or "Done."
+        self._push_n += 1
+        return {
+            "op": "update",
+            "id": f"push-{self._push_n}",
+            "sessions": [for_watch(row) for row in self.rows],
+            "approvalsAvailable": True,
+        }
+
+
+def reply_line(prompt: str) -> str:
+    """Canned host reply. The Watch test looks for these exact sentences."""
+    folded = " ".join(prompt.split()).lower()
+    if folded == "again":
+        return "Grok: Heard again."
+    if folded.startswith("reopen"):
+        return "Grok: Reopened."
+    return "Grok: I can hear you."
+
+
+def for_watch(row: dict) -> dict:
+    """The Watch decodes `transcript`. The host stores the same lines under `lines`."""
+    if not isinstance(row, dict):
+        return row
+    copy = dict(row)
+    lines = copy.get("lines")
+    if isinstance(lines, list):
+        transcript = [str(item).strip() for item in lines if str(item).strip()]
+        if transcript:
+            copy["transcript"] = transcript
+    return copy
+
+
+def merge_session_rows(previous: list, fresh: list) -> list:
+    """Keep transcript lines when a session list arrives in the middle of a reply."""
+    prior = {str(row.get("id")): row for row in previous if isinstance(row, dict) and row.get("id")}
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for row in fresh:
+        if not isinstance(row, dict) or not row.get("id"):
+            continue
+        copy = dict(row)
+        old = prior.get(str(copy.get("id")))
+        if old:
+            lines = old.get("lines")
+            if isinstance(lines, list) and lines:
+                copy["lines"] = list(lines)
+            if old.get("status") == "running" and copy.get("status") not in {"needsApproval", "failed"}:
+                copy["status"] = "running"
+                summary = str(old.get("summary") or "")
+                if summary:
+                    copy["summary"] = summary
+        merged.append(copy)
+        seen.add(str(copy.get("id")))
+    for row in previous:
+        if not isinstance(row, dict):
+            continue
+        session_id = str(row.get("id") or "")
+        if session_id and session_id not in seen and row.get("status") == "running":
+            merged.insert(0, dict(row))
+    return merged
 
 
 def wav_bytes(pcm: bytes, sample_rate: int = 16000) -> bytes:
@@ -279,7 +358,7 @@ def handle(agent: object, message: dict) -> dict:
             return {
                 "op": "sessions",
                 "id": ident,
-                "sessions": agent.list_sessions(),
+                "sessions": [for_watch(row) for row in agent.list_sessions()],
                 "approvalsAvailable": bool(getattr(agent, "available", True)),
             }
         if op == "start":
@@ -332,6 +411,7 @@ class ACPAgent:
         self.push_n = 0
         self.capture_replay = False
         self.replay_lines: list[str] = []
+        self.awaiting_prompt: dict[int, str] = {}
 
     def open(self) -> None:
         # The secret is a header so a proxy access log cannot record it from the URL.
@@ -348,7 +428,8 @@ class ACPAgent:
 
     def list_sessions(self) -> list[dict]:
         result = self.request("_x.ai/session/list", {})
-        self.rows = sessions_from(result.get("result"))
+        fresh = sessions_from(result.get("result"))
+        self.rows = merge_session_rows(self.rows, fresh)
         self._apply_permissions()
         return self.rows
 
@@ -365,10 +446,6 @@ class ACPAgent:
             session_id = str(result.get("sessionId") or "")
         if not session_id:
             raise RuntimeError("The agent did not return a session.")
-        self._send(None, "session/prompt", {
-            "sessionId": session_id,
-            "prompt": [{"type": "text", "text": prompt}],
-        })
         row = {
             "id": session_id,
             "title": title_from(prompt),
@@ -377,6 +454,7 @@ class ACPAgent:
             "cwd": directory,
         }
         self.rows = [row] + [item for item in self.rows if item.get("id") != session_id]
+        self._arm_prompt(session_id, prompt)
         return session_id
 
     def decide(self, session_id: str, permission_id: str, allow: bool) -> None:
@@ -424,16 +502,13 @@ class ACPAgent:
 
     def continue_session(self, session_id: str, prompt: str, cwd: str) -> str:
         self.restore(session_id)
-        self._send(None, "session/prompt", {
-            "sessionId": session_id,
-            "prompt": [{"type": "text", "text": prompt}],
-        })
         for row in self.rows:
             if row.get("id") == session_id:
                 row["status"] = "running"
                 row["summary"] = "Continuing."
                 if cwd:
                     row["cwd"] = cwd
+        self._arm_prompt(session_id, prompt)
         return session_id
 
     def stop(self, session_id: str) -> None:
@@ -455,7 +530,7 @@ class ACPAgent:
         return {
             "op": "update",
             "id": f"push-{self.push_n}",
-            "sessions": self.rows,
+            "sessions": [for_watch(row) for row in self.rows],
             "approvalsAvailable": True,
         }
 
@@ -517,6 +592,44 @@ class ACPAgent:
             ident = obj["id"]
             if isinstance(ident, int):
                 self.results[ident] = obj
+                self._settle_prompt(ident, obj)
+
+    def _arm_prompt(self, session_id: str, prompt: str) -> None:
+        ident = self.next_id
+        self.next_id += 1
+        self._send(ident, "session/prompt", {
+            "sessionId": session_id,
+            "prompt": [{"type": "text", "text": prompt}],
+        })
+        self.awaiting_prompt[ident] = session_id
+        for row in self.rows:
+            if row.get("id") == session_id:
+                row["lines"] = fold_speaker(list(row.get("lines") or []), "You:", prompt)
+
+    def _settle_prompt(self, ident: int, obj: dict) -> None:
+        session_id = self.awaiting_prompt.pop(ident, None)
+        if session_id is None:
+            return
+        failed = "error" in obj
+        message = "The agent reported an error."
+        if failed:
+            error = obj.get("error")
+            if isinstance(error, dict) and isinstance(error.get("message"), str):
+                message = error["message"]
+        for row in self.rows:
+            if row.get("id") != session_id:
+                continue
+            if failed:
+                row["status"] = "failed"
+                row["summary"] = clip(message)
+                continue
+            if row.get("status") == "running":
+                row["status"] = "idle"
+            lines = row.get("lines") or []
+            grok = next((str(line) for line in reversed(lines) if str(line).startswith("Grok:")), "")
+            if grok:
+                row["summary"] = clip(grok.split(":", 1)[-1].strip())
+        self.pending_push = True
 
     def _remember_permission(self, obj: dict) -> None:
         params = obj.get("params") if isinstance(obj.get("params"), dict) else {}

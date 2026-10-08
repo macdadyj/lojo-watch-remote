@@ -395,6 +395,21 @@ final class WatchRemoteCoreTests: XCTestCase {
         }
     }
 
+    func testLoopbackRelayURLAndDiagnosticsStayFreeOfSecrets() {
+        XCTAssertEqual(RelayMaterial.normalizeURL("ws://127.0.0.1:9/v1/room"), "ws://127.0.0.1:9/v1/room")
+        XCTAssertEqual(RelayMaterial.normalizeURL("ws://localhost:9/v1/room"), "ws://localhost:9/v1/room")
+        XCTAssertNil(RelayMaterial.normalizeURL("ws://relay.example/v1/room"))
+        XCTAssertNil(RelayMaterial.normalizeURL("ws://127.0.0.1:9/v1/room?token=secret"))
+        XCTAssertEqual(WatchTransportDiagnostics.line(path: "direct", phase: "up", lastError: ""), "direct · up")
+        XCTAssertEqual(
+            WatchTransportDiagnostics.line(path: "direct", phase: "connecting", lastError: "The relay connection dropped."),
+            "direct · connecting · The relay connection dropped."
+        )
+        let line = WatchTransportDiagnostics.line(path: "via iPhone", phase: "idle", lastError: "Socket closed 1006.")
+        XCTAssertFalse(line.contains("127.0.0.1"))
+        XCTAssertFalse(line.contains("token"))
+    }
+
     func testRelaySealRoundTripAndReplay() throws {
         let key = Data(repeating: 0x11, count: 32)
         let plain = Data("{\"id\":\"1\",\"op\":\"ping\"}".utf8)

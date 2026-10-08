@@ -126,6 +126,64 @@ class HandleTests(unittest.TestCase):
         )
         self.assertEqual(outbound.best_transcript(["Just the title"]), [])
 
+    def test_reply_is_published_on_the_transcript_the_watch_decodes(self) -> None:
+        agent = outbound.MemoryAgent()
+        started = outbound.handle(agent, {"op": "start", "id": "2", "prompt": "Can you hear me", "cwd": "/work"})
+        self.assertEqual(agent.rows[0]["status"], "running")
+        update = agent.take_update()
+        self.assertIsNotNone(update)
+        assert update is not None
+        self.assertEqual(update["op"], "update")
+        transcript = update["sessions"][0]["transcript"]
+        self.assertEqual(transcript, ["You: Can you hear me", "Grok: I can hear you."])
+        self.assertEqual(agent.rows[0]["status"], "idle")
+        self.assertEqual(started["sessionID"], agent.rows[0]["id"])
+        listed = outbound.handle(agent, {"op": "list", "id": "3"})
+        self.assertEqual(listed["sessions"][0]["transcript"][-1], "Grok: I can hear you.")
+        continued = outbound.handle(agent, {
+            "op": "start",
+            "id": "4",
+            "prompt": "Again",
+            "sessionID": started["sessionID"],
+        })
+        self.assertEqual(continued["sessionID"], started["sessionID"])
+        self.assertEqual(agent.rows[0]["status"], "running")
+        again = agent.take_update()
+        assert again is not None
+        self.assertEqual(again["sessions"][0]["transcript"][-1], "Grok: Heard again.")
+        merged = outbound.merge_session_rows(
+            [{"id": "s", "title": "T", "summary": "Starting.", "status": "running", "lines": ["You: hi"]}],
+            [{"id": "s", "title": "T", "summary": "", "status": "idle"}],
+        )
+        self.assertEqual(merged[0]["lines"], ["You: hi"])
+        self.assertEqual(merged[0]["status"], "running")
+        self.assertEqual(outbound.for_watch(merged[0])["transcript"], ["You: hi"])
+        kept = outbound.merge_session_rows(
+            [{"id": "s", "title": "T", "summary": "Approve", "status": "needsApproval", "lines": ["You: hi"]}],
+            [{"id": "s", "title": "T", "summary": "", "status": "needsApproval"}],
+        )
+        self.assertEqual(kept[0]["status"], "needsApproval")
+        self.assertEqual(kept[0]["lines"], ["You: hi"])
+
+    def test_prompt_result_marks_the_session_idle_without_dropping_lines(self) -> None:
+        agent = outbound.ACPAgent("secret")
+        agent.rows = [{
+            "id": "s",
+            "title": "T",
+            "summary": "Starting.",
+            "status": "running",
+            "lines": ["You: hi", "Grok: I can hear you."],
+        }]
+        agent.awaiting_prompt[4] = "s"
+        agent._ingest(json.dumps({"jsonrpc": "2.0", "id": 4, "result": {}}))
+        self.assertEqual(agent.rows[0]["status"], "idle")
+        self.assertEqual(agent.rows[0]["lines"], ["You: hi", "Grok: I can hear you."])
+        self.assertTrue(agent.pending_push)
+        self.assertNotIn(4, agent.awaiting_prompt)
+        pushed = agent.take_update()
+        assert pushed is not None
+        self.assertEqual(pushed["sessions"][0]["transcript"][-1], "Grok: I can hear you.")
+
     def test_transcribe_returns_text_and_empty_audio_errors(self) -> None:
         agent = outbound.MemoryAgent()
         heard = outbound.handle(agent, {"op": "transcribe", "id": "u1", "audio": "aGVsbG8="})
@@ -238,14 +296,46 @@ class HandleTests(unittest.TestCase):
                 watch.send_binary(relaybox.seal(plain, KEY, relaybox.WATCH_TO_HOST, 1))
                 opcode, payload = watch.recv()
                 self.assertEqual(opcode, 2)
-                opened = relaybox.open_frame(payload, KEY, relaybox.HOST_TO_WATCH, relaybox.ReplayWindow())
+                replay = relaybox.ReplayWindow()
+                opened = relaybox.open_frame(payload, KEY, relaybox.HOST_TO_WATCH, replay)
                 reply = json.loads(opened)
                 self.assertEqual(reply["op"], "started")
                 self.assertEqual(agent.started, ["Read the build logs"])
+                session_id = reply["sessionID"]
+                opcode, payload = watch.recv()
+                self.assertEqual(opcode, 2)
+                update = json.loads(relaybox.open_frame(payload, KEY, relaybox.HOST_TO_WATCH, replay))
+                self.assertEqual(update["op"], "update")
+                transcript = update["sessions"][0]["transcript"]
+                self.assertEqual(transcript, ["You: Read the build logs", "Grok: I can hear you."])
                 watch.send_binary(relaybox.seal(plain, KEY, relaybox.WATCH_TO_HOST, 1))
                 time.sleep(0.3)
                 self.assertEqual(agent.started, ["Read the build logs"])
                 watch.close()
+                again = miniws.connect(f"ws://127.0.0.1:{port}/v1/room", timeout=3)
+                again.send_text(json.dumps({"role": "watch", "token": TOKEN}))
+                opcode, payload = again.recv()
+                self.assertEqual(opcode, 1)
+                self.assertIn(b'"ok":true', payload)
+                follow = relaybox.encode_message({
+                    "id": "11",
+                    "op": "start",
+                    "prompt": "Can you hear me",
+                    "sessionID": session_id,
+                })
+                again.send_binary(relaybox.seal(follow, KEY, relaybox.WATCH_TO_HOST, 2))
+                follow_replay = relaybox.ReplayWindow()
+                opcode, payload = again.recv()
+                self.assertEqual(opcode, 2)
+                continued = json.loads(relaybox.open_frame(payload, KEY, relaybox.HOST_TO_WATCH, follow_replay))
+                self.assertEqual(continued["op"], "started")
+                self.assertEqual(continued["sessionID"], session_id)
+                opcode, payload = again.recv()
+                self.assertEqual(opcode, 2)
+                followed = json.loads(relaybox.open_frame(payload, KEY, relaybox.HOST_TO_WATCH, follow_replay))
+                self.assertIn("You: Can you hear me", followed["sessions"][0]["transcript"])
+                self.assertEqual(followed["sessions"][0]["transcript"][-1], "Grok: I can hear you.")
+                again.close()
         finally:
             proc.terminate()
             try:

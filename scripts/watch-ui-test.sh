@@ -11,7 +11,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   python3 "${ROOT}/scripts/watch_ui_devices.py" --self-test
   python3 "${ROOT}/scripts/make-speech-fixtures.py" --check
   python3 "${ROOT}/scripts/watch_ui_vision.py" --self-test
-  python3 -m py_compile "${ROOT}/scripts/watch_ui_devices.py" "${ROOT}/scripts/make-speech-fixtures.py" "${ROOT}/scripts/watch_ui_vision.py"
+  python3 -m py_compile "${ROOT}/scripts/watch_ui_devices.py" "${ROOT}/scripts/make-speech-fixtures.py" "${ROOT}/scripts/watch_ui_vision.py" "${ROOT}/host/relay_probe.py"
   echo "watch ui test script: ok"
   exit 0
 fi
@@ -58,6 +58,53 @@ echo "simulator phone: ${PHONE_NAME} ${PHONE_UDID}"
 xcrun simctl boot "${PHONE_UDID}" || true
 xcrun simctl bootstatus "${PHONE_UDID}" -b
 
+printf '%s\n' "${ROOT}" > /tmp/watchremote-repo-root
+export WATCHREMOTE_REPO_ROOT="${ROOT}"
+
+PROBE_LOG="${ROOT}/build/relay-probe.log"
+mkdir -p "${ROOT}/build"
+python3 "${ROOT}/host/relay_probe.py" --pairing-file "${ROOT}/build/relay-probe.json" --port 18765 --control-port 18766 >"${PROBE_LOG}" 2>&1 &
+PROBE_PID=$!
+cleanup_probe() {
+  if [[ -n "${PROBE_PID:-}" ]]; then
+    kill "${PROBE_PID}" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_probe EXIT
+ready=0
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  if grep -q "probe-ready" "${PROBE_LOG}" 2>/dev/null; then
+    ready=1
+    break
+  fi
+  if ! kill -0 "${PROBE_PID}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.5
+done
+if [[ "${ready}" -ne 1 ]]; then
+  echo "Local relay probe did not start." >&2
+  cat "${PROBE_LOG}" >&2 || true
+  exit 1
+fi
+
+PHONE_APP=""
+xcodebuild build \
+  -project WatchRemote.xcodeproj \
+  -scheme WatchRemote \
+  -destination "platform=iOS Simulator,id=${PHONE_UDID}" \
+  -clonedSourcePackagesDirPath "${ROOT}/build/SourcePackages" \
+  -derivedDataPath "${ROOT}/build/DerivedDataPhoneProbe" \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="-" \
+  DEVELOPMENT_TEAM=""
+PHONE_APP="$(find "${ROOT}/build/DerivedDataPhoneProbe/Build/Products" -path '*iphonesimulator*' -name 'WatchRemote.app' -type d | head -n 1)"
+if [[ -z "${PHONE_APP}" ]]; then
+  echo "Phone app was not built for the Watch transport probe." >&2
+  exit 1
+fi
+
 export_shots() {
   local result="$1"
   local dest="$2"
@@ -83,6 +130,9 @@ run_class() {
   xcrun simctl boot "${udid}" || true
   xcrun simctl bootstatus "${udid}" -b || true
   xcrun simctl pair "${udid}" "${PHONE_UDID}" || true
+  xcrun simctl install "${PHONE_UDID}" "${PHONE_APP}"
+  xcrun simctl terminate "${PHONE_UDID}" com.lojo.WatchRemote >/dev/null 2>&1 || true
+  xcrun simctl launch "${PHONE_UDID}" com.lojo.WatchRemote -WatchRemoteEchoProbe
   set +e
   xcodebuild test \
     -project WatchRemote.xcodeproj \
@@ -106,6 +156,9 @@ run_class() {
     xcrun simctl boot "${udid}" || true
     xcrun simctl bootstatus "${udid}" -b || true
     xcrun simctl pair "${udid}" "${PHONE_UDID}" || true
+    xcrun simctl install "${PHONE_UDID}" "${PHONE_APP}"
+    xcrun simctl terminate "${PHONE_UDID}" com.lojo.WatchRemote >/dev/null 2>&1 || true
+    xcrun simctl launch "${PHONE_UDID}" com.lojo.WatchRemote -WatchRemoteEchoProbe
     rm -rf "${result}"
     set +e
     xcodebuild test \

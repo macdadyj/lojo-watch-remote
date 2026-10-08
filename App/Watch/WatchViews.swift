@@ -18,7 +18,7 @@ struct WatchRootView: View {
                     VoiceChatView()
                 } else if model.forcedScreen == nil, let prompt = model.pendingDictation {
                     VoiceConfirmView(transcript: prompt, isPreview: false)
-                } else if model.forcedScreen == nil, model.uiTest, model.voiceModeActive {
+                } else if model.forcedScreen == nil, (model.uiTest || model.transportProbe), model.voiceModeActive {
                     // Skip the animated push. A cold watchOS simulator never idles, and the history snapshot times out.
                     VoiceChatView()
                 } else {
@@ -47,7 +47,7 @@ struct WatchRootView: View {
         .environment(\.colorScheme, scheme)
         .preferredColorScheme(model.appearance.colorScheme)
         .transaction { transaction in
-            if model.uiTest {
+            if model.uiTest || model.transportProbe {
                 transaction.disablesAnimations = true
             }
         }
@@ -144,8 +144,19 @@ struct WatchListView: View {
                             .foregroundStyle(LojoTheme.readablePrimary(scheme))
                             .lineLimit(2)
                     }
+                    if model.showTransportDiagnostics {
+                        Text(model.diagnosticsLine)
+                            .font(.caption2)
+                            .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("voice.diagnostics")
+                    }
                 }
         .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("session.header")
+        .onLongPressGesture(minimumDuration: 0.6) {
+            model.toggleTransportDiagnostics()
+        }
     }
 
     private var sessionRows: some View {

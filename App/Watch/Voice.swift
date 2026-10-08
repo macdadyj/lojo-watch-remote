@@ -585,6 +585,17 @@ struct VoiceChatView: View {
                     .accessibilityLabel("Voice status")
                     .accessibilityValue(model.voiceStatus)
                     .modifier(RowHeight(id: "voice.status.row"))
+                    .onLongPressGesture(minimumDuration: 0.6) {
+                        model.toggleTransportDiagnostics()
+                    }
+            }
+            if model.showTransportDiagnostics {
+                Text(model.diagnosticsLine)
+                    .font(.caption2)
+                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("voice.diagnostics")
+                    .modifier(RowHeight(id: "voice.diagnostics"))
             }
             if model.pendingAllowSessionID != nil {
                 Button("Yes") {
@@ -681,6 +692,9 @@ struct VoiceChatView: View {
         ids.append(contentsOf: blocks.map { rowID(for: $0) })
         if showsRestoredCaption || showsLiveStatus {
             ids.append("voice.status.row")
+        }
+        if model.showTransportDiagnostics {
+            ids.append("voice.diagnostics")
         }
         if model.pendingAllowSessionID != nil {
             ids.append("voice.yes")
@@ -1344,6 +1358,7 @@ extension WatchModel {
             stop(session)
             reply(effect.spoken, listenAfter: effect.listenAgain)
         case .startTask(let prompt):
+            rememberUser(prompt)
             heldVoiceTask = prompt
             flushHeldVoiceTask(announcingFailure: true)
             if heldVoiceTask == nil {
@@ -1352,6 +1367,9 @@ extension WatchModel {
                 } else {
                     reply(effect.spoken, listenAfter: effect.listenAgain)
                 }
+            } else if promptIsQueued {
+                voiceStatus = "Sending"
+                voiceLine = ""
             } else if let banner, !banner.isEmpty {
                 reply(banner, listenAfter: effect.listenAgain)
             } else {
@@ -1405,6 +1423,12 @@ extension WatchModel {
             self.expectID = nil
             self.noteMissedUtterance()
         }
+    }
+
+    func rememberUser(_ prompt: String) {
+        let line = "You: \(prompt)"
+        if voiceLog.last == line { return }
+        remember(line)
     }
 
     func remember(_ line: String) {

@@ -96,6 +96,7 @@ final class DirectSession: ObservableObject {
     var onRestored: ((String, [String]) -> Void)?
     var onTranscript: ((String, String) -> Void)?
     var onUp: (() -> Void)?
+    var onStarted: ((String) -> Void)?
     /// The auth reply was explicitly not ok. The Keychain pairing is kept until a new one arrives.
     var onRepair: (() -> Void)?
 
@@ -114,9 +115,25 @@ final class DirectSession: ObservableObject {
     private var displayOff = false
     private var giveUp = false
     private var resumeWhenActive = false
+    private var socketDelegate: SocketDelegate?
+    private var openTimeout: Task<Void, Never>?
+    @Published private(set) var lastError = ""
 
     var hasPairing: Bool { pairing != nil }
     var label: String { pairing?.label ?? "" }
+
+    var phaseLabel: String {
+        switch phase {
+        case .idle:
+            return "idle"
+        case .connecting:
+            return "connecting"
+        case .up:
+            return "up"
+        case .failed:
+            return "failed"
+        }
+    }
 
     func restore() {
         pairing = DirectKeychain.load()
@@ -125,7 +142,7 @@ final class DirectSession: ObservableObject {
         replay = RelayReplay.restored(highest: saved.recv)
     }
 
-    func ingest(_ text: String) {
+    func ingest(_ text: String, resetCounters: Bool = false) {
         guard let incoming = DirectPairing.decode(text) else { return }
         if incoming.clear {
             if pairing?.computerID == incoming.computerID || pairing == nil {
@@ -141,10 +158,12 @@ final class DirectSession: ObservableObject {
         DirectKeychain.save(incoming)
         giveUp = false
         resumeWhenActive = false
-        if changed {
+        if changed || resetCounters {
             sendCounter = 0
             replay = RelayReplay()
             DirectKeychain.saveCounters(send: 0, recv: 0)
+        }
+        if changed {
             disconnect()
         }
     }
@@ -234,27 +253,16 @@ final class DirectSession: ObservableObject {
         self.key = key
         phase = .connecting
         authed = false
-        let session = URLSession(configuration: .ephemeral)
+        let current = generation
+        let delegate = SocketDelegate(owner: self, generation: current)
+        socketDelegate = delegate
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
         let socket = session.webSocketTask(with: url)
         urlSession = session
         task = socket
         socket.resume()
         onChange?()
-        let auth = AuthMessage(role: "watch", token: pairing.token)
-        guard let data = try? JSONEncoder().encode(auth), let text = String(data: data, encoding: .utf8) else {
-            fail("The direct pairing on this Watch could not be used.")
-            return
-        }
-        let current = generation
-        socket.send(.string(text)) { [weak self] error in
-            Task { @MainActor in
-                guard let self, self.generation == current else { return }
-                if error != nil {
-                    self.noteFault(.authSendFailed)
-                }
-            }
-        }
-        receive(current)
+        armOpenTimeout(current)
     }
 
     private func receive(_ current: Int) {
@@ -284,6 +292,7 @@ final class DirectSession: ObservableObject {
                     retryAttempt = 0
                     resumeWhenActive = false
                     phase = .up
+                    lastError = ""
                     onBanner?(nil)
                     armHeartbeat()
                     onUp?()
@@ -329,6 +338,7 @@ final class DirectSession: ObservableObject {
             onChange?()
         case .started:
             onBanner?(nil)
+            onStarted?(message.sessionID ?? "")
             send(DirectMessage(op: .list, id: freshID()))
         case .ok, .pong:
             onChange?()
@@ -368,6 +378,7 @@ final class DirectSession: ObservableObject {
     }
 
     private func noteFault(_ fault: RelaySocketFault) {
+        lastError = Self.faultText(fault)
         switch RelayUserNotice.classify(fault) {
         case .pairingRejected:
             rejectPairing()
@@ -426,12 +437,82 @@ final class DirectSession: ObservableObject {
     private func tearSocket() {
         generation += 1
         authed = false
+        openTimeout?.cancel()
+        openTimeout = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
+        socketDelegate = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         urlSession?.invalidateAndCancel()
         urlSession = nil
+    }
+
+    /// Auth goes out only after the socket is open. Sending earlier fails on watchOS and sticks on Reconnecting.
+    fileprivate func didOpenSocket(generation expected: Int) {
+        guard generation == expected, phase == .connecting, !authed, task != nil else { return }
+        openTimeout?.cancel()
+        openTimeout = nil
+        sendAuth(expected)
+        receive(expected)
+    }
+
+    fileprivate func didCloseSocket(generation expected: Int, code: Int) {
+        guard generation == expected else { return }
+        guard phase == .connecting || phase == .up else { return }
+        noteFault(.disconnected)
+        lastError = "Socket closed \(code)."
+    }
+
+    fileprivate func didFinishSocket(generation expected: Int) {
+        guard generation == expected else { return }
+        guard phase == .connecting || phase == .up else { return }
+        noteFault(.disconnected)
+    }
+
+    private func sendAuth(_ current: Int) {
+        guard let pairing, let task else { return }
+        let auth = AuthMessage(role: "watch", token: pairing.token)
+        guard let data = try? JSONEncoder().encode(auth), let text = String(data: data, encoding: .utf8) else {
+            fail("The direct pairing on this Watch could not be used.")
+            return
+        }
+        task.send(.string(text)) { [weak self] error in
+            Task { @MainActor in
+                guard let self, self.generation == current else { return }
+                if error != nil {
+                    self.noteFault(.authSendFailed)
+                }
+            }
+        }
+    }
+
+    private func armOpenTimeout(_ current: Int) {
+        openTimeout?.cancel()
+        openTimeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.generation == current, !self.authed else { return }
+                self.noteFault(.disconnected)
+                self.lastError = "The relay did not open."
+            }
+        }
+    }
+
+    private static func faultText(_ fault: RelaySocketFault) -> String {
+        switch fault {
+        case .authSendFailed:
+            return "The pairing hello was not sent."
+        case .dataSendFailed:
+            return "A message was not sent."
+        case .disconnected:
+            return "The relay connection dropped."
+        case .suspended:
+            return "The relay connection paused."
+        case .authPayload:
+            return "The relay rejected the pairing."
+        }
     }
 
     private func armHeartbeat() {
@@ -463,6 +544,59 @@ final class DirectSession: ObservableObject {
     private func freshID() -> String {
         next += 1
         return String(next)
+    }
+}
+
+private final class SocketDelegate: NSObject, URLSessionWebSocketDelegate {
+    weak var owner: DirectSession?
+    let generation: Int
+
+    init(owner: DirectSession, generation: Int) {
+        self.owner = owner
+        self.generation = generation
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didOpenWithProtocol `protocol`: String?
+    ) {
+        let owner = owner
+        let generation = generation
+        Task { @MainActor in
+            owner?.didOpenSocket(generation: generation)
+        }
+        _ = session
+        _ = webSocketTask
+        _ = `protocol`
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
+        reason: Data?
+    ) {
+        let owner = owner
+        let generation = generation
+        let code = closeCode.rawValue
+        Task { @MainActor in
+            owner?.didCloseSocket(generation: generation, code: code)
+        }
+        _ = session
+        _ = webSocketTask
+        _ = reason
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let owner = owner
+        let generation = generation
+        Task { @MainActor in
+            guard error != nil else { return }
+            owner?.didFinishSocket(generation: generation)
+        }
+        _ = session
+        _ = task
     }
 }
 

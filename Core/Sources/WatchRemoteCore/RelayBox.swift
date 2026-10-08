@@ -8,12 +8,15 @@ public enum RelayMaterial {
         guard (12...300).contains(trimmed.count) else { return nil }
         guard !trimmed.contains(where: \.isWhitespace) else { return nil }
         guard let components = URLComponents(string: trimmed) else { return nil }
-        guard components.scheme?.lowercased() == "wss" else { return nil }
+        guard let scheme = components.scheme?.lowercased() else { return nil }
         guard let host = components.host, !host.isEmpty, host.count <= 253 else { return nil }
         guard components.user == nil, components.password == nil else { return nil }
         guard components.query == nil, components.fragment == nil else { return nil }
         if let port = components.port, !(1...65535).contains(port) { return nil }
-        return trimmed
+        if scheme == "wss" { return trimmed }
+        // The simulator probe dials a local relay. Production pairings stay wss.
+        if scheme == "ws", host == "127.0.0.1" || host == "localhost" { return trimmed }
+        return nil
     }
 
     public static func normalizeToken(_ text: String) -> String? {

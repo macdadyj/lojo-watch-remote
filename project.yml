@@ -119,12 +119,15 @@ targets:
     platform: watchOS
     sources:
       - path: App/WatchUITests
+        excludes:
+          - Info.plist
     dependencies:
       - target: WatchRemoteWatch
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lojo.WatchRemote.watchkitapp.uitests
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_FILE: App/WatchUITests/Info.plist
         TEST_TARGET_NAME: WatchRemoteWatch
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
 
