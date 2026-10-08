@@ -87,10 +87,20 @@ struct WatchListView: View {
     }
 
     private var sessionList: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 4) {
-                // Host, link, and path stay short so two chats fit above the mic.
-                VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 2) {
+            listHeader
+                .padding(.horizontal, 6)
+            ScrollView {
+                sessionRows
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityIdentifier("session.list")
+            .contentMargins(.top, 0, for: .scrollContent)
+        }
+    }
+
+    private var listHeader: some View {
+        VStack(alignment: .leading, spacing: 1) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         StatusMark(status: headerMark, size: 10)
                         Text(model.snapshot.hostLabel)
@@ -98,15 +108,22 @@ struct WatchListView: View {
                             .foregroundStyle(LojoTheme.readablePrimary(scheme))
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
-                    }
-                    HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(headerTitle)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
-                        if model.snapshot.mode == .demo { DemoBadge(compact: true) }
+                        if !showsHeaderDetail, model.snapshot.mode == .demo {
+                            DemoBadge(compact: true)
+                        }
+                    }
+                    if showsHeaderDetail {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(headerTitle)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                                .lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityLabel(model.pathTitle == headerTitle ? "Path \(model.pathTitle)" : headerTitle)
+                            Spacer(minLength: 4)
+                            if model.snapshot.mode == .demo { DemoBadge(compact: true) }
+                        }
                     }
                     if model.pathTitle != headerTitle {
                         Text(model.pathTitle)
@@ -126,7 +143,11 @@ struct WatchListView: View {
                             .lineLimit(2)
                     }
                 }
-                .accessibilityElement(children: .contain)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var sessionRows: some View {
+        VStack(alignment: .leading, spacing: 4) {
                 if let banner = model.banner ?? model.snapshot.banner {
                     Text(banner)
                         .font(.caption2)
@@ -167,13 +188,9 @@ struct WatchListView: View {
                 .buttonStyle(PrimaryButtonStyle(compact: true))
                 .accessibilityLabel("New task")
                 VoicePreferenceToggles()
-            }
-            .padding(.horizontal, 6)
-            .padding(.bottom, 4)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityIdentifier("session.list")
-        .contentMargins(.top, 0, for: .scrollContent)
+        .padding(.horizontal, 6)
+        .padding(.bottom, 4)
     }
 
     private var computerSwitcher: some View {
@@ -202,6 +219,11 @@ struct WatchListView: View {
 
     private var phoneAway: Bool {
         model.forcedScreen == nil && !model.reachable
+    }
+
+    /// Demo already shows the badge, so the repeated "Demo" line stays off the list.
+    private var showsHeaderDetail: Bool {
+        !(model.snapshot.mode == .demo && headerTitle == "Demo")
     }
 
     private var headerTitle: String {

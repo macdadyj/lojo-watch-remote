@@ -120,10 +120,11 @@ final class WatchScaffoldUITests: XCTestCase {
         let first = app.buttons["session.row.\(Self.sessionRowIDs[0])"]
         XCTAssertTrue(first.waitForExistence(timeout: 8), "home rows did not appear")
         let visibleRows = Self.sessionRows(app).filter { shown($0, in: list) }
+        let frames = Self.sessionRows(app).map { "\($0.identifier) \($0.exists) \($0.frame)" }.joined(separator: "; ")
         XCTAssertGreaterThanOrEqual(
             visibleRows.count,
             2,
-            "home shows \(visibleRows.count) chat rows in \(list.frame)"
+            "home shows \(visibleRows.count) chat rows in \(list.frame); \(frames)"
         )
 
         let longID = "0199aaaa-0000-7000-8000-000000000005"
