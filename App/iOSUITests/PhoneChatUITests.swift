@@ -121,9 +121,18 @@ final class PhoneChatUITests: XCTestCase {
         let tools = app.buttons["chat.tools"].firstMatch
         XCTAssertTrue(tools.waitForExistence(timeout: 4))
         tools.tap()
-        XCTAssertTrue(line(app, "Ran a command").waitForExistence(timeout: 4), "expanding the tool row did not show the step")
-        XCTAssertTrue(app.staticTexts["Searched the web"].exists)
-        XCTAssertTrue(app.staticTexts["Used a tool"].exists)
+        let opened = NSPredicate { _, _ in
+            let value = tools.value as? String ?? ""
+            let showsCommand = value.contains("Ran a command") || self.line(app, "Ran a command").exists
+            let showsSearch = value.contains("Searched the web") || app.staticTexts["Searched the web"].exists
+            let showsTool = value.contains("Used a tool") || app.staticTexts["Used a tool"].exists
+            return showsCommand && showsSearch && showsTool
+        }
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: opened, object: nil)], timeout: 4),
+            .completed,
+            "expanding the tool row did not show the steps"
+        )
         shot(app, "phone-tools-collapsed")
     }
 

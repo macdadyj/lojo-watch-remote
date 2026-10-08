@@ -598,7 +598,8 @@ private struct WatchBubble: View {
                         Spacer(minLength: 0)
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
+                .contentShape(Rectangle())
                 .accessibilityIdentifier("voice.tools")
                 .accessibilityLabel(ChatTranscript.toolGroupTitle(count: steps.count))
                 if toolsOpen {

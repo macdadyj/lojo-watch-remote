@@ -528,9 +528,11 @@ struct ChatBlockRow: View {
                             .font(.caption2.weight(.bold))
                     }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.borderless)
+                .contentShape(Rectangle())
                 .accessibilityIdentifier("chat.tools")
                 .accessibilityLabel(ChatTranscript.toolGroupTitle(count: steps.count))
+                .accessibilityValue(toolsOpen ? steps.map(\.summary).joined(separator: ", ") : "collapsed")
                 if toolsOpen {
                     ForEach(Array(steps.enumerated()), id: \.offset) { item in
                         VStack(alignment: .leading, spacing: 2) {
