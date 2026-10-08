@@ -72,12 +72,11 @@ struct WatchListView: View {
     @ObservedObject private var preferences = VoicePreferences.shared
 
     var body: some View {
-        VStack(spacing: 0) {
+        SpeakBarPage {
             sessionList
+        } bar: {
             VoiceHomeBar()
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: preferences.autoApproveTools) { _, enabled in
             model.setAutoApprove(enabled)
         }

@@ -26,7 +26,7 @@ final class WatchScaffoldUITests: XCTestCase {
             app.staticTexts["Test clip missing."].exists,
             "audio injection hook could not load pause-task"
         )
-        assertSpeakClearsLastVisible(Self.sessionRows(app), in: app)
+        assertSpeakClearsLastVisible(Self.sessionRows(app), in: app, scrollID: "session.list")
         assertActionHintFits(app)
         shot(app, "scaffold-home")
 
@@ -53,7 +53,7 @@ final class WatchScaffoldUITests: XCTestCase {
         )
         let speak = app.buttons["voice.speak"]
         XCTAssertTrue(speak.waitForExistence(timeout: 8), "restored chat did not stay open")
-        assertSpeakClearsLastVisible(Self.transcriptLines(app), in: app)
+        assertSpeakClearsLastVisible(Self.transcriptLines(app), in: app, scrollID: "voice.history")
         assertActionHintFits(app)
         shot(app, "scaffold-restored")
         speak.tap()
@@ -97,26 +97,41 @@ final class WatchScaffoldUITests: XCTestCase {
         )
         XCTAssertEqual(XCTWaiter.wait(for: [sent], timeout: 8), .completed, "I'm done did not show Sent")
         XCTAssertTrue(app.buttons["voice.speak"].waitForExistence(timeout: 4), "I'm done removed Speak")
-        assertSpeakClearsLastVisible(Self.transcriptLines(app), in: app)
+        assertSpeakClearsLastVisible(Self.transcriptLines(app), in: app, scrollID: "voice.history")
         shot(app, "scaffold-done")
     }
 
-    /// Speak sits under the scroll view. Its frame must not cross the lowest row or transcript line still on screen.
+    /// Speak sits under the scroll view. Its frame must not cross the scroll view or the visible part of the lowest row.
     private func assertSpeakClearsLastVisible(
         _ elements: [XCUIElement],
         in app: XCUIApplication,
+        scrollID: String,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
         let speak = app.buttons["voice.speak"]
         XCTAssertTrue(speak.waitForExistence(timeout: 8), "Speak missing", file: file, line: line)
-        let visible = elements.filter { Self.onScreen($0, in: app) }
+        let scroll = app.scrollViews[scrollID]
+        XCTAssertTrue(scroll.exists, "missing \(scrollID)", file: file, line: line)
+        let scrollOverlap = speak.frame.intersection(scroll.frame)
+        XCTAssertFalse(
+            scrollOverlap.width > 1 && scrollOverlap.height > 1,
+            "Speak \(speak.frame) covers \(scrollID) \(scroll.frame)",
+            file: file,
+            line: line
+        )
+        let visible = elements.compactMap { element -> (XCUIElement, CGRect)? in
+            guard element.exists else { return nil }
+            let shown = element.frame.intersection(scroll.frame)
+            guard shown.width > 2, shown.height > 2 else { return nil }
+            return (element, shown)
+        }
         XCTAssertFalse(visible.isEmpty, "no visible row or transcript text", file: file, line: line)
-        guard let last = visible.max(by: { $0.frame.maxY < $1.frame.maxY }) else { return }
-        let overlap = speak.frame.intersection(last.frame)
+        guard let last = visible.max(by: { $0.1.maxY < $1.1.maxY }) else { return }
+        let overlap = speak.frame.intersection(last.1)
         XCTAssertFalse(
             overlap.width > 1 && overlap.height > 1,
-            "Speak \(speak.frame) covers the last visible text \"\(last.label)\" \(last.frame)",
+            "Speak \(speak.frame) covers the last visible text \"\(last.0.label)\" \(last.1)",
             file: file,
             line: line
         )
@@ -142,12 +157,6 @@ final class WatchScaffoldUITests: XCTestCase {
         let query = app.staticTexts.matching(identifier: "voice.line")
         let count = min(query.count, 12)
         return (0..<count).map { query.element(boundBy: $0) }
-    }
-
-    private static func onScreen(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
-        guard element.exists else { return false }
-        let shown = element.frame.intersection(app.frame)
-        return shown.width > 2 && shown.height > 2
     }
 
     private func shot(_ app: XCUIApplication, _ name: String) {

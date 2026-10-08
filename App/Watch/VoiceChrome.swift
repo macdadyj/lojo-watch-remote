@@ -1,6 +1,30 @@
 import SwiftUI
 import WatchRemoteCore
 
+/// Scroll content on top, the speak row in a fixed slot underneath.
+/// The slot is a little taller than the 44pt bar so a bordered button cannot spill upward.
+struct SpeakBarPage<Content: View, Bar: View>: View {
+    private static let slot = VoiceChromeMetrics.maxSpeakBarHeight + 8
+    @ViewBuilder var content: () -> Content
+    @ViewBuilder var bar: () -> Bar
+
+    var body: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                content()
+                    .frame(
+                        width: proxy.size.width,
+                        height: max(proxy.size.height - Self.slot, 1)
+                    )
+                    .clipped()
+                bar()
+                    .frame(width: proxy.size.width, height: Self.slot, alignment: .center)
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+    }
+}
+
 /// One short row under the list. History stays in the scroll view above it.
 struct VoiceHomeBar: View {
     @EnvironmentObject private var model: WatchModel

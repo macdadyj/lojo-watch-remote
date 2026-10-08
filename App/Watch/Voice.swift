@@ -316,12 +316,11 @@ struct VoiceChatView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        SpeakBarPage {
             historyList
+        } bar: {
             VoiceConversationBar(showSpeak: showSpeakAgain || model.forcedScreen != nil)
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .watchPage()
         .navigationTitle(model.forcedScreen == "voice-loop" ? "Voice loop" : "Voice")
         .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
