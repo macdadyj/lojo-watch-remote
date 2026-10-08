@@ -252,13 +252,27 @@ def is_text_shape(line: dict[str, float], width: int) -> bool:
     return line["height"] <= 80
 
 
+def body_lines(shaped: list[dict[str, float]]) -> list[dict[str, float]]:
+    """Drop a clipped glyph sliver sitting next to full-size text.
+
+    A scroll view cuts one line at the viewport edge. That band is a few pixels
+    tall. It is not a type size. A screen whose text is all that small still fails.
+    """
+    if len(shaped) < 2:
+        return shaped
+    heights = sorted(line["height"] for line in shaped)
+    median_height = heights[len(heights) // 2]
+    kept = [line for line in shaped if line["height"] >= median_height * 0.55]
+    return kept or shaped
+
+
 def score_pixels(pixels: list[list[tuple[int, int, int]]], name: str) -> list[str]:
     height = len(pixels)
     width = len(pixels[0]) if height else 0
     if width < 40 or height < 40:
         return [f"{name}: screenshot is too small ({width}x{height})"]
     lines = text_lines(pixels)
-    shaped = [line for line in lines if is_text_shape(line, width)]
+    shaped = body_lines([line for line in lines if is_text_shape(line, width)])
     failures: list[str] = []
     if not shaped:
         return [f"{name}: no readable text"]
@@ -448,10 +462,18 @@ def self_test() -> int:
 
     tiny = blank(width, height, background)
     draw_glyphs(tiny, 48, 4, ink, 16)
-    draw_glyphs(tiny, height - bar + 8, 14, ink, 40)
+    draw_glyphs(tiny, 70, 4, ink, 16)
     tiny_fail = score_pixels(tiny, "scaffold-home.png")
     if not any("text size" in item for item in tiny_fail):
         failures.append(f"tiny text should fail size, got {tiny_fail}")
+
+    sliver = blank(width, height, background)
+    draw_glyphs(sliver, 40, 3, ink, 16)
+    draw_glyphs(sliver, 70, 16, ink, 16)
+    draw_glyphs(sliver, height - bar + 8, 14, ink, 40)
+    sliver_fail = score_pixels(sliver, "scaffold-restored.png")
+    if sliver_fail:
+        failures.append("a clipped sliver next to body text should pass: " + "; ".join(sliver_fail))
 
     faint = blank(width, height, (150, 150, 150))
     draw_glyphs(faint, 48, 16, (168, 168, 168), 16)

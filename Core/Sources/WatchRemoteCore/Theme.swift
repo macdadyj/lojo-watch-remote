@@ -276,6 +276,7 @@ public struct DestructiveButtonStyle: ButtonStyle {
 
 public struct DemoBadge: View {
     var compact: Bool
+    @Environment(\.colorScheme) private var scheme
 
     public init(compact: Bool = false) {
         self.compact = compact
@@ -283,12 +284,12 @@ public struct DemoBadge: View {
 
     public var body: some View {
         Text("DEMO")
-            .font(compact ? .system(size: 9, weight: .heavy) : .caption2.weight(.heavy))
+            .font(compact ? .caption2.weight(.heavy) : .caption.weight(.heavy))
             .tracking(compact ? 0.6 : 1.2)
             .padding(.horizontal, compact ? 5 : 7)
             .padding(.vertical, compact ? 2 : 3)
-            .foregroundStyle(.white)
-            .background(Capsule().fill(LojoTheme.warning))
+            .foregroundStyle(scheme == .light ? Color(red: 0.35, green: 0.18, blue: 0.02) : Color.white)
+            .background(Capsule().fill(scheme == .light ? Color(red: 0.99, green: 0.93, blue: 0.78) : LojoTheme.warning))
             .accessibilityLabel("Demo mode. Sample sessions, nothing is sent.")
     }
 }
