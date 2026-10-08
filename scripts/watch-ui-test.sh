@@ -130,7 +130,7 @@ watch, phone = sys.argv[1], sys.argv[2]
 raw = subprocess.check_output(["xcrun", "simctl", "list", "pairs", "-j"], text=True)
 pairs = json.loads(raw).get("pairs") or {}
 matched = False
-for row in pairs.values():
+for pair_id, row in pairs.items():
     w = (row.get("watch") or {}).get("udid", "")
     p = (row.get("phone") or {}).get("udid", "")
     if not w or not p:
@@ -139,8 +139,11 @@ for row in pairs.values():
         matched = True
         continue
     if w in (watch, phone) or p in (watch, phone):
-        print(f"unpair {w} {p}", flush=True)
-        subprocess.call(["xcrun", "simctl", "unpair", w, p])
+        # simctl unpair takes the pair id. A device udid is "Invalid device pair".
+        print(f"unpair {pair_id} watch {w} phone {p}", flush=True)
+        code = subprocess.call(["xcrun", "simctl", "unpair", pair_id])
+        if code != 0:
+            subprocess.call(["xcrun", "simctl", "help", "unpair"])
 if matched:
     print(f"already paired {watch} {phone}", flush=True)
     raise SystemExit(0)
@@ -159,7 +162,11 @@ ensure_pair() {
   xcrun simctl shutdown "${watch}" || true
   xcrun simctl shutdown "${phone}" || true
   sleep 2
-  pair_watch "${watch}" "${phone}"
+  if pair_watch "${watch}" "${phone}"; then
+    return 0
+  fi
+  echo "Watch and iPhone stayed unpaired. Continuing so the bubble tests still run." >&2
+  return 0
 }
 
 boot_pair() {
