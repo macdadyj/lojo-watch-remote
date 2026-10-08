@@ -309,9 +309,7 @@ struct VoiceChatView: View {
     @State private var sawBottom = false
     @State private var openToolIDs: Set<Int> = []
     @State private var restoredCaption = false
-    @State private var rowFrames: [String: RowFrameSample] = [:]
-    /// Extra space that pushes a bubble hanging over the top edge fully off.
-    @State private var topClearance: CGFloat = 0
+    @State private var pinGeneration = 0
     @State private var showCompose = false
 
     private let bubbleSpacing: CGFloat = 4
@@ -428,8 +426,6 @@ struct VoiceChatView: View {
                         .padding(.top, 2)
                         .padding(.bottom, 2)
                     Color.clear
-                        .frame(height: tailPad)
-                    Color.clear
                         .frame(height: 1)
                         .id("voice.bottom")
                         .background {
@@ -461,28 +457,25 @@ struct VoiceChatView: View {
                 viewportHeight = height
                 noteFollow(lastSample, viewport: height)
             }
-            .onPreferenceChange(RowFrameKey.self) { frames in
-                rowFrames = frames
-                let spans = frames.compactMap { entry -> ViewportSpan? in
-                    guard entry.key.hasPrefix("voice.msg.") else { return nil }
-                    return ViewportSpan(minY: entry.value.minY, maxY: entry.value.maxY)
-                }
-                let stub = VoiceChromeMetrics.topStub(spans)
-                if stub > topClearance + 0.5 {
-                    topClearance = min(stub, max(viewportHeight, 1))
-                }
-            }
             .accessibilityIdentifier("voice.history")
             .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 0, for: .scrollContent)
             .onChange(of: tailToken) { _, _ in
-                topClearance = 0
                 guard followLatest else { return }
                 pin(proxy)
             }
-            .onChange(of: tailPad) { _, _ in
+            .onChange(of: viewportHeight) { old, height in
+                guard height > 1, abs(height - old) > 0.5, followLatest else { return }
+                pin(proxy)
+            }
+            .onChange(of: restoredCaption) { _, shown in
                 guard followLatest else { return }
                 pin(proxy)
+                guard !shown else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    guard self.followLatest else { return }
+                    self.pin(proxy)
+                }
             }
             .onAppear {
                 pin(proxy)
@@ -493,14 +486,20 @@ struct VoiceChatView: View {
     private func pin(_ proxy: ScrollViewProxy) {
         followLatest = true
         holdFollow = true
+        pinGeneration += 1
+        let generation = pinGeneration
         proxy.scrollTo("voice.bottom", anchor: .bottom)
         DispatchQueue.main.async {
-            guard self.followLatest else { return }
+            guard self.followLatest, self.pinGeneration == generation else { return }
             proxy.scrollTo("voice.bottom", anchor: .bottom)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                guard self.followLatest else { return }
-                self.holdFollow = false
-            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            guard self.followLatest, self.pinGeneration == generation else { return }
+            proxy.scrollTo("voice.bottom", anchor: .bottom)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard self.pinGeneration == generation else { return }
+            self.holdFollow = false
         }
     }
 
@@ -531,21 +530,22 @@ struct VoiceChatView: View {
     private func bubbleStack(_ proxy: ScrollViewProxy) -> some View {
         let lines = conversationLines
         let blocks = ChatTranscript.blocks(from: lines, toolsRunning: false)
-        return VStack(alignment: .leading, spacing: bubbleSpacing) {
+        // 2 pt of bottom padding and the 1 pt anchor sit under the stack.
+        // The extra 3 pt keeps a rounding error from cutting the top bubble.
+        let viewport = max(viewportHeight - 6, 1)
+        return TailPinnedLayout(viewport: viewport, spacing: bubbleSpacing) {
             if !chatTitle.isEmpty {
                 Text(chatTitle)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(LojoTheme.readableSecondary(scheme))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .modifier(RowHeight(id: "voice.title"))
             }
             if model.forcedScreen == "voice-loop" {
                 Text("Scripted check. The microphone stays off.")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(LojoTheme.accent)
                     .fixedSize(horizontal: false, vertical: true)
-                    .modifier(RowHeight(id: "voice.script"))
             }
             if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner),
                banner != SessionResume.missingMessage {
@@ -554,7 +554,6 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.danger)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("voice.banner")
-                    .modifier(RowHeight(id: "voice.banner"))
             }
             ForEach(blocks) { block in
                 let rowID = rowID(for: block)
@@ -573,7 +572,6 @@ struct VoiceChatView: View {
                     }
                 }
                 .id(rowID)
-                .modifier(RowHeight(id: rowID))
             }
             if showsRestoredCaption || showsLiveStatus {
                 Text(model.voiceStatus)
@@ -584,7 +582,6 @@ struct VoiceChatView: View {
                     .accessibilityIdentifier("voice.status")
                     .accessibilityLabel("Voice status")
                     .accessibilityValue(model.voiceStatus)
-                    .modifier(RowHeight(id: "voice.status.row"))
                     .onLongPressGesture(minimumDuration: 0.6) {
                         model.toggleTransportDiagnostics()
                     }
@@ -595,7 +592,6 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.readableSecondary(scheme))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("voice.diagnostics")
-                    .modifier(RowHeight(id: "voice.diagnostics"))
             }
             if model.pendingAllowSessionID != nil {
                 Button("Yes") {
@@ -606,7 +602,6 @@ struct VoiceChatView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .accessibilityLabel("Yes")
                 .accessibilityHint("Confirms the spoken allow. Saying yes does this too.")
-                .modifier(RowHeight(id: "voice.yes"))
             }
             if model.dictationOffered {
                 Button("Dictate") {
@@ -617,7 +612,6 @@ struct VoiceChatView: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .accessibilityLabel("Dictate")
                 .accessibilityHint("Opens the keyboard. That sheet still needs Done.")
-                .modifier(RowHeight(id: "voice.dictate"))
             }
             if model.repairOffered {
                 Button(RelayUserNotice.repairText) {
@@ -626,11 +620,9 @@ struct VoiceChatView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .accessibilityIdentifier("voice.repair")
-                .modifier(RowHeight(id: "voice.repair"))
             }
             if model.uiShowHooks {
                 ListenTestHooks()
-                    .modifier(RowHeight(id: "voice.hooks"))
             }
         }
     }
@@ -639,30 +631,6 @@ struct VoiceChatView: View {
         let status = model.voiceStatus
         guard !status.isEmpty else { return false }
         return status != "Restored" && status != "Restoring"
-    }
-
-    /// Space under the newest rows so the viewport edge falls between bubbles.
-    /// Off-screen rows often never report a height, so the pad uses the measured
-    /// suffix. A bubble that still crosses the top grows `topClearance` until it is gone.
-    private var tailPad: CGFloat {
-        let blocks = ChatTranscript.blocks(from: conversationLines, toolsRunning: false)
-        let ids = rowIDs(for: blocks)
-        var measured: [CGFloat] = []
-        for id in ids.reversed() {
-            guard let height = rowFrames[id]?.height, height > 1 else { break }
-            measured.append(height)
-        }
-        let raw: CGFloat
-        if measured.isEmpty || viewportHeight <= 1 {
-            raw = 0
-        } else {
-            raw = VoiceChromeMetrics.unclippedTailPad(
-                viewport: max(viewportHeight - 4, 1),
-                heights: Array(measured.reversed()),
-                spacing: bubbleSpacing
-            )
-        }
-        return raw + topClearance
     }
 
     private func rowID(for block: ChatBlock) -> String {
@@ -674,41 +642,6 @@ struct VoiceChatView: View {
         case .note(let id, _):
             return "voice.note.\(id)"
         }
-    }
-
-    /// Visual order of the transcript rows. The tail pad uses these heights.
-    private func rowIDs(for blocks: [ChatBlock]) -> [String] {
-        var ids: [String] = []
-        if !chatTitle.isEmpty {
-            ids.append("voice.title")
-        }
-        if model.forcedScreen == "voice-loop" {
-            ids.append("voice.script")
-        }
-        if let banner = model.banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner),
-           banner != SessionResume.missingMessage {
-            ids.append("voice.banner")
-        }
-        ids.append(contentsOf: blocks.map { rowID(for: $0) })
-        if showsRestoredCaption || showsLiveStatus {
-            ids.append("voice.status.row")
-        }
-        if model.showTransportDiagnostics {
-            ids.append("voice.diagnostics")
-        }
-        if model.pendingAllowSessionID != nil {
-            ids.append("voice.yes")
-        }
-        if model.dictationOffered {
-            ids.append("voice.dictate")
-        }
-        if model.repairOffered {
-            ids.append("voice.repair")
-        }
-        if model.uiShowHooks {
-            ids.append("voice.hooks")
-        }
-        return ids
     }
 }
 
@@ -731,38 +664,55 @@ private struct VoiceViewportKey: PreferenceKey {
     }
 }
 
-private struct RowFrameSample: Equatable {
-    var height: CGFloat = 0
-    var minY: CGFloat = 0
-    var maxY: CGFloat = 0
-}
+/// Pins the newest rows to the bottom and leaves empty space there so the top edge
+/// falls between bubbles. The pad is part of the first layout, from every row's real height.
+private struct TailPinnedLayout: Layout {
+    var viewport: CGFloat
+    var spacing: CGFloat
 
-private struct RowFrameKey: PreferenceKey {
-    static var defaultValue: [String: RowFrameSample] = [:]
-    static func reduce(value: inout [String: RowFrameSample], nextValue: () -> [String: RowFrameSample]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 0
+        let metrics = metrics(width: width, subviews: subviews)
+        return CGSize(width: width, height: metrics.stack + metrics.pad)
     }
-}
 
-private struct RowHeight: ViewModifier {
-    var id: String
-
-    func body(content: Content) -> some View {
-        content.background {
-            GeometryReader { geo in
-                let frame = geo.frame(in: .named("voice.scroll"))
-                Color.clear.preference(
-                    key: RowFrameKey.self,
-                    value: [
-                        id: RowFrameSample(
-                            height: geo.size.height,
-                            minY: frame.minY,
-                            maxY: frame.maxY
-                        ),
-                    ]
-                )
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let width = proposal.width ?? bounds.width
+        let metrics = metrics(width: width, subviews: subviews)
+        var y = bounds.minY
+        for (offset, subview) in subviews.enumerated() {
+            guard offset < metrics.heights.count else { continue }
+            let height = metrics.heights[offset]
+            subview.place(
+                at: CGPoint(x: bounds.minX, y: y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: width > 1 ? width : bounds.width, height: nil)
+            )
+            y += height
+            if offset < subviews.count - 1 {
+                y += spacing
             }
         }
+    }
+
+    private struct Metrics {
+        var heights: [CGFloat]
+        var stack: CGFloat
+        var pad: CGFloat
+    }
+
+    private func metrics(width: CGFloat, subviews: Subviews) -> Metrics {
+        let heights = subviews.map { subview in
+            subview.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+        }
+        let gaps = spacing * CGFloat(max(heights.count - 1, 0))
+        let stack = heights.reduce(0, +) + gaps
+        let pad = VoiceChromeMetrics.unclippedTailPad(
+            viewport: viewport,
+            heights: heights,
+            spacing: spacing
+        )
+        return Metrics(heights: heights, stack: stack, pad: pad)
     }
 }
 
