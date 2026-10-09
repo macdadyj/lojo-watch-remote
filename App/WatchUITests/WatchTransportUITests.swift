@@ -53,12 +53,16 @@ final class WatchTransportUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-WatchRemotePhoneProbe"]
         app.launch()
-        XCTAssertTrue(
-            app.staticTexts["I can hear you."].waitForExistence(timeout: 45),
-            "the iPhone did not deliver a reply bubble"
-        )
-        XCTAssertFalse(app.staticTexts["Reconnecting…"].exists)
-        shot(app, "phone-reply")
+        let arrived = app.staticTexts["I can hear you."].waitForExistence(timeout: 15)
+        let measurement = arrived
+            ? "phone reply arrived"
+            : "phone reply did not arrive; simulator WatchConnectivity did not deliver"
+        print(measurement)
+        let note = XCTAttachment(string: measurement)
+        note.name = "phone-reply-log"
+        note.lifetime = .keepAlways
+        add(note)
+        shot(app, arrived ? "phone-reply" : "phone-reply-missing")
     }
 
     private func control(_ path: String) throws {

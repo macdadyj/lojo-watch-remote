@@ -87,6 +87,12 @@ final class WatchModel: ObservableObject {
     private var pendingPrompt: String?
     private var pendingContinues = false
     private var pendingResumeID: String?
+    /// Phone send waiting to see a transcript update. Nil once the iPhone answers or the relay takes over.
+    private var relayFallback: RelayFallback?
+    private var relayFallbackToken = 0
+    private var relayFallbackPrompt = ""
+    /// The reply is coming from the relay because the iPhone did not update the transcript.
+    private var usingRelayFallback = false
     var relayProbe = false
     var phoneProbe = false
     var transportProbe: Bool { relayProbe || phoneProbe }
@@ -239,13 +245,16 @@ final class WatchModel: ObservableObject {
                 if VoicePreferences.shared.autoApproveTools != snapshot.autoApproveTools {
                     VoicePreferences.shared.autoApproveTools = snapshot.autoApproveTools
                 }
+                self.notePhoneDelivered(snapshot)
                 self.noteResume(from: snapshot)
                 self.autoApproveWaitingTools()
                 if !arrived.isEmpty, !VoicePreferences.shared.autoApproveTools { WatchFeedback.notification() }
             }
             self.reachable = reachable
             self.route()
-            self.deliverPendingPromptIfPhoneIsBack()
+            if !self.usingRelayFallback {
+                self.deliverPendingPromptIfPhoneIsBack()
+            }
             self.flushHeldVoiceTask()
             if self.phoneProbe {
                 self.considerPhoneProbe()
@@ -491,6 +500,7 @@ final class WatchModel: ObservableObject {
         let queued = bridge.send(PhoneCommand(kind: .start, prompt: prompt, sessionID: sessionID))
         if queued {
             banner = nil
+            armRelayFallback(prompt: prompt, sessionID: sessionID)
         } else if announcingFailure {
             banner = direct.hasPairing ? "Connecting directly. Try again in a moment." : "Pair on iPhone first."
             if direct.hasPairing {
@@ -513,6 +523,71 @@ final class WatchModel: ObservableObject {
         if voiceStatus == "Sending" {
             voiceStatus = "Sent"
         }
+    }
+
+    /// The iPhone accepted the words. If its snapshot does not grow, the relay sends the same words.
+    private func armRelayFallback(prompt: String, sessionID: String?) {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, direct.hasPairing, !phoneProbe, !relayProbe else { return }
+        relayFallbackToken += 1
+        let token = relayFallbackToken
+        var lines: [String: Int] = [:]
+        for session in snapshot.sessions {
+            lines[session.id] = session.transcript?.count ?? 0
+        }
+        relayFallback = RelayFallback(prompt: trimmed, sessionID: sessionID, token: token, lines: lines)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            self?.fireRelayFallback(token)
+        }
+    }
+
+    private func notePhoneDelivered(_ snapshot: PhoneSnapshot) {
+        guard let watch = relayFallback else { return }
+        let grew = snapshot.sessions.contains { session in
+            (session.transcript?.count ?? 0) > (watch.lines[session.id] ?? 0)
+        }
+        let added = snapshot.sessions.contains { session in
+            watch.lines[session.id] == nil && session.transcript?.contains(where: { $0.contains(watch.prompt) }) == true
+        }
+        guard grew || added else { return }
+        relayFallback = nil
+        relayFallbackToken += 1
+    }
+
+    private func fireRelayFallback(_ token: Int) {
+        guard token == relayFallbackToken, let watch = relayFallback else { return }
+        relayFallback = nil
+        usingRelayFallback = true
+        relayFallbackPrompt = watch.prompt
+        pathTitle = "direct"
+        banner = nil
+        if direct.phase == .up {
+            direct.start(watch.prompt, cwd: nil, sessionID: watch.sessionID)
+            if voiceStatus == "Sending" {
+                voiceStatus = "Sent"
+            }
+            return
+        }
+        pendingPrompt = watch.prompt
+        pendingContinues = watch.sessionID != nil
+        if let sessionID = watch.sessionID {
+            resumedSessionID = sessionID
+        }
+        direct.connectIfNeeded()
+    }
+
+    private func relayFallbackAnswered() -> Bool {
+        let needle = relayFallbackPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return false }
+        for session in direct.sessions {
+            let lines = session.transcript ?? []
+            guard let index = lines.lastIndex(where: { $0.contains(needle) }) else { continue }
+            let after = lines.index(after: index)
+            if lines[after...].contains(where: { $0.hasPrefix("Grok:") }) {
+                return true
+            }
+        }
+        return false
     }
 
     func allow(_ session: GrokSession) {
@@ -676,11 +751,20 @@ final class WatchModel: ObservableObject {
 
     private var useDirect: Bool {
         if relayProbe { return false }
+        if usingRelayFallback { return true }
         return forcedScreen == nil && !reachable && snapshot.mode != .demo && direct.phase == .up
     }
 
     private func route(waking: Bool = false) {
         guard forcedScreen == nil else { return }
+        if usingRelayFallback {
+            pathTitle = "direct"
+            if direct.phase != .up {
+                direct.connectIfNeeded()
+            }
+            applyDirect()
+            return
+        }
         if relayProbe {
             pathTitle = "direct"
             if waking {
@@ -697,7 +781,9 @@ final class WatchModel: ObservableObject {
             return
         }
         if snapshot.mode == .demo || reachable {
-            direct.disconnect()
+            if relayFallback == nil {
+                direct.disconnect()
+            }
             if banner == RelayUserNotice.reconnectingText {
                 banner = nil
             }
@@ -716,7 +802,7 @@ final class WatchModel: ObservableObject {
 
     private func applyDirect() {
         guard forcedScreen == nil else { return }
-        guard relayProbe || !reachable else { return }
+        guard relayProbe || usingRelayFallback || !reachable else { return }
         snapshot.mode = .ssh
         if !direct.label.isEmpty {
             snapshot.hostLabel = direct.label
@@ -737,6 +823,10 @@ final class WatchModel: ObservableObject {
                 if voiceStatus == "Sending" {
                     voiceStatus = "Sent"
                 }
+            }
+            if usingRelayFallback, relayFallbackAnswered() {
+                usingRelayFallback = false
+                relayFallbackPrompt = ""
             }
             considerRelayProbe()
             if let id = pendingResumeID {
@@ -852,6 +942,13 @@ final class WatchModel: ObservableObject {
               let lines = snapshot.sessions.first(where: { $0.id == id })?.transcript else { return false }
         return lines.contains(where: { $0.contains(needle) })
     }
+}
+
+private struct RelayFallback {
+    var prompt: String
+    var sessionID: String?
+    var token: Int
+    var lines: [String: Int]
 }
 
 private enum TransportProbeStep {
