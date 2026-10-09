@@ -209,6 +209,10 @@ final class WatchModel: ObservableObject {
         }
         bridge.start { [weak self] snapshot, reachable, directText in
             guard let self, self.forcedScreen == nil else { return }
+            // The echo iPhone stays paired for the transport test. It must not replace a demo catalog.
+            if self.uiTest, !self.phoneProbe {
+                return
+            }
             if let directText {
                 self.direct.ingest(directText)
             }

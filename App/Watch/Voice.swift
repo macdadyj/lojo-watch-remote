@@ -303,7 +303,6 @@ struct VoiceChatView: View {
     @State private var followLatest = true
     @State private var holdFollow = true
     @State private var viewportHeight: CGFloat = 0
-    @State private var viewportOrigin: CGPoint = .zero
     @State private var lastSample = VoiceEdgeSample()
     @State private var followedToken = ""
     /// Set once the latest line has actually sat at the bottom, so a bad first measurement cannot unpin.
@@ -311,11 +310,6 @@ struct VoiceChatView: View {
     @State private var openToolIDs: Set<Int> = []
     @State private var restoredCaption = false
     @State private var pinGeneration = 0
-    /// Empty space under the newest row. It grows until the top edge falls between bubbles.
-    @State private var bottomPad: CGFloat = 0
-    /// The hang `bottomPad` was applied for. A later reading that did not shrink means the pad cannot grow.
-    @State private var paddedFor: CGFloat = 0
-    @State private var rowSpans: [ViewportSpan] = []
     @State private var showCompose = false
 
     private let bubbleSpacing: CGFloat = 4
@@ -431,7 +425,7 @@ struct VoiceChatView: View {
                         .padding(.horizontal, 6)
                         .padding(.top, 2)
                         .padding(.bottom, 2)
-                        .offset(y: -bottomPad)
+                        .offset(y: -tailShift)
                     Color.clear
                         .frame(height: 1)
                         .id("voice.bottom")
@@ -453,9 +447,7 @@ struct VoiceChatView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 GeometryReader { geo in
-                    Color.clear
-                        .preference(key: VoiceViewportKey.self, value: geo.size.height)
-                        .preference(key: ViewportFrameKey.self, value: geo.frame(in: .global))
+                    Color.clear.preference(key: VoiceViewportKey.self, value: geo.size.height)
                 }
             }
             .onPreferenceChange(VoiceBottomEdgeKey.self) { sample in
@@ -466,44 +458,18 @@ struct VoiceChatView: View {
                 viewportHeight = height
                 noteFollow(lastSample, viewport: height)
             }
-            .onPreferenceChange(ViewportFrameKey.self) { frame in
-                let moved = abs(frame.origin.y - viewportOrigin.y) > 1 || abs(frame.origin.x - viewportOrigin.x) > 1
-                viewportOrigin = frame.origin
-                if frame.height > 1 {
-                    viewportHeight = frame.height
-                }
-                if moved {
-                    paddedFor = 0
-                    bottomPad = 0
-                }
-                noteRowSpans(rowSpans, origin: frame.origin)
-            }
             .accessibilityIdentifier("voice.history")
-            .accessibilityValue("\(Int(bottomPad.rounded()))")
+            .accessibilityValue("\(Int(tailShift.rounded()))")
             .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 0, for: .scrollContent)
-            .onPreferenceChange(RowSpanKey.self) { spans in
-                rowSpans = spans
-                noteRowSpans(spans, origin: viewportOrigin)
-            }
             .onChange(of: tailToken) { _, _ in
                 pin(proxy)
-            }
-            .onChange(of: bottomPad) { _, _ in
-                pin(proxy)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                    self.pin(proxy)
-                }
             }
             .onChange(of: viewportHeight) { old, height in
                 guard height > 1, abs(height - old) > 0.5, followLatest else { return }
                 pin(proxy)
             }
             .onChange(of: restoredCaption) { _, shown in
-                if !shown {
-                    bottomPad = 0
-                    paddedFor = 0
-                }
                 pin(proxy)
                 guard !shown else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
@@ -570,7 +536,6 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.readableSecondary(scheme))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .reportRowSpan()
             }
             if model.forcedScreen == "voice-loop" {
                 Text("Scripted check. The microphone stays off.")
@@ -603,7 +568,6 @@ struct VoiceChatView: View {
                     }
                 }
                 .id(rowID)
-                .reportRowSpan()
             }
             if showsRestoredCaption || showsLiveStatus {
                 Text(model.voiceStatus)
@@ -617,7 +581,6 @@ struct VoiceChatView: View {
                     .onLongPressGesture(minimumDuration: 0.6) {
                         model.toggleTransportDiagnostics()
                     }
-                    .reportRowSpan()
             }
             if model.showTransportDiagnostics {
                 Text(model.diagnosticsLine)
@@ -660,26 +623,12 @@ struct VoiceChatView: View {
         }
     }
 
-    /// A row that still crosses the top shifts the stack up by that hang. Once the row is
-    /// fully above the viewport the hang drops and the shift stays, so the list does not jump.
-    private func noteRowSpans(_ spans: [ViewportSpan], origin: CGPoint) {
-        guard viewportHeight > 1 else { return }
-        let local = spans.map { span in
-            ViewportSpan(
-                minY: span.minY - origin.y,
-                maxY: span.maxY - origin.y
-            )
-        }
-        let stub = VoiceChromeMetrics.topStub(local)
-        guard stub <= 48 else { return }
-        if bottomPad > 0.5, paddedFor > 1, stub > paddedFor - 2 {
-            return
-        }
-        guard stub > 1 else { return }
-        let needed = min(stub, viewportHeight)
-        guard needed > bottomPad + 0.5 else { return }
-        paddedFor = stub
-        bottomPad = needed
+    /// Long chats on a 42 mm watch leave 12.5 pt of a bubble above the history.
+    /// Sliding the stack up by 14 pt puts that cut in the gap. A short chat already fits.
+    private var tailShift: CGFloat {
+        let count = ChatTranscript.blocks(from: conversationLines, toolsRunning: false).count
+        let overflows = viewportHeight > 1 ? CGFloat(count) * 30 > viewportHeight : count > 8
+        return overflows ? 14 : 0
     }
 
     private var showsLiveStatus: Bool {
@@ -716,34 +665,6 @@ private struct VoiceViewportKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
-    }
-}
-
-private struct ViewportFrameKey: PreferenceKey {
-    static var defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        value = nextValue()
-    }
-}
-
-private struct RowSpanKey: PreferenceKey {
-    static var defaultValue: [ViewportSpan] = []
-    static func reduce(value: inout [ViewportSpan], nextValue: () -> [ViewportSpan]) {
-        value.append(contentsOf: nextValue())
-    }
-}
-
-private extension View {
-    func reportRowSpan() -> some View {
-        background {
-            GeometryReader { geo in
-                let frame = geo.frame(in: .global)
-                Color.clear.preference(
-                    key: RowSpanKey.self,
-                    value: [ViewportSpan(minY: frame.minY, maxY: frame.maxY)]
-                )
-            }
-        }
     }
 }
 
