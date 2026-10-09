@@ -1915,6 +1915,14 @@ final class PhoneBridge: NSObject, WCSessionDelegate {
         Task { @MainActor in self.onActivated?() }
     }
 
+    func sessionReachabilityDidChange(_ session: WCSession) {
+        Task { @MainActor in self.onActivated?() }
+    }
+
+    func sessionWatchStateDidChange(_ session: WCSession) {
+        Task { @MainActor in self.onActivated?() }
+    }
+
     func sessionDidBecomeInactive(_ session: WCSession) {}
 
     func sessionDidDeactivate(_ session: WCSession) {

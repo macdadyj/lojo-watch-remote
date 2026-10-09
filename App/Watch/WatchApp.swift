@@ -162,6 +162,17 @@ final class WatchModel: ObservableObject {
         direct.restore()
         relayProbe = arguments.contains("-WatchRemoteRelayProbe")
         phoneProbe = arguments.contains("-WatchRemotePhoneProbe")
+        if phoneProbe {
+            // A leftover relay pairing must not steal the iPhone round trip.
+            direct.disconnect()
+            Task { [weak self] in
+                for _ in 0..<30 {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    guard let self else { return }
+                    self.considerPhoneProbe()
+                }
+            }
+        }
         if let pairing = Self.argument("-WatchRemoteDirectPairing", arguments: arguments) {
             direct.ingest(pairing, resetCounters: true)
         }
@@ -441,6 +452,13 @@ final class WatchModel: ObservableObject {
         }
         if forcedScreen != nil {
             return true
+        }
+        if phoneProbe {
+            let queued = bridge.send(PhoneCommand(kind: .start, prompt: prompt, sessionID: sessionID))
+            if queued {
+                banner = nil
+            }
+            return queued
         }
         if relayProbe {
             guard direct.phase == .up else {
@@ -780,13 +798,12 @@ final class WatchModel: ObservableObject {
         guard phoneProbe else { return }
         if transcriptHas("I can hear you.") { return }
         guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
-        guard let chat = snapshot.sessions.first else { return }
         let now = Date()
         if let phoneProbeSentAt, now.timeIntervalSince(phoneProbeSentAt) < 2 { return }
         let firstSend = phoneProbeSentAt == nil
         phoneProbeSentAt = now
         voiceModeActive = true
-        resumedSessionID = chat.id
+        resumedSessionID = snapshot.sessions.first?.id ?? "echo-1"
         if firstSend {
             absorbOpenTranscript(preferRestored: true)
         }

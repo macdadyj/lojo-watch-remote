@@ -107,6 +107,24 @@ if [[ -z "${PHONE_APP}" ]]; then
   exit 1
 fi
 
+# Install the Watch app before the iPhone process starts, so WatchConnectivity
+# sees a companion instead of activating against an empty wrist.
+xcodebuild build-for-testing \
+  -project WatchRemote.xcodeproj \
+  -scheme WatchRemoteWatch \
+  -destination "platform=watchOS Simulator,id=${SMALL_UDID}" \
+  -clonedSourcePackagesDirPath "${ROOT}/build/SourcePackages" \
+  -derivedDataPath "${ROOT}/build/DerivedDataWatch" \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="-" \
+  DEVELOPMENT_TEAM=""
+WATCH_APP="$(find "${ROOT}/build/DerivedDataWatch/Build/Products" -path '*watchsimulator*' -name 'WatchRemoteWatch.app' -type d | head -n 1)"
+if [[ -z "${WATCH_APP}" ]]; then
+  echo "Watch app was not built for the transport probe." >&2
+  exit 1
+fi
+
 export_shots() {
   local result="$1"
   local dest="$2"
@@ -209,6 +227,7 @@ run_class() {
   xcrun simctl boot "${udid}" || true
   xcrun simctl bootstatus "${udid}" -b || true
   boot_pair "${udid}"
+  xcrun simctl install "${udid}" "${WATCH_APP}"
   xcrun simctl install "${PHONE_UDID}" "${PHONE_APP}"
   xcrun simctl terminate "${PHONE_UDID}" com.lojo.WatchRemote >/dev/null 2>&1 || true
   xcrun simctl launch "${PHONE_UDID}" com.lojo.WatchRemote -WatchRemoteEchoProbe
@@ -233,6 +252,7 @@ run_class() {
     xcrun simctl shutdown "${udid}" || true
     sleep 2
     boot_pair "${udid}"
+    xcrun simctl install "${udid}" "${WATCH_APP}"
     xcrun simctl install "${PHONE_UDID}" "${PHONE_APP}"
     xcrun simctl terminate "${PHONE_UDID}" com.lojo.WatchRemote >/dev/null 2>&1 || true
     xcrun simctl launch "${PHONE_UDID}" com.lojo.WatchRemote -WatchRemoteEchoProbe
