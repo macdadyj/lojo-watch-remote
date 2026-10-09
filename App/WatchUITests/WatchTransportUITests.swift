@@ -58,10 +58,6 @@ final class WatchTransportUITests: XCTestCase {
             ? "phone reply arrived"
             : "phone reply did not arrive; simulator WatchConnectivity did not deliver"
         print(measurement)
-        let note = XCTAttachment(string: measurement)
-        note.name = "phone-reply-log"
-        note.lifetime = .keepAlways
-        add(note)
         shot(app, arrived ? "phone-reply" : "phone-reply-missing")
     }
 

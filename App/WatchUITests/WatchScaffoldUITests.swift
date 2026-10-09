@@ -178,10 +178,6 @@ final class WatchScaffoldUITests: XCTestCase {
         let placement = bubblePlacement(in: history, app: app)
         let measurement = "bubble placement wanted \(needed) whole bubbles in \(history.frame) shift \(history.value); \(placement.full) full; \(placement.clipped)"
         print(measurement)
-        let note = XCTAttachment(string: measurement)
-        note.name = "bubble-placement"
-        note.lifetime = .keepAlways
-        add(note)
         shot(app, "restored-bubbles")
         let speak = app.buttons["voice.speak"]
         XCTAssertTrue(speak.waitForExistence(timeout: 4), "Speak missing", file: file, line: line)
