@@ -347,6 +347,7 @@ public enum DemoCatalog {
                     ChatTranscript.toolCard("Web search: maps"),
                     ChatTranscript.toolCard("Tool"),
                     "Grok: The computer is reachable only on the private overlay.",
+                    "You: Thanks.",
                 ]
             ),
             longChat(),

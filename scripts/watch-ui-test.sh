@@ -200,6 +200,12 @@ run_class() {
   local log="${RESULT}/${kind}.log"
   local status
   rm -rf "${result}"
+  # One phone can keep WatchConnectivity pointed at a watch that is still booted.
+  if [[ "${kind}" == "small" ]]; then
+    xcrun simctl shutdown "${LARGE_UDID}" || true
+  else
+    xcrun simctl shutdown "${SMALL_UDID}" || true
+  fi
   xcrun simctl boot "${udid}" || true
   xcrun simctl bootstatus "${udid}" -b || true
   boot_pair "${udid}"

@@ -623,12 +623,13 @@ struct VoiceChatView: View {
         }
     }
 
-    /// Long chats on a 42 mm watch leave 12.5 pt of a bubble above the history.
-    /// Sliding the stack up by 14 pt puts that cut in the gap. A short chat already fits.
+    /// A 42 mm history is 152 pt and leaves 12.5 pt of a bubble above the top.
+    /// A 49 mm history is 177 pt and already clears that line, so the same shift would cut it.
     private var tailShift: CGFloat {
+        guard viewportHeight > 1, viewportHeight < 165 else { return 0 }
         let count = ChatTranscript.blocks(from: conversationLines, toolsRunning: false).count
-        let overflows = viewportHeight > 1 ? CGFloat(count) * 30 > viewportHeight : count > 8
-        return overflows ? 14 : 0
+        guard CGFloat(count) * 30 > viewportHeight else { return 0 }
+        return 14
     }
 
     private var showsLiveStatus: Bool {
