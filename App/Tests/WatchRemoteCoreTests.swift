@@ -1123,7 +1123,11 @@ final class WatchRemoteCoreTests: XCTestCase {
         let idle = DemoCatalog.sessions().first { $0.id == DemoCatalog.idleID }
         let entry = ChatTranscript.entry(for: idle ?? DemoCatalog.sessions()[0])
         XCTAssertEqual(entry.title, "Note the overlay route")
-        XCTAssertEqual(entry.lastMessage, "The computer is reachable only on the private overlay.")
+        XCTAssertEqual(entry.lastMessage, "Thanks.")
+        XCTAssertTrue(
+            idle?.transcript?.contains("Grok: The computer is reachable only on the private overlay.") == true,
+            "the idle chat dropped the overlay reply"
+        )
         XCTAssertEqual(entry.status, .idle)
 
         var engine = MockEngine(preview: true)

@@ -459,7 +459,7 @@ struct VoiceChatView: View {
                 noteFollow(lastSample, viewport: height)
             }
             .accessibilityIdentifier("voice.history")
-            .accessibilityValue("\(Int(tailShift.rounded()))")
+            .accessibilityValue("\(Int(tailShift.rounded())) h\(Int(screenHeight.rounded()))")
             .contentMargins(.top, 0, for: .scrollContent)
             .contentMargins(.bottom, 0, for: .scrollContent)
             .onChange(of: tailToken) { _, _ in
@@ -623,13 +623,21 @@ struct VoiceChatView: View {
         }
     }
 
-    /// A 42 mm history is 152 pt and leaves 12.5 pt of a bubble above the top.
-    /// A 49 mm history is 177 pt and already clears that line, so the same shift would cut it.
+    /// Screen height in points. 42 mm is 223. 49 mm is 251. The scroll view's own
+    /// reader stays at 0, so this is the size the bubble tests already use.
+    private var screenHeight: CGFloat {
+        WKInterfaceDevice.current().screenBounds.height
+    }
+
+    /// A 42 mm history leaves part of a bubble above the top. A 14 pt lift clears the
+    /// long chat. The idle chat's first line needs a larger lift to leave the screen.
+    /// A 49 mm history already clears both, and the same lift would cut a whole bubble.
     private var tailShift: CGFloat {
-        guard viewportHeight > 1, viewportHeight < 165 else { return 0 }
+        guard screenHeight < 230 else { return 0 }
         let count = ChatTranscript.blocks(from: conversationLines, toolsRunning: false).count
-        guard CGFloat(count) * 30 > viewportHeight else { return 0 }
-        return 14
+        if count > 8 { return 14 }
+        if count >= 4 { return 40 }
+        return 0
     }
 
     private var showsLiveStatus: Bool {
