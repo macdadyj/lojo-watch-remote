@@ -143,6 +143,21 @@ final class WatchTransportUITests: XCTestCase {
         shot(app, "relay-heavy-history")
     }
 
+    /// Inside a chat there is always a visible way back to the list.
+    func testBackButtonReturnsToChats() throws {
+        try control("/reset")
+        let app = launchRelay(utterances: ["Can you hear me"])
+        waitForChats(app)
+        speak(app)
+        XCTAssertTrue(bubble(app, "I can hear you.").waitForExistence(timeout: replySeconds), "no reply bubble from the relay")
+        let back = app.buttons["chat.toList"]
+        XCTAssertTrue(back.waitForExistence(timeout: 4), "the chat has no back button")
+        XCTAssertTrue(back.isHittable, "the back button is not on screen")
+        back.tap()
+        XCTAssertTrue(app.buttons["session.row.session-seed"].waitForExistence(timeout: 8), "back did not return to the chats list")
+        shot(app, "relay-back-to-chats")
+    }
+
     /// The Watch's phone path against an in-process iPhone echo. This gates: it does not depend on
     /// the simulator's WatchConnectivity, which CI runners have not delivered.
     func testPhonePathRepliesAndContinues() throws {

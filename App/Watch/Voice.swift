@@ -344,6 +344,9 @@ struct VoiceChatView: View {
     var body: some View {
         SpeakBarPage {
             VStack(spacing: 0) {
+                if model.forcedScreen != "voice-loop" {
+                    backToChats
+                }
                 if model.banner == SessionResume.missingMessage {
                     Text(SessionResume.missingMessage)
                         .font(.footnote.weight(.semibold))
@@ -374,6 +377,24 @@ struct VoiceChatView: View {
         .onChange(of: model.voiceStatus) { _, status in
             noteRestoredCaption(status)
         }
+    }
+
+    /// Stays above the scrolling history so the way back is always one tap away.
+    private var backToChats: some View {
+        Button {
+            model.voiceModeActive = false
+        } label: {
+            Label("Chats", systemImage: "chevron.backward")
+                .labelStyle(.titleAndIcon)
+                .font(.caption2.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(LojoTheme.accent)
+        .padding(.horizontal, 10)
+        .accessibilityLabel("Back to chats")
+        .accessibilityIdentifier("chat.toList")
     }
 
     private var showsRestoredCaption: Bool {
