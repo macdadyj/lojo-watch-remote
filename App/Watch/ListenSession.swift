@@ -13,8 +13,14 @@ extension WatchModel {
 
     /// Action Button and the on-screen Action Button control. Speak starts. A second press sends.
     func toggleFromActionButton() {
-        if voiceStatus == "Sending" || voiceStatus == "Speaking" {
+        // Only a transcription in flight holds the button. A queued prompt or a reply being read never does.
+        if voiceStatus == "Sending" && expectID != nil {
             return
+        }
+        if speakingReply {
+            VoiceSpeaker.shared.stop()
+            speakingReply = false
+            voiceStatus = ""
         }
         if isManualListenActive {
             stopTalking()

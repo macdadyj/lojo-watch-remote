@@ -79,6 +79,10 @@ enum DirectKeychain {
     }
 }
 
+/// The Watch's link to the relay: HTTPS long-polls to `/v1/watch`.
+///
+/// A real Apple Watch denies WebSockets to ordinary apps (TN3135), so every frame goes in a
+/// plain HTTPS request. Commands queue while the link comes up instead of being dropped.
 @MainActor
 final class DirectSession: ObservableObject {
     enum Phase: Equatable {
@@ -91,36 +95,68 @@ final class DirectSession: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var sessions: [GrokSession] = []
     @Published private(set) var approvalsAvailable = false
+    /// What the relay last said about the computer. Nil until the first poll answers.
+    @Published private(set) var hostOnline: Bool?
+    @Published private(set) var lastError = ""
     var onChange: (() -> Void)?
     var onBanner: ((String?) -> Void)?
     var onRestored: ((String, [String]) -> Void)?
     var onTranscript: ((String, String) -> Void)?
     var onUp: (() -> Void)?
-    var onStarted: ((String) -> Void)?
-    /// The auth reply was explicitly not ok. The Keychain pairing is kept until a new one arrives.
+    /// Request id, then the session the computer started or continued.
+    var onStarted: ((String, String) -> Void)?
+    /// Request id, then the computer's error text.
+    var onFailed: ((String, String) -> Void)?
+    /// The relay refused the pairing token. The Keychain pairing is kept until a new one arrives.
     var onRepair: (() -> Void)?
+    /// The Watch's auto-approve default. It rides on every list and ping so the computer applies it.
+    var autoApproveDefault: Bool?
 
     private(set) var pairing: DirectPairing?
-    private var task: URLSessionWebSocketTask?
-    private var urlSession: URLSession?
     private var key = Data()
+    private var pollURL: URL?
     private var sendCounter: UInt64 = 0
     private var replay = RelayReplay()
+    private var cursor = RelayPollCursor()
+    private var outbox: [Data] = []
     private var next = 0
-    private var authed = false
     private var generation = 0
-    private var retryAttempt = 0
-    private var heartbeatTask: Task<Void, Never>?
-    private var retryItem: DispatchWorkItem?
+    private var loop: Task<Void, Never>?
+    private var inflight: URLSessionDataTask?
+    private var inflightWaits = false
+    private var kicked = false
+    private var failures = 0
     private var displayOff = false
     private var giveUp = false
-    private var resumeWhenActive = false
-    private var socketDelegate: SocketDelegate?
-    private var openTimeout: Task<Void, Never>?
-    @Published private(set) var lastError = ""
+    private lazy var http: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = Double(RelayPoll.maxWaitMilliseconds) / 1000 + 15
+        configuration.timeoutIntervalForResource = 120
+        configuration.waitsForConnectivity = false
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
 
     var hasPairing: Bool { pairing != nil }
     var label: String { pairing?.label ?? "" }
+    var hasPendingSends: Bool { !outbox.isEmpty }
+    /// The relay failed at least once since it last answered.
+    var inTrouble: Bool { phase == .connecting && failures > 0 }
+
+    /// Whether the computer can be reached through the relay right now. Nil while unknown.
+    var hostReachable: Bool? {
+        switch phase {
+        case .up:
+            return hostOnline
+        case .failed:
+            return false
+        case .connecting:
+            return failures >= 2 ? false : nil
+        case .idle:
+            return nil
+        }
+    }
 
     var phaseLabel: String {
         switch phase {
@@ -129,7 +165,7 @@ final class DirectSession: ObservableObject {
         case .connecting:
             return "connecting"
         case .up:
-            return "up"
+            return hostOnline == false ? "up, computer offline" : "up"
         case .failed:
             return "failed"
         }
@@ -157,70 +193,75 @@ final class DirectSession: ObservableObject {
         pairing = incoming
         DirectKeychain.save(incoming)
         giveUp = false
-        resumeWhenActive = false
         if changed || resetCounters {
-            sendCounter = 0
             replay = RelayReplay()
-            DirectKeychain.saveCounters(send: 0, recv: 0)
+            cursor = RelayPollCursor()
+            DirectKeychain.saveCounters(send: sendCounter, recv: 0)
         }
         if changed {
+            outbox.removeAll()
+            hostOnline = nil
             disconnect()
         }
     }
 
     func noteDisplay(_ active: Bool) {
         displayOff = !active
+        if active {
+            connectIfNeeded()
+        }
     }
 
     func connectIfNeeded() {
-        guard pairing != nil, !giveUp else { return }
-        if displayOff {
-            resumeWhenActive = true
-            return
-        }
-        if phase == .up || phase == .connecting { return }
-        connect()
+        guard pairing != nil, !giveUp, !displayOff else { return }
+        guard loop == nil else { return }
+        startLoop()
     }
 
     func disconnect() {
-        retryItem?.cancel()
-        retryItem = nil
-        resumeWhenActive = false
-        tearSocket()
+        stopLoop()
         if phase != .idle {
             phase = .idle
+            onChange?()
         }
     }
 
     func wake() {
         displayOff = false
         guard hasPairing, !giveUp else { return }
-        if phase == .up && authed && task != nil {
-            send(DirectMessage(op: .list, id: freshID()))
-            return
+        failures = 0
+        if loop == nil {
+            startLoop()
+        } else {
+            send(listMessage())
         }
-        if phase == .connecting && task != nil {
-            return
-        }
-        resumeWhenActive = false
-        retryAttempt = 0
-        connect()
     }
 
     func refresh() {
-        guard phase == .up else {
-            connectIfNeeded()
-            return
-        }
-        send(DirectMessage(op: .list, id: freshID()))
+        guard hasPairing else { return }
+        send(listMessage())
     }
 
-    func start(_ prompt: String, cwd: String?, sessionID: String? = nil) {
-        send(DirectMessage(op: .start, id: freshID(), prompt: prompt, cwd: cwd, sessionID: sessionID))
+    @discardableResult
+    func start(_ prompt: String, cwd: String?, sessionID: String? = nil, autoApprove: Bool? = nil) -> String {
+        var message = DirectMessage(op: .start, id: freshID(), prompt: prompt, cwd: cwd, sessionID: sessionID)
+        message.autoApprove = autoApprove
+        send(message)
+        return message.id
     }
 
-    func resume(_ sessionID: String) {
-        send(DirectMessage(op: .resume, id: freshID(), sessionID: sessionID))
+    func resume(_ sessionID: String, autoApprove: Bool? = nil) {
+        var message = DirectMessage(op: .resume, id: freshID(), sessionID: sessionID)
+        message.autoApprove = autoApprove
+        send(message)
+    }
+
+    /// Tells the computer this chat's auto-approve choice, or the default when `sessionID` is nil.
+    func sendAutoApprove(_ enabled: Bool, sessionID: String?) {
+        guard hasPairing else { return }
+        var message = DirectMessage(op: .ping, id: freshID(), sessionID: sessionID)
+        message.autoApprove = enabled
+        send(message)
     }
 
     func transcribe(pcm: Data, utteranceID: String) {
@@ -240,78 +281,193 @@ final class DirectSession: ObservableObject {
         send(DirectMessage(op: .stop, id: freshID(), sessionID: session.id))
     }
 
-    private func connect() {
-        if displayOff {
-            resumeWhenActive = true
+    private func listMessage() -> DirectMessage {
+        var message = DirectMessage(op: .list, id: freshID())
+        message.autoApprove = autoApproveDefault
+        return message
+    }
+
+    // MARK: - Poll loop
+
+    private func startLoop() {
+        guard let pairing, let key = RelayMaterial.keyData(pairing.key), let url = RelayPoll.pollURL(fromRelayURL: pairing.relayURL) else {
+            fail("The direct pairing on this Watch could not be used.")
             return
         }
-        guard let pairing, let url = URL(string: pairing.relayURL), let key = RelayMaterial.keyData(pairing.key) else { return }
-        retryItem?.cancel()
-        retryItem = nil
-        tearSocket()
-        self.pairing = pairing
+        stopLoop()
         self.key = key
-        phase = .connecting
-        authed = false
+        pollURL = url
+        generation += 1
         let current = generation
-        let delegate = SocketDelegate(owner: self, generation: current)
-        socketDelegate = delegate
-        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
-        let socket = session.webSocketTask(with: url)
-        urlSession = session
-        task = socket
-        socket.resume()
-        onChange?()
-        armOpenTimeout(current)
-    }
-
-    private func receive(_ current: Int) {
-        task?.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self, self.generation == current else { return }
-                self.handle(result, current)
-            }
+        if phase != .up {
+            phase = .connecting
+            onChange?()
+        }
+        if outbox.isEmpty {
+            enqueue(listMessage())
+        }
+        loop = Task { [weak self] in
+            await self?.run(current)
         }
     }
 
-    private func handle(_ result: Result<URLSessionWebSocketTask.Message, Error>, _ current: Int) {
-        guard generation == current else { return }
-        switch result {
-        case .failure:
-            noteFault(.disconnected)
-        case .success(let message):
-            switch message {
-            case .string(let text):
-                guard !authed else {
-                    receive(current)
-                    return
-                }
-                switch RelayUserNotice.classify(.authPayload(text)) {
-                case .accepted:
-                    authed = true
-                    retryAttempt = 0
-                    resumeWhenActive = false
-                    phase = .up
-                    lastError = ""
-                    onBanner?(nil)
-                    armHeartbeat()
-                    onUp?()
-                    send(DirectMessage(op: .list, id: freshID()))
-                    receive(current)
+    private func stopLoop() {
+        generation += 1
+        loop?.cancel()
+        loop = nil
+        inflight?.cancel()
+        inflight = nil
+    }
+
+    /// A send while a long poll is parked cancels that poll so the frame leaves now.
+    private func kick() {
+        guard inflightWaits, let inflight else { return }
+        kicked = true
+        inflight.cancel()
+    }
+
+    private func run(_ current: Int) async {
+        while generation == current, !Task.isCancelled {
+            if displayOff {
+                quietPause()
+                return
+            }
+            let batch = Array(outbox.prefix(RelayPoll.maxFramesPerRequest))
+            let wait = batch.isEmpty && phase == .up ? RelayPoll.maxWaitMilliseconds : 0
+            let result = await post(batch, wait: wait)
+            guard generation == current else { return }
+            switch result {
+            case .answered(let response):
+                outbox.removeFirst(min(batch.count, outbox.count))
+                noteAnswered(response)
+            case .kicked:
+                continue
+            case .refused(let outcome):
+                failures += 1
+                switch outcome {
                 case .pairingRejected:
                     rejectPairing()
-                case .reconnecting:
-                    noteFault(.disconnected)
-                case .ignored:
-                    receive(current)
+                    return
+                case .relayOutdated:
+                    lastError = "The relay has no Watch endpoint."
+                    phase = .failed(RelayPoll.relayOutdatedText)
+                    onBanner?(RelayPoll.relayOutdatedText)
+                    onChange?()
+                case .ok, .slowDown, .retry:
+                    lastError = outcome == .slowDown ? "The relay asked the Watch to slow down." : "The relay answered with an error."
+                    noteTrouble()
                 }
-            case .data(let data):
-                open(data)
-                receive(current)
-            @unknown default:
-                receive(current)
+                await pause(RelayPoll.backoff(failures: failures, outcome: outcome), current)
+            case .unreachable(let text):
+                failures += 1
+                lastError = text
+                noteTrouble()
+                await pause(RelayPoll.backoff(failures: failures, outcome: .retry), current)
             }
         }
+    }
+
+    private enum PostResult {
+        case answered(RelayPoll.Response)
+        case refused(RelayPoll.Outcome)
+        case unreachable(String)
+        case kicked
+    }
+
+    private func post(_ batch: [Data], wait: Int) async -> PostResult {
+        guard let pollURL, let pairing else { return .unreachable("No relay address.") }
+        let body = RelayPoll.Request(
+            send: batch.map { $0.base64EncodedString() },
+            after: cursor.after,
+            epoch: cursor.epoch,
+            wait: wait
+        )
+        guard let data = RelayPoll.encode(body) else { return .unreachable("A request could not be built.") }
+        var request = URLRequest(url: pollURL)
+        request.httpMethod = "POST"
+        request.httpBody = data
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(pairing.token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = Double(wait) / 1000 + 15
+        kicked = false
+        inflightWaits = wait > 0
+        let (payload, response, error): (Data?, URLResponse?, Error?) = await withCheckedContinuation { continuation in
+            let task = http.dataTask(with: request) { payload, response, error in
+                continuation.resume(returning: (payload, response, error))
+            }
+            inflight = task
+            task.resume()
+        }
+        inflight = nil
+        inflightWaits = false
+        if kicked {
+            kicked = false
+            return .kicked
+        }
+        if let error {
+            return .unreachable(Self.describe(error))
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let outcome = RelayPoll.outcome(status: status)
+        guard outcome == .ok else { return .refused(outcome) }
+        guard let payload, let decoded = RelayPoll.decode(payload), decoded.ok else {
+            return .refused(.retry)
+        }
+        return .answered(decoded)
+    }
+
+    private func noteAnswered(_ response: RelayPoll.Response) {
+        failures = 0
+        let wasUp = phase == .up
+        let host = response.host
+        if !wasUp || hostOnline != host {
+            phase = .up
+            hostOnline = host
+            lastError = host == false ? "The computer is not connected to the relay." : ""
+            onBanner?(nil)
+            onChange?()
+        }
+        if !wasUp {
+            onUp?()
+        }
+        for frame in cursor.take(response) {
+            guard let data = Data(base64Encoded: frame.data) else { continue }
+            open(data)
+        }
+    }
+
+    private func noteTrouble() {
+        guard !displayOff else { return }
+        if phase != .connecting || failures == 1 {
+            phase = .connecting
+            onBanner?(RelayUserNotice.reconnectingText)
+            onChange?()
+        } else if failures == 2 {
+            onChange?()
+        }
+    }
+
+    private func pause(_ seconds: Double, _ current: Int) async {
+        guard seconds > 0 else { return }
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline, generation == current, !Task.isCancelled, !kickedWhilePaused {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        kickedWhilePaused = false
+    }
+
+    private var kickedWhilePaused = false
+
+    /// The Watch went to the wrist-down state. Keep the pairing and the banner quiet.
+    private func quietPause() {
+        loop = nil
+        inflight?.cancel()
+        inflight = nil
+        if phase == .connecting {
+            phase = .idle
+        }
+        onBanner?(nil)
+        onChange?()
     }
 
     private func open(_ data: Data) {
@@ -321,9 +477,9 @@ final class DirectSession: ObservableObject {
             guard let message = DirectMessage.decode(plain) else { return }
             apply(message)
         } catch RelayBoxError.replayed {
-            onBanner?("A repeated message was ignored.")
+            return
         } catch {
-            onBanner?("A message from the computer could not be read.")
+            lastError = "A frame from the computer could not be opened."
         }
     }
 
@@ -334,208 +490,69 @@ final class DirectSession: ObservableObject {
                 self.sessions = sessions
             }
             approvalsAvailable = message.approvalsAvailable ?? true
-            onBanner?(nil)
             onChange?()
         case .started:
-            onBanner?(nil)
-            onStarted?(message.sessionID ?? "")
-            send(DirectMessage(op: .list, id: freshID()))
+            onStarted?(message.id, message.sessionID ?? "")
         case .ok, .pong:
             onChange?()
         case .restored:
             onRestored?(message.sessionID ?? "", message.lines ?? [])
-            onBanner?(nil)
             onChange?()
         case .transcript:
             onTranscript?(message.id, message.message ?? "")
-            onBanner?(nil)
             onChange?()
         case .error:
-            onBanner?(message.message ?? "The computer could not do that.")
+            let text = message.message ?? "The computer could not do that."
+            onFailed?(message.id, text)
+            onBanner?(text)
         case .list, .start, .approve, .deny, .stop, .ping, .resume, .transcribe:
             break
         }
     }
 
-    private func send(_ message: DirectMessage) {
-        guard authed, let task, let plain = DirectMessage.encode(message) else { return }
-        sendCounter += 1
-        let current = generation
+    @discardableResult
+    private func enqueue(_ message: DirectMessage) -> Bool {
+        guard let pairing, let plain = DirectMessage.encode(message), let key = RelayMaterial.keyData(pairing.key) else { return false }
+        sendCounter = RelayCounter.next(after: sendCounter)
         do {
             let frame = try RelayBox.seal(plaintext: plain, key: key, direction: .watchToHost, counter: sendCounter)
             DirectKeychain.saveCounters(send: sendCounter, recv: replay.highest)
-            task.send(.data(frame)) { [weak self] error in
-                Task { @MainActor in
-                    guard let self, self.generation == current else { return }
-                    if error != nil {
-                        self.noteFault(.dataSendFailed)
-                    }
-                }
+            outbox.append(frame)
+            if outbox.count > 32 {
+                outbox.removeFirst(outbox.count - 32)
             }
+            return true
         } catch {
             onBanner?("The direct connection could not be sealed.")
+            return false
         }
     }
 
-    private func noteFault(_ fault: RelaySocketFault) {
-        lastError = Self.faultText(fault)
-        switch RelayUserNotice.classify(fault) {
-        case .pairingRejected:
-            rejectPairing()
-        case .accepted, .ignored:
-            break
-        case .reconnecting:
-            if displayOff {
-                quietDrop()
-            } else {
-                scheduleReconnect()
-            }
+    private func send(_ message: DirectMessage) {
+        guard enqueue(message) else { return }
+        if loop == nil {
+            connectIfNeeded()
+        } else if inflightWaits {
+            kick()
+        } else {
+            kickedWhilePaused = true
         }
-    }
-
-    /// The socket died because the watch left the foreground. Keep the pairing and the banner quiet.
-    private func quietDrop() {
-        tearSocket()
-        resumeWhenActive = true
-        phase = .idle
-        onBanner?(nil)
-        onChange?()
-    }
-
-    private func scheduleReconnect() {
-        guard pairing != nil, !giveUp else { return }
-        retryItem?.cancel()
-        retryItem = nil
-        tearSocket()
-        phase = .connecting
-        onBanner?(RelayUserNotice.banner(for: .disconnected, displayOff: false))
-        onChange?()
-        let attempt = retryAttempt
-        retryAttempt = min(attempt + 1, 5)
-        let delay = min(8.0, 0.4 * pow(2.0, Double(attempt)))
-        let item = DispatchWorkItem { [weak self] in
-            Task { @MainActor in
-                self?.connect()
-            }
-        }
-        retryItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     private func rejectPairing() {
         giveUp = true
-        retryItem?.cancel()
-        retryItem = nil
-        resumeWhenActive = false
-        tearSocket()
+        loop = nil
+        inflight?.cancel()
+        inflight = nil
+        outbox.removeAll()
         phase = .failed(RelayUserNotice.pairingRejectedText)
         onBanner?(RelayUserNotice.pairingRejectedText)
         onRepair?()
         onChange?()
     }
 
-    private func tearSocket() {
-        generation += 1
-        authed = false
-        openTimeout?.cancel()
-        openTimeout = nil
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
-        socketDelegate = nil
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
-        urlSession?.invalidateAndCancel()
-        urlSession = nil
-    }
-
-    /// Auth goes out only after the socket is open. Sending earlier fails on watchOS and sticks on Reconnecting.
-    fileprivate func didOpenSocket(generation expected: Int) {
-        guard generation == expected, phase == .connecting, !authed, task != nil else { return }
-        openTimeout?.cancel()
-        openTimeout = nil
-        sendAuth(expected)
-        receive(expected)
-    }
-
-    fileprivate func didCloseSocket(generation expected: Int, code: Int) {
-        guard generation == expected else { return }
-        guard phase == .connecting || phase == .up else { return }
-        noteFault(.disconnected)
-        lastError = "Socket closed \(code)."
-    }
-
-    fileprivate func didFinishSocket(generation expected: Int) {
-        guard generation == expected else { return }
-        guard phase == .connecting || phase == .up else { return }
-        noteFault(.disconnected)
-    }
-
-    private func sendAuth(_ current: Int) {
-        guard let pairing, let task else { return }
-        let auth = AuthMessage(role: "watch", token: pairing.token)
-        guard let data = try? JSONEncoder().encode(auth), let text = String(data: data, encoding: .utf8) else {
-            fail("The direct pairing on this Watch could not be used.")
-            return
-        }
-        task.send(.string(text)) { [weak self] error in
-            Task { @MainActor in
-                guard let self, self.generation == current else { return }
-                if error != nil {
-                    self.noteFault(.authSendFailed)
-                }
-            }
-        }
-    }
-
-    private func armOpenTimeout(_ current: Int) {
-        openTimeout?.cancel()
-        openTimeout = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self, self.generation == current, !self.authed else { return }
-                self.noteFault(.disconnected)
-                self.lastError = "The relay did not open."
-            }
-        }
-    }
-
-    private static func faultText(_ fault: RelaySocketFault) -> String {
-        switch fault {
-        case .authSendFailed:
-            return "The pairing hello was not sent."
-        case .dataSendFailed:
-            return "A message was not sent."
-        case .disconnected:
-            return "The relay connection dropped."
-        case .suspended:
-            return "The relay connection paused."
-        case .authPayload:
-            return "The relay rejected the pairing."
-        }
-    }
-
-    private func armHeartbeat() {
-        heartbeatTask?.cancel()
-        heartbeatTask = Task { [weak self] in
-            while !Task.isCancelled {
-                let pause = UInt64(SessionKeepalive.heartbeatInterval * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: pause)
-                self?.pingIfLive()
-            }
-        }
-    }
-
-    private func pingIfLive() {
-        guard phase == .up, authed, !displayOff else { return }
-        guard SessionKeepalive.remainsLive(elapsed: SessionKeepalive.heartbeatInterval, userEnded: false) else { return }
-        send(DirectMessage(op: .ping, id: freshID()))
-    }
-
     private func fail(_ text: String) {
-        retryItem?.cancel()
-        retryItem = nil
-        tearSocket()
+        stopLoop()
         phase = .failed(text)
         onBanner?(text)
         onChange?()
@@ -543,64 +560,24 @@ final class DirectSession: ObservableObject {
 
     private func freshID() -> String {
         next += 1
-        return String(next)
-    }
-}
-
-private final class SocketDelegate: NSObject, URLSessionWebSocketDelegate {
-    weak var owner: DirectSession?
-    let generation: Int
-
-    init(owner: DirectSession, generation: Int) {
-        self.owner = owner
-        self.generation = generation
+        return "w\(next)"
     }
 
-    func urlSession(
-        _ session: URLSession,
-        webSocketTask: URLSessionWebSocketTask,
-        didOpenWithProtocol `protocol`: String?
-    ) {
-        let owner = owner
-        let generation = generation
-        Task { @MainActor in
-            owner?.didOpenSocket(generation: generation)
+    private static func describe(_ error: Error) -> String {
+        let code = (error as? URLError)?.code
+        switch code {
+        case .some(.notConnectedToInternet), .some(.networkConnectionLost):
+            return "The Watch has no network."
+        case .some(.timedOut):
+            return "The relay did not answer in time."
+        case .some(.cannotFindHost), .some(.cannotConnectToHost), .some(.dnsLookupFailed):
+            return "The relay could not be reached."
+        case .some(.secureConnectionFailed), .some(.serverCertificateUntrusted), .some(.serverCertificateHasBadDate):
+            return "The relay's certificate was refused."
+        case .some(.appTransportSecurityRequiresSecureConnection):
+            return "App Transport Security blocked the relay address."
+        default:
+            return "The relay connection failed."
         }
-        _ = session
-        _ = webSocketTask
-        _ = `protocol`
     }
-
-    func urlSession(
-        _ session: URLSession,
-        webSocketTask: URLSessionWebSocketTask,
-        didCloseWith closeCode: URLSessionWebSocketTask.CloseCode,
-        reason: Data?
-    ) {
-        let owner = owner
-        let generation = generation
-        let code = closeCode.rawValue
-        Task { @MainActor in
-            owner?.didCloseSocket(generation: generation, code: code)
-        }
-        _ = session
-        _ = webSocketTask
-        _ = reason
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        let owner = owner
-        let generation = generation
-        Task { @MainActor in
-            guard error != nil else { return }
-            owner?.didFinishSocket(generation: generation)
-        }
-        _ = session
-        _ = task
-    }
-}
-
-private struct AuthMessage: Codable {
-    var role: String
-    var token: String
 }

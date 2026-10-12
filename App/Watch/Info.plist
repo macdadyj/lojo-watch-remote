@@ -26,6 +26,11 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Watch Remote listens when you tap Speak or press the Action Button, and stops when you tap I'm done or press the Action Button again.</string>
 	<key>INAlternativeAppNames</key>

@@ -100,9 +100,15 @@ final class VoiceSpeaker: NSObject, AVSpeechSynthesizerDelegate {
     private var lastKey: String?
     private var current: AVSpeechUtterance?
     private var onFinish: (() -> Void)?
+    /// Transport tests keep the simulator quiet. A muted line finishes at once.
+    var muted = false
 
     func speakNow(_ text: String, dedupeKey: String? = nil, whenFinished: (() -> Void)? = nil) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if muted {
+            DispatchQueue.main.async { whenFinished?() }
+            return
+        }
         guard !trimmed.isEmpty else {
             whenFinished?()
             return
@@ -174,6 +180,7 @@ enum VoiceInput {
 
 struct VoicePreferenceToggles: View {
     @ObservedObject private var preferences = VoicePreferences.shared
+    @EnvironmentObject private var model: WatchModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -195,12 +202,15 @@ struct VoicePreferenceToggles: View {
             }
             .accessibilityHint("Speaks the latest finished result. Off until you turn it on.")
 
-            Toggle(isOn: $preferences.autoApproveTools) {
+            Toggle(isOn: Binding(
+                get: { model.approval.value },
+                set: { model.setAutoApprove($0) }
+            )) {
                 Text("Auto-approve tools")
                     .font(.caption2)
             }
             .accessibilityIdentifier("settings.autoApprove")
-            .accessibilityHint("Allows tool calls without a tap. Off until you turn it on.")
+            .accessibilityHint("Allows tool calls without a tap, here and on the iPhone. A chat can override it.")
         }
     }
 }
@@ -393,16 +403,51 @@ struct VoiceChatView: View {
         }
     }
 
+    /// Bubbles only: what was said and what came back. Prompts, hints and link state stay out.
     private var conversationLines: [String] {
-        var rows: [String] = []
-        let spoken = model.voiceLine.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !spoken.isEmpty, ChatTranscript.isConversation(spoken), !history.contains(spoken) {
-            rows.append(spoken)
-        }
-        rows.append(contentsOf: history.filter { ChatTranscript.isConversation($0) || ChatTranscript.isToolCard($0) || ChatTranscript.isNote($0) })
+        var rows = history.filter { ChatTranscript.isConversation($0) || ChatTranscript.isToolCard($0) || ChatTranscript.isNote($0) }
         let title = chatTitle
-        guard !title.isEmpty else { return rows }
-        return rows.filter { $0 != title }
+        if !title.isEmpty {
+            rows = rows.filter { $0 != title }
+        }
+        if let partial = livePartial {
+            rows.append("You: \(partial)")
+        }
+        return rows
+    }
+
+    /// Words recognized so far in the current utterance. They show as the user's bubble.
+    private var livePartial: String? {
+        guard model.voiceStatus == "Hearing you" else { return nil }
+        let spoken = model.voiceLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !spoken.isEmpty, !Self.hints.contains(spoken), !ChatTranscript.isStatusNoise(spoken) else { return nil }
+        return spoken
+    }
+
+    /// A one-off line from the Watch itself, such as a listening hint or a spoken answer.
+    private var voiceCaption: String? {
+        guard livePartial == nil else { return nil }
+        let spoken = model.voiceLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !spoken.isEmpty, !ChatTranscript.isStatusNoise(spoken), spoken != chatTitle else { return nil }
+        if history.contains(where: { ChatTranscript.spokenText($0) == spoken }) { return nil }
+        return spoken
+    }
+
+    private static let hints: Set<String> = [
+        VoiceSpeechCopy.listeningHint,
+        VoiceSpeechCopy.waitingForPhone,
+        ListenEndpoint.manualHint,
+        ListenEndpoint.waitingManual,
+        ListenEndpoint.hint(pauseSends: true),
+        ListenEndpoint.hint(pauseSends: false),
+    ]
+
+    /// The open chat's tool request, when the user still has to decide.
+    private var waitingTool: GrokSession? {
+        guard model.forcedScreen == nil, let id = model.resumedSessionID,
+              let session = model.snapshot.sessions.first(where: { $0.id == id }),
+              session.permission != nil, !model.autoApproves(id) else { return nil }
+        return session
     }
 
     /// The list row's title. It stays out of the bubbles so it is not a second copy of the chat.
@@ -536,6 +581,10 @@ struct VoiceChatView: View {
                     .foregroundStyle(LojoTheme.readableSecondary(scheme))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("voice.title")
+                    .onLongPressGesture(minimumDuration: 0.6) {
+                        model.toggleTransportDiagnostics()
+                    }
             }
             if model.forcedScreen == "voice-loop" {
                 Text("Scripted check. The microphone stays off.")
@@ -568,6 +617,17 @@ struct VoiceChatView: View {
                     }
                 }
                 .id(rowID)
+            }
+            if let tool = waitingTool, let permission = tool.permission {
+                ToolApprovalCard(session: tool, permission: permission)
+            }
+            if let caption = voiceCaption {
+                Text(caption)
+                    .font(.caption2)
+                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("voice.caption")
             }
             if showsRestoredCaption || showsLiveStatus {
                 Text(model.voiceStatus)
@@ -913,14 +973,20 @@ extension WatchModel {
             scheduleUICap()
             return
         }
-        resumedSessionID = nil
         guard forcedScreen == nil else { return }
+        if !voiceModeActive {
+            // From the chat list this is a new chat. Inside a chat, the Action Button continues it.
+            resumedSessionID = nil
+            voiceLog = []
+            voiceLine = ""
+        }
         appIsActive = true
         declinedVoicePermissionID = nil
         dictationOffered = false
         missedTurns = 0
         voiceModeActive = true
         if let session = snapshot.sessions.first(where: { $0.permission != nil }),
+           !autoApproves(session.id),
            pendingAllowSessionID == nil,
            spokenPermissionIDs.contains(session.permission?.id ?? "") == false {
             beginAllowReadback(for: session, haptic: false)
@@ -959,7 +1025,7 @@ extension WatchModel {
     }
 
     func flushHeldVoiceTask(announcingFailure: Bool = true) {
-        guard forcedScreen == nil, let prompt = heldVoiceTask else { return }
+        guard forcedScreen == nil, let prompt = heldVoiceTask, !promptIsQueued else { return }
         if start(prompt, announcingFailure: announcingFailure, continueRestored: resumedSessionID != nil) {
             heldVoiceTask = nil
             WatchFeedback.success()
@@ -1017,6 +1083,7 @@ extension WatchModel {
         guard forcedScreen == nil, appIsActive else { return }
         guard voiceModeActive || pendingAllowSessionID != nil else { return }
         guard !speakingReply, !capture.isRunning, prepareID == nil, !dictationPresented else { return }
+        if deliverInjectedUtterance() { return }
         let phoneReachable = currentPhoneReachable()
         if phoneReachable {
             reachable = true
@@ -1179,24 +1246,24 @@ extension WatchModel {
             guard let permission = session.permission else { return false }
             return !oldIDs.contains(permission.id)
         }
-        if let arrived, hasLiveSnapshot, appIsActive, arrived.permission?.id != declinedVoicePermissionID {
+        if let arrived, hasLiveSnapshot, appIsActive, arrived.permission?.id != declinedVoicePermissionID,
+           !autoApproves(arrived.id) {
             considerSpokenApproval(for: arrived)
             return
         }
-        if let result {
-            capture.stop()
-            prepareID = nil
-            expectID = nil
-            if voiceModeActive {
-                voiceLine = result.text
-            }
+        // Never cut the user off: a reply that lands mid-utterance stays a bubble and is not read.
+        let userIsTalking = capture.isRunning || prepareID != nil || expectID != nil
+        if let result, !userIsTalking {
             speakingReply = true
             voiceStatus = "Speaking"
             VoiceSpeaker.shared.speakNow(result.text, dedupeKey: result.sessionID + "\n" + result.text) { [weak self] in
                 guard let self else { return }
                 self.speakingReply = false
-                guard self.voiceModeActive else { return }
-                self.relinquishListen(status: "Sent")
+                guard self.voiceModeActive else {
+                    self.voiceStatus = ""
+                    return
+                }
+                self.relinquishListen(status: "")
             }
         }
     }
@@ -1243,7 +1310,7 @@ extension WatchModel {
         }
         switch effect.action {
         case .none:
-            reply(effect.spoken, listenAfter: effect.listenAgain)
+            reply(effect.spoken, listenAfter: effect.listenAgain, record: true)
         case .allow(let sessionID):
             guard let session = session(sessionID) else {
                 reply("Nothing is waiting for approval.", listenAfter: effect.listenAgain)
@@ -1273,14 +1340,13 @@ extension WatchModel {
             heldVoiceTask = prompt
             flushHeldVoiceTask(announcingFailure: true)
             if heldVoiceTask == nil {
-                if let banner, !banner.isEmpty {
-                    reply("\(banner) \(effect.spoken)", listenAfter: effect.listenAgain)
-                } else {
-                    reply(effect.spoken, listenAfter: effect.listenAgain)
-                }
+                reply(effect.spoken, listenAfter: effect.listenAgain)
             } else if promptIsQueued {
                 voiceStatus = "Sending"
                 voiceLine = ""
+                DispatchQueue.main.asyncAfter(deadline: .now() + 21) { [weak self] in
+                    self?.flushHeldVoiceTask(announcingFailure: false)
+                }
             } else if let banner, !banner.isEmpty {
                 reply(banner, listenAfter: effect.listenAgain)
             } else {
@@ -1303,7 +1369,7 @@ extension WatchModel {
     @discardableResult
     private func considerSpokenApproval(for session: GrokSession) -> Bool {
         guard hasLiveSnapshot, appIsActive, forcedScreen == nil else { return false }
-        guard let permission = session.permission else { return false }
+        guard let permission = session.permission, !autoApproves(session.id) else { return false }
         if permission.id == declinedVoicePermissionID { return false }
         if spokenPermissionIDs.contains(permission.id) { return false }
         spokenPermissionIDs.insert(permission.id)
@@ -1351,13 +1417,17 @@ extension WatchModel {
         }
     }
 
-    private func reply(_ text: String, listenAfter: Bool) {
+    /// Speaks a line from the Watch itself. Only answers to a question join the transcript;
+    /// confirmations such as "Allowed." or "Sending." are spoken and shown once as a caption.
+    private func reply(_ text: String, listenAfter: Bool, record: Bool = false) {
         capture.stop()
         discardPendingHostAudio()
         prepareID = nil
         expectID = nil
         voiceLine = text
-        remember(text)
+        if record {
+            remember(text)
+        }
         speakingReply = true
         voiceStatus = "Speaking"
         VoiceSpeaker.shared.speakNow(text) { [weak self] in

@@ -1,5 +1,4 @@
 import SwiftUI
-import WatchConnectivity
 import WatchKit
 import WatchRemoteCore
 
@@ -31,8 +30,45 @@ enum VoiceSink: Equatable {
     case host
 }
 
+/// A launch that drives the real network path from a UI test. The microphone stays off: each
+/// listen takes the next scripted utterance as if speech recognition had produced it.
+enum WatchTransportTest: String {
+    case relay
+    case phone
+}
+
+@MainActor
+enum WatchApprovalStore {
+    private static let key = "watch.approval.setting"
+
+    static func load() -> WatchApprovalSetting {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let setting = try? JSONDecoder().decode(WatchApprovalSetting.self, from: data) else {
+            return WatchApprovalSetting(value: VoicePreferences.shared.autoApproveTools)
+        }
+        return setting
+    }
+
+    static func save(_ setting: WatchApprovalSetting) {
+        guard let data = try? JSONEncoder().encode(setting) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+}
+
+/// The words in flight, where they went, and the chats that existed before them.
+private struct WatchTurn {
+    var prompt: String
+    var path: WatchTurnPath
+    var requestID: String?
+    var sessionID: String?
+    var known: Set<String>
+    var sentAt = Date()
+}
+
 @MainActor
 final class WatchModel: ObservableObject {
+    static let stillWaitingStatus = "Still waiting for Grok"
+
     @Published var snapshot = DemoCatalog.snapshot()
     @Published var forcedScreen: String?
     @Published var appearance: AppearanceChoice = .system
@@ -49,6 +85,8 @@ final class WatchModel: ObservableObject {
     @Published var voiceStatus = ""
     @Published var voiceLog: [String] = []
     @Published var dictationOffered = false
+    /// Auto-approve: the default, kept in step with the iPhone, plus per-chat choices.
+    @Published private(set) var approval = WatchApprovalSetting()
     /// Set only for the watchOS UI tests. The microphone and the real host stay off.
     private(set) var uiTest = false
     /// UI test launch with the iPhone app treated as unreachable.
@@ -63,6 +101,9 @@ final class WatchModel: ObservableObject {
     private(set) var uiMaxListen = false
     /// Clip name from `-WatchRemoteInjectClip`. Empty on a normal launch.
     private(set) var injectedClip = ""
+    /// Set by `-WatchRemoteTransportTest`. The network is real; only the microphone is scripted.
+    private(set) var transportTest: WatchTransportTest?
+    private var injectedUtterances: [String] = []
     @Published var repairOffered = false
     @Published var wristDown = false
     var systemPausedListen = false
@@ -84,33 +125,50 @@ final class WatchModel: ObservableObject {
     var spokenPermissionIDs = Set<String>()
     private let bridge = WatchBridge()
     private let direct = DirectSession()
-    private var pendingPrompt: String?
-    private var pendingContinues = false
-    private var pendingResumeID: String?
-    /// Phone send waiting to see a transcript update. Nil once the iPhone answers or the relay takes over.
-    private var relayFallback: RelayFallback?
-    private var relayFallbackToken = 0
-    private var relayFallbackPrompt = ""
-    /// The reply is coming from the relay because the iPhone did not update the transcript.
-    private var usingRelayFallback = false
-    var relayProbe = false
-    var phoneProbe = false
-    var transportProbe: Bool { relayProbe || phoneProbe }
+    /// The iPhone's latest snapshot. Relay sessions are merged over it.
+    private var phoneSnapshot: PhoneSnapshot?
+    private var turn: WatchTurn?
+    /// Lines a resume returned, kept until the session list carries at least as many.
+    private var restoredTranscripts: [String: [String]] = [:]
+    private var autoApprovedPermissionIDs = Set<String>()
     @Published var showTransportDiagnostics = false
-    private var probeStep: TransportProbeStep = .idle
-    private var phoneProbeSentAt: Date?
+    /// The open chat. Later voice turns prompt that session.
+    var resumedSessionID: String?
 
-    var promptIsQueued: Bool { pendingPrompt != nil }
+    var isTransportTest: Bool { transportTest != nil }
+
+    /// A follow-up waits for the computer to name the chat the first turn created.
+    var promptIsQueued: Bool { heldVoiceTask != nil && awaitingNewChat }
 
     var diagnosticsLine: String {
-        WatchTransportDiagnostics.line(path: pathTitle, phase: direct.phaseLabel, lastError: direct.lastError)
+        let phase = reachable ? "\(direct.phaseLabel) · iPhone reachable" : direct.phaseLabel
+        return WatchTransportDiagnostics.line(path: pathTitle, phase: phase, lastError: direct.lastError)
     }
 
     func toggleTransportDiagnostics() {
         showTransportDiagnostics.toggle()
     }
-    /// Set when a history row restored a chat. Later voice turns prompt that session.
-    var resumedSessionID: String?
+
+    var hostIsReady: Bool { direct.hasPairing }
+
+    /// Where a turn goes right now.
+    var turnPath: WatchTurnPath {
+        WatchRouting.path(
+            hasRelayPairing: direct.hasPairing,
+            relayHostOnline: direct.hostReachable,
+            phoneReachable: reachable,
+            phoneActivated: phoneActivated
+        )
+    }
+
+    private var phoneActivated: Bool {
+        transportTest != .relay && bridge.isActivated
+    }
+
+    private var awaitingNewChat: Bool {
+        guard resumedSessionID == nil, let turn, turn.sessionID == nil else { return false }
+        return Date().timeIntervalSince(turn.sentAt) < 20
+    }
 
     init() {
         ListenActionButton.register { [weak self] in
@@ -155,7 +213,7 @@ final class WatchModel: ObservableObject {
         if forcedScreen != nil {
             snapshot = DemoCatalog.preview(named: forcedScreen ?? "") ?? DemoCatalog.snapshot()
             if forcedScreen == "session" || forcedScreen == "long" { selectedID = DemoCatalog.approvalID }
-            pathTitle = Self.pathTitle(for: forcedScreen, snapshot: snapshot, reachable: false, direct: false)
+            pathTitle = Self.pathTitle(for: forcedScreen, snapshot: snapshot)
             if forcedScreen == "voice-chat" || forcedScreen == "voice-loop" {
                 voiceStatus = "Listening"
                 voiceLine = ListenEndpoint.manualHint
@@ -165,39 +223,31 @@ final class WatchModel: ObservableObject {
                 }
             }
         }
-        direct.restore()
-        relayProbe = arguments.contains("-WatchRemoteRelayProbe")
-        phoneProbe = arguments.contains("-WatchRemotePhoneProbe")
-        if phoneProbe {
-            // A leftover relay pairing must not steal the iPhone round trip.
-            direct.disconnect()
-            Task { [weak self] in
-                for _ in 0..<30 {
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
-                    guard let self else { return }
-                    self.considerPhoneProbe()
-                }
-            }
+        approval = WatchApprovalStore.load()
+        transportTest = Self.argument("-WatchRemoteTransportTest", arguments: arguments).flatMap(WatchTransportTest.init(rawValue:))
+        if let transportTest {
+            injectedUtterances = (Self.argument("-WatchRemoteInjectUtterance", arguments: arguments) ?? "")
+                .split(separator: "|")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            approval = WatchApprovalSetting(value: Self.argument("-WatchRemoteAutoApprove", arguments: arguments) == "1")
+            WatchApprovalStore.save(approval)
+            VoicePreferences.shared.actionHintSeen = true
+            VoicePreferences.shared.pauseSends = false
+            VoiceSpeaker.shared.muted = true
+            snapshot = PhoneSnapshot(mode: .ssh, link: .connecting, sessions: [], banner: nil, approvalsAvailable: true, hostLabel: "example-host")
+            pathTitle = transportTest == .relay ? "direct" : "via iPhone"
         }
-        if let pairing = Self.argument("-WatchRemoteDirectPairing", arguments: arguments) {
-            direct.ingest(pairing, resetCounters: true)
+        syncApprovalPreference()
+        direct.autoApproveDefault = approval.value
+        if transportTest != .phone {
+            direct.restore()
+            if let pairing = Self.argument("-WatchRemoteDirectPairing", arguments: arguments) {
+                direct.ingest(pairing, resetCounters: true)
+            }
         }
         direct.onBanner = { [weak self] text in
-            guard let self else { return }
-            self.banner = text
-            if text == RelayUserNotice.reconnectingText, self.probeStep == .sentFresh {
-                self.probeStep = .dropped
-            }
-            if text == SessionResume.missingMessage {
-                self.showMissingChat()
-                return
-            }
-            guard let text, self.voiceSink == .host, self.expectID != nil else { return }
-            if text == VoiceSpeechCopy.noTranscriber {
-                self.offerDictation(text)
-                return
-            }
-            self.giveUpOnHostTranscript(text)
+            self?.receiveRelayBanner(text)
         }
         direct.onChange = { [weak self] in
             self?.applyDirect()
@@ -210,55 +260,21 @@ final class WatchModel: ObservableObject {
         }
         direct.onUp = { [weak self] in
             self?.flushPendingHostAudio()
-            self?.considerRelayProbe()
         }
-        direct.onStarted = { [weak self] id in
-            guard let self, !id.isEmpty else { return }
-            if self.resumedSessionID == nil || self.resumedSessionID == id {
-                self.resumedSessionID = id
-                self.voiceModeActive = true
-            }
+        direct.onStarted = { [weak self] requestID, sessionID in
+            self?.noteStarted(requestID: requestID, sessionID: sessionID)
+        }
+        direct.onFailed = { [weak self] requestID, _ in
+            self?.noteFailed(requestID: requestID)
         }
         direct.onRepair = { [weak self] in
             guard let self else { return }
             self.repairOffered = true
             self.requestPhonePairing()
         }
-        bridge.start { [weak self] snapshot, reachable, directText in
-            guard let self, self.forcedScreen == nil else { return }
-            // The echo iPhone stays paired for the transport test. It must not replace a demo catalog,
-            // and the relay probe must not treat the echo transcript as its own reply.
-            if self.uiTest, !self.phoneProbe {
-                return
-            }
-            if self.relayProbe {
-                return
-            }
-            if let directText {
-                self.direct.ingest(directText)
-            }
-            if let snapshot {
-                let previous = Set(self.snapshot.sessions.compactMap(\.permission?.id))
-                let arrived = Set(snapshot.sessions.compactMap(\.permission?.id)).subtracting(previous)
-                self.hasLiveSnapshot = true
-                self.snapshot = snapshot
-                if VoicePreferences.shared.autoApproveTools != snapshot.autoApproveTools {
-                    VoicePreferences.shared.autoApproveTools = snapshot.autoApproveTools
-                }
-                self.notePhoneDelivered(snapshot)
-                self.noteResume(from: snapshot)
-                self.autoApproveWaitingTools()
-                if !arrived.isEmpty, !VoicePreferences.shared.autoApproveTools { WatchFeedback.notification() }
-            }
-            self.reachable = reachable
-            self.route()
-            if !self.usingRelayFallback {
-                self.deliverPendingPromptIfPhoneIsBack()
-            }
-            self.flushHeldVoiceTask()
-            if self.phoneProbe {
-                self.considerPhoneProbe()
-            }
+        let loopback = transportTest == .phone && arguments.contains("-WatchRemotePhoneLoopback")
+        bridge.start(loopback: loopback) { [weak self] snapshot, reachable, directText in
+            self?.receivePhone(snapshot: snapshot, reachable: reachable, directText: directText)
         }
         VoiceHandoff.handler = { [weak self] prompt in
             self?.submitSpokenTask(prompt)
@@ -324,12 +340,14 @@ final class WatchModel: ObservableObject {
                 self.offerDictation(VoiceSpeechCopy.micUnavailable)
             }
         }
-        if forcedScreen == nil, let pending = VoiceHandoff.takePending() {
+        guard forcedScreen == nil else { return }
+        if let pending = VoiceHandoff.takePending() {
             submitSpokenTask(pending)
         }
-        if relayProbe {
+        if direct.hasPairing {
             direct.connectIfNeeded()
         }
+        refreshState()
     }
 
     func consumeUITestLaunch() {
@@ -340,30 +358,40 @@ final class WatchModel: ObservableObject {
 
     func wake() {
         guard forcedScreen == nil, !uiTest else { return }
-        route(waking: true)
+        if direct.hasPairing {
+            direct.wake()
+        }
+        refreshState()
     }
 
     func refresh() {
         guard forcedScreen == nil, !uiTest else { return }
-        if useDirect {
+        if direct.hasPairing {
             direct.refresh()
-            return
         }
-        _ = bridge.send(PhoneCommand(kind: .refresh))
+        if transportTest != .relay, reachable || !direct.hasPairing {
+            _ = bridge.send(PhoneCommand(kind: .refresh))
+        }
     }
+
+    // MARK: - Chats
 
     func openHistory(_ session: GrokSession) {
         resumedSessionID = session.id
+        if turn?.sessionID != session.id {
+            turn = nil
+        }
         voiceModeActive = true
-        let lines = SessionResume.displayLines(
+        voiceLine = ""
+        voiceLog = SessionResume.displayLines(
             title: session.title,
             summary: session.summary,
             transcript: session.transcript ?? []
         )
         voiceStatus = "Restoring"
-        voiceLine = lines.first ?? session.title
-        voiceLog = Array(lines.dropFirst())
-        banner = nil
+        if !isConnectionNotice(banner) {
+            banner = nil
+        }
         let known = snapshot.sessions.contains { $0.id == session.id }
         if uiTest || forcedScreen != nil {
             if known {
@@ -377,73 +405,57 @@ final class WatchModel: ObservableObject {
             showMissingChat()
             return
         }
-        if useDirect {
-            direct.resume(session.id)
-            return
-        }
-        if !reachable && direct.hasPairing {
-            pendingResumeID = session.id
-            direct.connectIfNeeded()
-            banner = "Connecting directly."
-            return
-        }
-        let queued = bridge.send(PhoneCommand(kind: .resume, sessionID: session.id))
-        if queued {
-            return
-        }
-        if direct.hasPairing {
-            pendingResumeID = session.id
-            direct.connectIfNeeded()
-            banner = "Connecting directly."
-        } else {
+        switch route(for: session.id) {
+        case .relay:
+            direct.resume(session.id, autoApprove: approval.chats[session.id])
+        case .phone:
+            if !bridge.send(PhoneCommand(kind: .resume, sessionID: session.id)) {
+                banner = "Pair on iPhone first."
+                voiceStatus = "Unavailable"
+            }
+        case .unavailable:
             banner = "Pair on iPhone first."
             voiceStatus = "Unavailable"
         }
+        let id = session.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, self.resumedSessionID == id, self.voiceStatus == "Restoring" else { return }
+            self.voiceStatus = "Restored"
+        }
+        applyConnectionNotice()
     }
 
     func showRestored(_ id: String, lines: [String]) {
-        let cleaned = lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let cleaned = Self.clean(lines)
         guard !cleaned.isEmpty else { return }
-        guard resumedSessionID == nil || resumedSessionID == id else { return }
-        resumedSessionID = id
-        voiceModeActive = true
-        voiceStatus = "Restored"
-        voiceLine = cleaned[0]
-        voiceLog = Array(cleaned.dropFirst())
-        banner = nil
-        if let index = snapshot.sessions.firstIndex(where: { $0.id == id }) {
+        restoredTranscripts[id] = cleaned
+        if let index = snapshot.sessions.firstIndex(where: { $0.id == id }),
+           (snapshot.sessions[index].transcript?.count ?? 0) < cleaned.count {
             snapshot.sessions[index].transcript = cleaned
         }
+        guard resumedSessionID == id else { return }
+        if voiceStatus == "Restoring" {
+            voiceStatus = "Restored"
+        }
+        if banner == SessionResume.missingMessage {
+            banner = nil
+        }
+        absorbOpenTranscript()
     }
 
-    func noteResume(from snapshot: PhoneSnapshot) {
-        guard resumedSessionID != nil || phoneProbe else { return }
-        if snapshot.banner == SessionResume.missingMessage {
-            showMissingChat()
-            return
-        }
-        if phoneProbe, resumedSessionID == nil,
-           let chat = snapshot.sessions.first(where: { session in
-               session.transcript?.contains(where: { $0.contains("I can hear you") }) == true
-           }) {
-            resumedSessionID = chat.id
-            voiceModeActive = true
-        }
-        absorbOpenTranscript(preferRestored: voiceStatus == "Restoring" || voiceStatus.isEmpty)
-    }
-
-    /// Puts the open chat's transcript on screen. A later reply must not flip the status back to Restored.
-    func absorbOpenTranscript(preferRestored: Bool) {
+    /// Puts the open chat's transcript on screen, plus the words still on their way.
+    func absorbOpenTranscript() {
         guard let id = resumedSessionID,
-              let session = snapshot.sessions.first(where: { $0.id == id }),
-              let raw = session.transcript else { return }
-        let cleaned = raw.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        guard !cleaned.isEmpty else { return }
-        voiceModeActive = true
-        let keepStatus = !preferRestored && !voiceStatus.isEmpty && voiceStatus != "Restoring" && voiceStatus != "Restored"
-        voiceLine = cleaned[0]
-        voiceLog = Array(cleaned.dropFirst())
-        if !keepStatus {
+              let session = snapshot.sessions.first(where: { $0.id == id }) else { return }
+        var lines = Self.clean(session.transcript ?? [])
+        guard !lines.isEmpty else { return }
+        if let turn, turn.sessionID == id || turn.sessionID == nil, !WatchRouting.mentions(turn.prompt, in: lines) {
+            lines.append("You: \(turn.prompt)")
+        }
+        if voiceLog != lines {
+            voiceLog = lines
+        }
+        if voiceStatus == "Restoring" {
             voiceStatus = "Restored"
         }
     }
@@ -451,147 +463,125 @@ final class WatchModel: ObservableObject {
     func showMissingChat() {
         voiceModeActive = true
         voiceStatus = "Unavailable"
-        voiceLine = SessionResume.missingMessage
+        voiceLine = ""
         voiceLog = []
         banner = SessionResume.missingMessage
     }
 
+    func endChat() {
+        if let id = resumedSessionID,
+           let session = snapshot.sessions.first(where: { $0.id == id }),
+           session.status == .running || session.status == .needsApproval {
+            stop(session)
+        }
+        turn = nil
+        endVoiceConversation()
+    }
+
+    // MARK: - Turns
+
     @discardableResult
     func start(_ prompt: String, announcingFailure: Bool = true, continueRestored: Bool = false) -> Bool {
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
         let sessionID = continueRestored ? resumedSessionID : nil
         if !continueRestored {
             resumedSessionID = nil
-            pendingResumeID = nil
         }
         if forcedScreen != nil {
             return true
         }
-        if phoneProbe {
-            let queued = bridge.send(PhoneCommand(kind: .start, prompt: prompt, sessionID: sessionID))
-            if queued {
-                banner = nil
-            }
-            return queued
-        }
-        if relayProbe {
-            guard direct.phase == .up else {
-                pendingPrompt = prompt
-                pendingContinues = sessionID != nil
-                direct.connectIfNeeded()
-                banner = "Connecting directly."
+        let known = Set(snapshot.sessions.map(\.id))
+        switch route(for: sessionID) {
+        case .relay:
+            let override = sessionID.flatMap { approval.chats[$0] }
+            let requestID = direct.start(text, cwd: nil, sessionID: sessionID, autoApprove: override)
+            beginTurn(WatchTurn(prompt: text, path: .relay, requestID: requestID, sessionID: sessionID, known: known))
+            return true
+        case .phone:
+            guard bridge.send(PhoneCommand(kind: .start, prompt: text, sessionID: sessionID)) else {
+                if announcingFailure {
+                    banner = "Pair on iPhone first."
+                }
                 return false
             }
-            direct.start(prompt, cwd: nil, sessionID: sessionID)
-            banner = nil
+            beginTurn(WatchTurn(prompt: text, path: .phone, requestID: nil, sessionID: sessionID, known: known))
             return true
-        }
-        if useDirect {
-            direct.start(prompt, cwd: nil, sessionID: sessionID)
-            banner = nil
-            return true
-        }
-        if !reachable && direct.hasPairing {
-            pendingPrompt = prompt
-            pendingContinues = sessionID != nil
-            direct.connectIfNeeded()
-            banner = "Connecting directly."
+        case .unavailable:
+            if announcingFailure {
+                banner = "Pair on iPhone first."
+            }
             return false
         }
-        let queued = bridge.send(PhoneCommand(kind: .start, prompt: prompt, sessionID: sessionID))
-        if queued {
+    }
+
+    private func beginTurn(_ next: WatchTurn) {
+        turn = next
+        if !isConnectionNotice(banner) {
             banner = nil
-            armRelayFallback(prompt: prompt, sessionID: sessionID)
-        } else if announcingFailure {
-            banner = direct.hasPairing ? "Connecting directly. Try again in a moment." : "Pair on iPhone first."
-            if direct.hasPairing {
-                direct.connectIfNeeded()
-            }
-        } else if direct.hasPairing {
-            direct.connectIfNeeded()
         }
-        return queued
-    }
-
-    private func deliverPendingPromptIfPhoneIsBack() {
-        guard reachable, let prompt = pendingPrompt else { return }
-        let sessionID = pendingContinues ? resumedSessionID : nil
-        guard bridge.send(PhoneCommand(kind: .start, prompt: prompt, sessionID: sessionID)) else { return }
-        pendingPrompt = nil
-        pendingContinues = false
-        heldVoiceTask = nil
-        banner = nil
-        if voiceStatus == "Sending" {
-            voiceStatus = "Sent"
+        absorbOpenTranscript()
+        let sentAt = next.sentAt
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            self?.noteSlowTurn(sentAt)
         }
     }
 
-    /// The iPhone accepted the words. If its snapshot does not grow, the relay sends the same words.
-    private func armRelayFallback(prompt: String, sessionID: String?) {
-        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, direct.hasPairing, !phoneProbe, !relayProbe else { return }
-        relayFallbackToken += 1
-        let token = relayFallbackToken
-        var lines: [String: Int] = [:]
-        for session in snapshot.sessions {
-            lines[session.id] = session.transcript?.count ?? 0
-        }
-        relayFallback = RelayFallback(prompt: trimmed, sessionID: sessionID, token: token, lines: lines)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-            self?.fireRelayFallback(token)
-        }
-    }
-
-    private func notePhoneDelivered(_ snapshot: PhoneSnapshot) {
-        guard let watch = relayFallback else { return }
-        let grew = snapshot.sessions.contains { session in
-            (session.transcript?.count ?? 0) > (watch.lines[session.id] ?? 0)
-        }
-        let added = snapshot.sessions.contains { session in
-            watch.lines[session.id] == nil && session.transcript?.contains(where: { $0.contains(watch.prompt) }) == true
-        }
-        guard grew || added else { return }
-        relayFallback = nil
-        relayFallbackToken += 1
-    }
-
-    private func fireRelayFallback(_ token: Int) {
-        guard token == relayFallbackToken, let watch = relayFallback else { return }
-        relayFallback = nil
-        usingRelayFallback = true
-        relayFallbackPrompt = watch.prompt
-        pathTitle = "direct"
-        banner = nil
-        if direct.phase == .up {
-            direct.start(watch.prompt, cwd: nil, sessionID: watch.sessionID)
-            if voiceStatus == "Sending" {
-                voiceStatus = "Sent"
-            }
+    private func noteSlowTurn(_ sentAt: Date) {
+        guard let open = turn, open.sentAt == sentAt else { return }
+        if let id = open.sessionID ?? resumedSessionID,
+           snapshot.sessions.first(where: { $0.id == id })?.permission != nil {
             return
         }
-        pendingPrompt = watch.prompt
-        pendingContinues = watch.sessionID != nil
-        if let sessionID = watch.sessionID {
+        if ["", "Sent", "Sending"].contains(voiceStatus) {
+            voiceStatus = Self.stillWaitingStatus
+        }
+    }
+
+    private func noteStarted(requestID: String, sessionID: String) {
+        guard !sessionID.isEmpty, var open = turn, open.requestID == requestID else { return }
+        open.sessionID = sessionID
+        turn = open
+        if resumedSessionID == nil {
             resumedSessionID = sessionID
         }
-        direct.connectIfNeeded()
+        absorbOpenTranscript()
+        flushHeldVoiceTask(announcingFailure: false)
     }
 
-    private func relayFallbackAnswered() -> Bool {
-        let needle = relayFallbackPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return false }
-        for session in direct.sessions {
-            let lines = session.transcript ?? []
-            guard let index = lines.lastIndex(where: { $0.contains(needle) }) else { continue }
-            let after = lines.index(after: index)
-            if lines[after...].contains(where: { $0.hasPrefix("Grok:") }) {
-                return true
-            }
+    private func noteFailed(requestID: String) {
+        guard let open = turn, open.requestID == requestID else { return }
+        turn = nil
+        if ["", "Sent", "Sending", Self.stillWaitingStatus].contains(voiceStatus) {
+            voiceStatus = "Couldn't send"
         }
-        return false
     }
+
+    /// A new chat sent through the iPhone has no started reply. Find it by its first words.
+    private func adoptNewChat() {
+        guard resumedSessionID == nil, var open = turn, open.sessionID == nil,
+              let chat = WatchRouting.newChat(for: open.prompt, known: open.known, in: snapshot.sessions) else { return }
+        open.sessionID = chat.id
+        turn = open
+        resumedSessionID = chat.id
+        flushHeldVoiceTask(announcingFailure: false)
+    }
+
+    private func noteTurnProgress() {
+        guard let open = turn, let id = open.sessionID ?? resumedSessionID,
+              let lines = snapshot.sessions.first(where: { $0.id == id })?.transcript,
+              WatchRouting.hasReply(after: open.prompt, in: lines) else { return }
+        turn = nil
+        if ["Sent", "Sending", Self.stillWaitingStatus].contains(voiceStatus) {
+            voiceStatus = ""
+        }
+    }
+
+    // MARK: - Approvals
 
     func allow(_ session: GrokSession) {
-        if useDirect {
+        guard forcedScreen == nil else { return }
+        if route(for: session.id) == .relay {
             direct.approve(session)
             return
         }
@@ -599,7 +589,8 @@ final class WatchModel: ObservableObject {
     }
 
     func deny(_ session: GrokSession) {
-        if useDirect {
+        guard forcedScreen == nil else { return }
+        if route(for: session.id) == .relay {
             direct.deny(session)
             return
         }
@@ -607,42 +598,70 @@ final class WatchModel: ObservableObject {
     }
 
     func stop(_ session: GrokSession) {
-        if useDirect {
+        guard forcedScreen == nil else { return }
+        if route(for: session.id) == .relay {
             direct.stop(session)
             return
         }
         send(PhoneCommand(kind: .stop, sessionID: session.id))
     }
 
+    /// The Settings switch. The iPhone and the computer hear about it.
     func setAutoApprove(_ enabled: Bool) {
+        guard approval.chooseOnWatch(enabled) else { return }
+        WatchApprovalStore.save(approval)
+        syncApprovalPreference()
         guard forcedScreen == nil, !uiTest else { return }
-        _ = bridge.send(PhoneCommand(kind: .setAutoApprove, enabled: enabled))
-    }
-
-    func endChat() {
-        guard let id = resumedSessionID, let session = snapshot.sessions.first(where: { $0.id == id }) else {
-            remember("Ended.")
-            return
+        direct.autoApproveDefault = enabled
+        direct.sendAutoApprove(enabled, sessionID: nil)
+        if transportTest != .relay {
+            _ = bridge.send(PhoneCommand(kind: .setAutoApprove, enabled: enabled))
         }
-        stop(session)
-        remember("Ended.")
+        if enabled {
+            scheduleAutoApprove()
+        }
     }
 
-    private var autoApprovedPermissionIDs = Set<String>()
+    /// One chat's switch. It stays put when the Settings default changes later.
+    func setChatAutoApprove(_ enabled: Bool, for sessionID: String) {
+        approval.setChat(sessionID, to: enabled)
+        WatchApprovalStore.save(approval)
+        guard forcedScreen == nil, !uiTest else { return }
+        direct.sendAutoApprove(enabled, sessionID: sessionID)
+        if enabled {
+            scheduleAutoApprove()
+        }
+    }
+
+    func autoApproves(_ sessionID: String?) -> Bool {
+        approval.allows(chat: sessionID)
+    }
+
+    /// The computer applies the same choice itself. The Watch waits a moment so it does not race it.
+    private func scheduleAutoApprove() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            self?.autoApproveWaitingTools()
+        }
+    }
 
     func autoApproveWaitingTools() {
-        guard VoicePreferences.shared.autoApproveTools else { return }
+        guard forcedScreen == nil, !uiTest else { return }
         for session in snapshot.sessions {
-            guard let permission = session.permission else { continue }
+            guard let permission = session.permission, approval.allows(chat: session.id) else { continue }
             guard autoApprovedPermissionIDs.insert(permission.id).inserted else { continue }
             allow(session)
-            remember(ChatTranscript.autoApproved(permission.title))
+        }
+    }
+
+    private func syncApprovalPreference() {
+        if VoicePreferences.shared.autoApproveTools != approval.value {
+            VoicePreferences.shared.autoApproveTools = approval.value
         }
     }
 
     func selectComputer(_ id: String) {
         guard forcedScreen == nil else { return }
-        if useDirect {
+        if !reachable && direct.hasPairing {
             banner = "Open the iPhone to switch computers."
             return
         }
@@ -650,7 +669,39 @@ final class WatchModel: ObservableObject {
         banner = queued ? nil : "Pair on iPhone first."
     }
 
-    var hostIsReady: Bool { direct.hasPairing }
+    func requestPhonePairing() {
+        repairOffered = true
+        guard forcedScreen == nil, !uiTest else { return }
+        _ = bridge.send(PhoneCommand(kind: .showPairing))
+    }
+
+    func directNoteDisplay(_ active: Bool) {
+        direct.noteDisplay(active)
+    }
+
+    // MARK: - Scripted microphone
+
+    /// Transport tests replace the microphone. The utterance enters the same path a final transcript does.
+    func deliverInjectedUtterance() -> Bool {
+        guard transportTest != nil else { return false }
+        guard !injectedUtterances.isEmpty else {
+            voiceStatus = "Paused"
+            return true
+        }
+        let text = injectedUtterances.removeFirst()
+        voiceModeActive = true
+        voiceStatus = "Hearing you"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            self.missedTurns = 0
+            self.voiceLine = ""
+            self.remember("You: \(text)")
+            self.handleVoiceTurn(text)
+        }
+        return true
+    }
+
+    // MARK: - Host speech
 
     func discardPendingHostAudio() {
         hostPCM.removeAll(keepingCapacity: true)
@@ -658,7 +709,7 @@ final class WatchModel: ObservableObject {
         pendingHostID = nil
     }
 
-    /// Records immediately. The utterance is sent when the direct socket is up.
+    /// Records immediately. The utterance is sent when the relay is up.
     func beginHostCapture() {
         guard forcedScreen == nil, !uiTest else { return }
         voiceSink = .host
@@ -675,16 +726,6 @@ final class WatchModel: ObservableObject {
             self.retainRuntime()
             self.capture.start()
         }
-    }
-
-    func requestPhonePairing() {
-        repairOffered = true
-        guard forcedScreen == nil, !uiTest else { return }
-        _ = bridge.send(PhoneCommand(kind: .showPairing))
-    }
-
-    func directNoteDisplay(_ active: Bool) {
-        direct.noteDisplay(active)
     }
 
     private func appendHostAudio(_ packet: VoicePacket) {
@@ -740,7 +781,6 @@ final class WatchModel: ObservableObject {
         pendingHostID = nil
         voiceStatus = "Paused"
         voiceLine = text
-        remember(text)
     }
 
     private func acceptHostTranscript(_ id: String, text: String) {
@@ -749,118 +789,186 @@ final class WatchModel: ObservableObject {
         receiveVoice(raw)
     }
 
-    private var useDirect: Bool {
-        if relayProbe { return false }
-        if usingRelayFallback { return true }
-        return forcedScreen == nil && !reachable && snapshot.mode != .demo && direct.phase == .up
+    // MARK: - Links
+
+    private func receivePhone(snapshot incoming: PhoneSnapshot?, reachable phoneReachable: Bool, directText: String?) {
+        guard forcedScreen == nil, !uiTest, transportTest != .relay else { return }
+        if let directText, transportTest != .phone {
+            direct.ingest(directText)
+            if direct.hasPairing {
+                direct.connectIfNeeded()
+            }
+        }
+        if let incoming {
+            hasLiveSnapshot = true
+            phoneSnapshot = incoming
+            if approval.notePhone(incoming.autoApproveTools) {
+                direct.autoApproveDefault = approval.value
+                syncApprovalPreference()
+            }
+            WatchApprovalStore.save(approval)
+            if incoming.banner == SessionResume.missingMessage, resumedSessionID != nil {
+                showMissingChat()
+            }
+        }
+        reachable = phoneReachable
+        refreshState()
+        flushHeldVoiceTask(announcingFailure: false)
     }
 
-    private func route(waking: Bool = false) {
-        guard forcedScreen == nil else { return }
-        if usingRelayFallback {
-            pathTitle = "direct"
-            if direct.phase != .up {
-                direct.connectIfNeeded()
-            }
-            applyDirect()
+    private func receiveRelayBanner(_ text: String?) {
+        banner = text
+        if text == SessionResume.missingMessage {
+            showMissingChat()
             return
         }
-        if relayProbe {
-            pathTitle = "direct"
-            if waking {
-                direct.wake()
+        if let text, voiceSink == .host, expectID != nil {
+            if text == VoiceSpeechCopy.noTranscriber {
+                offerDictation(text)
             } else {
-                direct.connectIfNeeded()
-            }
-            applyDirect()
-            return
-        }
-        if phoneProbe {
-            pathTitle = "via iPhone"
-            considerPhoneProbe()
-            return
-        }
-        if snapshot.mode == .demo || reachable {
-            if relayFallback == nil {
-                direct.disconnect()
-            }
-            if banner == RelayUserNotice.reconnectingText {
-                banner = nil
-            }
-        } else if direct.hasPairing {
-            if waking {
-                direct.wake()
-            } else {
-                direct.connectIfNeeded()
+                giveUpOnHostTranscript(text)
             }
         }
-        pathTitle = Self.pathTitle(for: nil, snapshot: snapshot, reachable: reachable, direct: direct.hasPairing)
-        if !reachable && (direct.phase == .up || pendingPrompt != nil) {
-            applyDirect()
-        }
+        applyConnectionNotice()
     }
 
     private func applyDirect() {
-        guard forcedScreen == nil else { return }
-        guard relayProbe || usingRelayFallback || !reachable else { return }
-        snapshot.mode = .ssh
-        if !direct.label.isEmpty {
-            snapshot.hostLabel = direct.label
+        guard forcedScreen == nil, !uiTest else { return }
+        refreshState()
+        flushPendingHostAudio()
+        flushHeldVoiceTask(announcingFailure: false)
+    }
+
+    /// Rebuilds what the Watch shows from both links, then moves the open turn along.
+    private func refreshState() {
+        guard forcedScreen == nil, !uiTest else { return }
+        let before = Set(snapshot.sessions.compactMap(\.permission?.id))
+        rebuildSnapshot()
+        pathTitle = currentPathTitle()
+        applyConnectionNotice()
+        adoptNewChat()
+        absorbOpenTranscript()
+        noteTurnProgress()
+        let arrived = snapshot.sessions.filter { session in
+            guard let id = session.permission?.id else { return false }
+            return !before.contains(id)
         }
-        pathTitle = "direct"
-        switch direct.phase {
-        case .up:
-            snapshot.sessions = direct.sessions
-            snapshot.approvalsAvailable = direct.approvalsAvailable
-            snapshot.link = .connected
-            absorbOpenTranscript(preferRestored: false)
-            if let prompt = pendingPrompt {
-                pendingPrompt = nil
-                let sessionID = pendingContinues ? resumedSessionID : nil
-                pendingContinues = false
-                direct.start(prompt, cwd: nil, sessionID: sessionID)
-                heldVoiceTask = nil
-                if voiceStatus == "Sending" {
-                    voiceStatus = "Sent"
-                }
+        guard !arrived.isEmpty else { return }
+        if arrived.contains(where: { approval.allows(chat: $0.id) }) {
+            scheduleAutoApprove()
+        }
+        if arrived.contains(where: { !approval.allows(chat: $0.id) }) {
+            WatchFeedback.notification()
+        }
+    }
+
+    private func rebuildSnapshot() {
+        let phone = transportTest == .relay ? nil : phoneSnapshot
+        let realPhone = phone?.mode == .demo ? nil : phone
+        var next: PhoneSnapshot
+        if direct.hasPairing {
+            next = realPhone ?? PhoneSnapshot(
+                mode: .ssh,
+                link: .connecting,
+                sessions: [],
+                banner: nil,
+                approvalsAvailable: true,
+                hostLabel: direct.label.isEmpty ? snapshot.hostLabel : direct.label,
+                autoApproveTools: approval.value
+            )
+            next.sessions = WatchRouting.mergeSessions(relay: direct.sessions, phone: realPhone?.sessions ?? [])
+            if direct.phase == .up && direct.hostOnline != false {
+                next.link = .connected
+                next.banner = nil
+                next.approvalsAvailable = direct.approvalsAvailable || (realPhone?.approvalsAvailable ?? false)
+            } else if reachable, let realPhone {
+                next.link = realPhone.link
+            } else if direct.phase == .up {
+                next.link = .offline
+            } else {
+                next.link = .connecting
             }
-            if usingRelayFallback, relayFallbackAnswered() {
-                usingRelayFallback = false
-                relayFallbackPrompt = ""
+            if realPhone == nil, !direct.label.isEmpty {
+                next.hostLabel = direct.label
             }
-            considerRelayProbe()
-            if let id = pendingResumeID {
-                pendingResumeID = nil
-                direct.resume(id)
+        } else if let phone {
+            next = phone
+        } else {
+            return
+        }
+        for index in next.sessions.indices {
+            let id = next.sessions[index].id
+            guard let restored = restoredTranscripts[id] else { continue }
+            if (next.sessions[index].transcript?.count ?? 0) < restored.count {
+                next.sessions[index].transcript = restored
+            } else {
+                restoredTranscripts[id] = nil
             }
-            flushPendingHostAudio()
-            flushHeldVoiceTask()
-        case .connecting:
-            snapshot.link = .connecting
-        case .failed(let text):
-            if !direct.sessions.isEmpty {
-                snapshot.sessions = direct.sessions
+        }
+        if snapshot != next {
+            snapshot = next
+        }
+    }
+
+    private func applyConnectionNotice() {
+        guard forcedScreen == nil, !uiTest else { return }
+        let notice = WatchRouting.notice(
+            hasRelayPairing: direct.hasPairing,
+            relayUp: direct.phase == .up,
+            relayTrouble: direct.inTrouble,
+            relayHostOnline: direct.hostOnline,
+            phoneReachable: reachable
+        )
+        if let notice {
+            if banner == nil || isConnectionNotice(banner) {
+                banner = notice
             }
-            snapshot.link = .offline
-            banner = text
-        case .idle:
-            break
+        } else if isConnectionNotice(banner) {
+            banner = nil
+        }
+    }
+
+    private func isConnectionNotice(_ text: String?) -> Bool {
+        text == RelayUserNotice.reconnectingText || text == RelayUserNotice.computerOfflineText
+    }
+
+    /// A chat the relay knows goes through the relay. Others follow the general path.
+    private func route(for sessionID: String?) -> WatchTurnPath {
+        let path = turnPath
+        guard path == .relay, let sessionID, direct.phase == .up, phoneSnapshot != nil, reachable else { return path }
+        if direct.sessions.contains(where: { $0.id == sessionID }) {
+            return .relay
+        }
+        return phoneSnapshot?.sessions.contains(where: { $0.id == sessionID }) == true ? .phone : .relay
+    }
+
+    private func currentPathTitle() -> String {
+        switch turnPath {
+        case .relay:
+            return "direct"
+        case .phone:
+            return snapshot.mode == .demo ? "Demo" : "via iPhone"
+        case .unavailable:
+            return snapshot.mode == .demo ? "Demo" : "Pair on iPhone first"
         }
     }
 
     private func send(_ command: PhoneCommand) {
         guard forcedScreen == nil else { return }
         if bridge.send(command) {
-            banner = nil
-        } else if direct.hasPairing {
-            banner = "The iPhone is away. This Watch is using the direct connection."
-            direct.connectIfNeeded()
+            if !isConnectionNotice(banner) {
+                banner = nil
+            }
         } else {
             banner = "Pair on iPhone first."
         }
     }
 
-    private static func pathTitle(for screen: String?, snapshot: PhoneSnapshot, reachable: Bool, direct: Bool) -> String {
+    private static func clean(_ lines: [String]) -> [String] {
+        lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    private static func pathTitle(for screen: String?, snapshot: PhoneSnapshot) -> String {
         switch screen {
         case "direct":
             return "direct"
@@ -868,15 +976,9 @@ final class WatchModel: ObservableObject {
             return "via iPhone"
         case "watch-unpaired", "pairing", "unpaired":
             return "Pair on iPhone first"
-        case .some(_):
+        default:
             return snapshot.mode == .demo ? "Demo" : "via iPhone"
-        case nil:
-            break
         }
-        if snapshot.mode == .demo { return "Demo" }
-        if reachable { return "via iPhone" }
-        if direct { return "direct" }
-        return "Pair on iPhone first"
     }
 
     private static func isUITest(arguments: [String], environment: [String: String]) -> Bool {
@@ -886,154 +988,5 @@ final class WatchModel: ObservableObject {
     private static func argument(_ name: String, arguments: [String]) -> String? {
         guard let index = arguments.firstIndex(of: name), arguments.index(after: index) < arguments.endIndex else { return nil }
         return arguments[arguments.index(after: index)]
-    }
-
-    private func considerPhoneProbe() {
-        guard phoneProbe else { return }
-        if transcriptHas("I can hear you.") { return }
-        guard WCSession.isSupported(), WCSession.default.activationState == .activated else { return }
-        let now = Date()
-        if let phoneProbeSentAt, now.timeIntervalSince(phoneProbeSentAt) < 2 { return }
-        let firstSend = phoneProbeSentAt == nil
-        phoneProbeSentAt = now
-        voiceModeActive = true
-        resumedSessionID = snapshot.sessions.first?.id ?? "echo-1"
-        if firstSend {
-            absorbOpenTranscript(preferRestored: true)
-        }
-        voiceStatus = "Sending"
-        if start("Can you hear me", continueRestored: true) {
-            voiceStatus = "Sent"
-        }
-    }
-
-    private func considerRelayProbe() {
-        guard relayProbe, direct.phase == .up else { return }
-        switch probeStep {
-        case .idle:
-            probeStep = .sentFresh
-            voiceModeActive = true
-            voiceStatus = "Sending"
-            direct.start("Can you hear me", cwd: nil, sessionID: nil)
-        case .dropped:
-            probeStep = .sentAgain
-            voiceModeActive = true
-            voiceStatus = "Sending"
-            direct.start("Again", cwd: nil, sessionID: resumedSessionID)
-        case .sentAgain:
-            guard transcriptHas("Heard again."),
-                  let seed = direct.sessions.first(where: { $0.id == "session-seed" }) else { return }
-            probeStep = .sentReopen
-            resumedSessionID = seed.id
-            voiceModeActive = true
-            absorbOpenTranscript(preferRestored: false)
-            voiceStatus = "Sending"
-            direct.start("Reopen the chat", cwd: nil, sessionID: seed.id)
-        case .sentFresh, .sentReopen:
-            break
-        }
-    }
-
-    private func transcriptHas(_ needle: String) -> Bool {
-        if voiceLine.contains(needle) || voiceLog.contains(where: { $0.contains(needle) }) {
-            return true
-        }
-        guard let id = resumedSessionID,
-              let lines = snapshot.sessions.first(where: { $0.id == id })?.transcript else { return false }
-        return lines.contains(where: { $0.contains(needle) })
-    }
-}
-
-private struct RelayFallback {
-    var prompt: String
-    var sessionID: String?
-    var token: Int
-    var lines: [String: Int]
-}
-
-private enum TransportProbeStep {
-    case idle
-    case sentFresh
-    case dropped
-    case sentAgain
-    case sentReopen
-}
-
-final class WatchBridge: NSObject, WCSessionDelegate {
-    private var onUpdate: ((PhoneSnapshot?, Bool, String?) -> Void)?
-
-    func start(_ onUpdate: @escaping (PhoneSnapshot?, Bool, String?) -> Void) {
-        self.onUpdate = onUpdate
-        guard WCSession.isSupported() else { return }
-        let session = WCSession.default
-        session.delegate = self
-        session.activate()
-    }
-
-    @discardableResult
-    func send(_ command: PhoneCommand) -> Bool {
-        guard WCSession.isSupported(), let payload = LinkCodec.encodeCommand(command) else { return false }
-        let session = WCSession.default
-        let body = ["command": payload]
-        guard session.activationState == .activated else { return false }
-        if session.isReachable {
-            session.sendMessage(body, replyHandler: nil) { _ in
-                session.transferUserInfo(body)
-            }
-            return true
-        }
-        session.transferUserInfo(body)
-        return true
-    }
-
-    func session(_ session: WCSession, activationDidCompleteWith activationState: WCSessionActivationState, error: Error?) {
-        let snapshot = decode(session.receivedApplicationContext)
-        let direct = session.receivedApplicationContext["direct"] as? String
-        let reachable = session.isReachable
-        Task { @MainActor in self.onUpdate?(snapshot, reachable, direct) }
-    }
-
-    func sessionReachabilityDidChange(_ session: WCSession) {
-        let reachable = session.isReachable
-        Task { @MainActor in self.onUpdate?(nil, reachable, nil) }
-    }
-
-    func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
-        let snapshot = decode(applicationContext)
-        let direct = applicationContext["direct"] as? String
-        Task { @MainActor in self.onUpdate?(snapshot, session.isReachable, direct) }
-    }
-
-    func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        deliver(session, message)
-    }
-
-    func session(_ session: WCSession, didReceiveMessage message: [String: Any], replyHandler: @escaping ([String: Any]) -> Void) {
-        deliver(session, message)
-        replyHandler([:])
-    }
-
-    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
-        deliver(session, userInfo)
-    }
-
-    private func deliver(_ session: WCSession, _ message: [String: Any]) {
-        if message["snapshot"] != nil || message["direct"] != nil {
-            let snapshot = decode(message)
-            let direct = message["direct"] as? String
-            let reachable = session.isReachable
-            Task { @MainActor in self.onUpdate?(snapshot, reachable, direct) }
-        }
-        deliverVoice(message)
-    }
-
-    private func deliverVoice(_ message: [String: Any]) {
-        guard let voice = message["voice"] as? String else { return }
-        Task { @MainActor in VoiceInbox.handler?(voice) }
-    }
-
-    private func decode(_ context: [String: Any]) -> PhoneSnapshot? {
-        guard let payload = context["snapshot"] as? String else { return nil }
-        return LinkCodec.decodeSnapshot(payload)
     }
 }

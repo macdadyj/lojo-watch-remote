@@ -18,7 +18,7 @@ struct WatchRootView: View {
                     VoiceChatView()
                 } else if model.forcedScreen == nil, let prompt = model.pendingDictation {
                     VoiceConfirmView(transcript: prompt, isPreview: false)
-                } else if model.forcedScreen == nil, (model.uiTest || model.transportProbe), model.voiceModeActive {
+                } else if model.forcedScreen == nil, (model.uiTest || model.isTransportTest), model.voiceModeActive {
                     // Skip the animated push. A cold watchOS simulator never idles, and the history snapshot times out.
                     VoiceChatView()
                 } else {
@@ -47,7 +47,7 @@ struct WatchRootView: View {
         .environment(\.colorScheme, scheme)
         .preferredColorScheme(model.appearance.colorScheme)
         .transaction { transaction in
-            if model.uiTest || model.transportProbe {
+            if model.uiTest || model.isTransportTest {
                 transaction.disablesAnimations = true
             }
         }
@@ -69,16 +69,12 @@ struct WatchRootView: View {
 struct WatchListView: View {
     @EnvironmentObject private var model: WatchModel
     @Environment(\.colorScheme) private var scheme
-    @ObservedObject private var preferences = VoicePreferences.shared
 
     var body: some View {
         SpeakBarPage {
             sessionList
         } bar: {
             VoiceHomeBar()
-        }
-        .onChange(of: preferences.autoApproveTools) { _, enabled in
-            model.setAutoApprove(enabled)
         }
         .watchPage()
         .toolbar(.hidden, for: .navigationBar)

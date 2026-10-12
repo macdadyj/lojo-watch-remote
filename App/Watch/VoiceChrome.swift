@@ -93,6 +93,71 @@ struct VoiceConversationBar: View {
     }
 }
 
+/// One tap to answer a tool request in the open chat. Saying allow, then yes, does the same.
+struct ToolApprovalCard: View {
+    var session: GrokSession
+    var permission: PermissionRequest
+    @EnvironmentObject private var model: WatchModel
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(permission.title.isEmpty ? "Grok wants to use a tool" : permission.title)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                .fixedSize(horizontal: false, vertical: true)
+            if !permission.detail.isEmpty {
+                Text(permission.detail)
+                    .font(.caption2)
+                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                    .lineLimit(3)
+            }
+            HStack(spacing: 4) {
+                Button("Deny") {
+                    WatchFeedback.failure()
+                    settle()
+                    model.deny(session)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityIdentifier("tool.deny")
+                Button("Allow") {
+                    WatchFeedback.success()
+                    settle()
+                    model.allow(session)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .accessibilityIdentifier("tool.allow")
+            }
+            Button("Always allow in this chat") {
+                WatchFeedback.success()
+                settle()
+                model.setChatAutoApprove(true, for: session.id)
+                model.allow(session)
+            }
+            .font(.caption2)
+            .buttonStyle(.borderless)
+            .accessibilityIdentifier("tool.always")
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(LojoTheme.accent, lineWidth: 1)
+        )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("tool.card")
+    }
+
+    private func settle() {
+        if model.pendingAllowSessionID == session.id {
+            model.pendingAllowSessionID = nil
+            model.voiceNote = nil
+            model.voiceNoteSessionID = nil
+        }
+    }
+}
+
 /// watchOS has no Menu. These actions open on their own page so the transcript stays bubbles.
 private struct ChatActionsPage: View {
     var onNewTask: () -> Void
@@ -106,6 +171,17 @@ private struct ChatActionsPage: View {
                     model.voiceModeActive = false
                 }
                 .accessibilityIdentifier("chat.back")
+                if let id = model.resumedSessionID {
+                    Toggle(isOn: Binding(
+                        get: { model.autoApproves(id) },
+                        set: { model.setChatAutoApprove($0, for: id) }
+                    )) {
+                        Text("Auto-approve this chat")
+                            .font(.caption2)
+                    }
+                    .accessibilityIdentifier("chat.autoApprove")
+                    .accessibilityHint("Allows this chat's tool calls without a tap. Settings has the default.")
+                }
                 Button("End chat") {
                     model.endChat()
                 }
