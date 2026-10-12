@@ -134,6 +134,12 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertEqual(WatchRouting.relayHostOnline(relayUp: false, relayFailed: true, failures: 0, lastHostOnline: true), false)
     }
 
+    func testDictationAddsToWhatWasTyped() {
+        XCTAssertEqual(DictationText.merge(typed: "", spoken: "summarize the changes"), "summarize the changes")
+        XCTAssertEqual(DictationText.merge(typed: "Please ", spoken: "summarize the changes"), "Please summarize the changes")
+        XCTAssertEqual(DictationText.merge(typed: "Please", spoken: "  "), "Please")
+    }
+
     func testAutoApproveIsOnUntilTurnedOff() {
         XCTAssertTrue(WatchApprovalSetting().value)
         XCTAssertTrue(WatchApprovalSetting().allows(chat: "any"))

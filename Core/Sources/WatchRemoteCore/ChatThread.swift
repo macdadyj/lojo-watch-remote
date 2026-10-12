@@ -29,6 +29,17 @@ public enum SessionKeepalive {
     }
 }
 
+/// Dictation fills the composer without throwing away what was already typed there.
+public enum DictationText {
+    public static func merge(typed: String, spoken: String) -> String {
+        let base = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        let heard = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if base.isEmpty { return heard }
+        if heard.isEmpty { return base }
+        return base + " " + heard
+    }
+}
+
 public struct ApprovalPreference: Equatable, Sendable {
     public var globalAutoApprove: Bool
     public var sessionOverride: Bool?

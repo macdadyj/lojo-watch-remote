@@ -31,6 +31,7 @@ struct ComposeView: View {
     @EnvironmentObject private var store: RemoteStore
     @Environment(\.dismiss) private var dismiss
     @StateObject private var dictation = ComposerDictation()
+    @FocusState private var promptFocused: Bool
     @State private var prompt = ""
 
     var body: some View {
@@ -41,6 +42,7 @@ struct ComposeView: View {
                 TextField("Dictate or type a task", text: $prompt, axis: .vertical)
                     .lineLimit(8, reservesSpace: true)
                     .textFieldStyle(.roundedBorder)
+                    .focused($promptFocused)
                     .keyboardType(.default)
                     .textContentType(nil)
                     .textInputAutocapitalization(.sentences)
@@ -48,17 +50,28 @@ struct ComposeView: View {
                     .frame(minHeight: 140, alignment: .topLeading)
                     .accessibilityIdentifier("chat.prompt")
                 Button {
-                    dictation.toggle { spoken in
-                        prompt = spoken
+                    promptFocused = false
+                    dictation.toggle(appendingTo: prompt) { text in
+                        prompt = text
                     }
                 } label: {
-                    Label(dictation.listening ? "Stop dictation" : "Dictate", systemImage: dictation.listening ? "stop.circle" : "mic")
+                    Label(dictation.listening ? "Stop dictation" : "Dictate", systemImage: dictation.listening ? "stop.circle.fill" : "mic.fill")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
                 .accessibilityIdentifier("chat.dictate")
+                if let problem = dictation.problem {
+                    Text(problem)
+                        .font(.footnote)
+                        .foregroundStyle(LojoTheme.danger)
+                        .accessibilityIdentifier("chat.dictateProblem")
+                }
                 Text(store.cwd.isEmpty ? "Working directory: the computer’s home" : "Working directory: \(store.cwd)")
                     .font(.footnote)
                     .foregroundStyle(LojoTheme.secondaryText)
                 Button("Start task") {
+                    dictation.stop()
                     let text = prompt
                     dismiss()
                     Task { await store.start(prompt: text) }

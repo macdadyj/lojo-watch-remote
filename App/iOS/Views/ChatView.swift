@@ -44,7 +44,7 @@ struct ChatListView: View {
             }
             .sheet(isPresented: $store.showCompose) {
                 ComposeView()
-                    .presentationDetents([.medium, .large])
+                    .presentationDetents([.large])
                     .presentationDragIndicator(.visible)
             }
             .task {
@@ -497,8 +497,9 @@ struct ChatThreadView: View {
                 )
                 .accessibilityIdentifier("chat.composer")
             Button {
-                dictation.toggle { spoken in
-                    draft = spoken
+                composerFocused = false
+                dictation.toggle(appendingTo: draft) { text in
+                    draft = text
                 }
             } label: {
                 Image(systemName: dictation.listening ? "stop.circle.fill" : "mic.circle.fill")
@@ -517,6 +518,16 @@ struct ChatThreadView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(canvas)
+        .overlay(alignment: .top) {
+            if let problem = dictation.problem {
+                Text(problem)
+                    .font(.footnote)
+                    .foregroundStyle(LojoTheme.danger)
+                    .padding(.horizontal, 16)
+                    .offset(y: -20)
+                    .accessibilityIdentifier("chat.dictateProblem")
+            }
+        }
     }
 }
 

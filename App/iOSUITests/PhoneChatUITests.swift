@@ -85,6 +85,33 @@ final class PhoneChatUITests: XCTestCase {
         shot(app, "phone-new-chat")
     }
 
+    /// The big box on the new-chat screen: Dictate fills it after what was typed, and the task starts.
+    func testNewChatDictationFillsTheComposeBox() throws {
+        let app = launch(extra: ["-WatchRemoteDictation", "summarize the open changes"])
+        let newChat = app.buttons["chat.new"]
+        XCTAssertTrue(newChat.waitForExistence(timeout: 8))
+        newChat.tap()
+        let prompt = composer(app, identifier: "chat.prompt")
+        XCTAssertTrue(prompt.waitForExistence(timeout: 4))
+        prompt.tap()
+        prompt.typeText("Please")
+        let dictate = app.buttons["chat.dictate"]
+        XCTAssertTrue(dictate.waitForExistence(timeout: 4), "the new-chat box has no Dictate button")
+        XCTAssertTrue(dictate.isHittable, "Dictate is hidden on the new-chat screen")
+        dictate.tap()
+        let expected = "Please summarize the open changes"
+        let filled = NSPredicate { _, _ in (prompt.value as? String) == expected }
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: filled, object: nil)], timeout: 8),
+            .completed,
+            "dictation did not fill the new-chat box: \(prompt.value as? String ?? "")"
+        )
+        XCTAssertFalse(app.staticTexts["chat.dictateProblem"].exists, "dictation reported a problem")
+        shot(app, "phone-new-chat-dictated")
+        app.buttons["chat.start"].tap()
+        XCTAssertTrue(app.staticTexts["Done. \(expected)"].waitForExistence(timeout: 8), "the dictated task got no reply")
+    }
+
     func testBackgroundForegroundKeepsTheThreadResponsive() throws {
         let app = launch()
         openIdle(app)
@@ -182,9 +209,9 @@ final class PhoneChatUITests: XCTestCase {
         shot(app, "phone-tools-collapsed")
     }
 
-    private func launch() -> XCUIApplication {
+    private func launch(extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-WatchRemoteUITest"]
+        app.launchArguments = ["-WatchRemoteUITest"] + extra
         app.launch()
         return app
     }
