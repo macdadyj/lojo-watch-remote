@@ -384,22 +384,43 @@ struct VoiceChatView: View {
         }
     }
 
-    /// Stays above the scrolling history so the way back is always one tap away.
+    /// Stays above the scrolling history so the way back and the chat's name are always on
+    /// screen. History scrolled up underneath can never cover either.
     private var backToChats: some View {
-        Button {
-            model.voiceModeActive = false
-        } label: {
-            Label("Chats", systemImage: "chevron.backward")
-                .labelStyle(.titleAndIcon)
-                .font(.caption2.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 26, alignment: .leading)
-                .contentShape(Rectangle())
+        HStack(spacing: 6) {
+            Button {
+                model.voiceModeActive = false
+            } label: {
+                Label("Chats", systemImage: "chevron.backward")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption2.weight(.semibold))
+                    .frame(minHeight: 26, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(LojoTheme.accent)
+            .fixedSize()
+            .accessibilityLabel("Back to chats")
+            .accessibilityIdentifier("chat.toList")
+            if !chatTitle.isEmpty {
+                titleText
+            } else {
+                Spacer(minLength: 0)
+            }
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(LojoTheme.accent)
         .padding(.horizontal, 10)
-        .accessibilityLabel("Back to chats")
-        .accessibilityIdentifier("chat.toList")
+    }
+
+    private var titleText: some View {
+        Text(chatTitle)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(LojoTheme.readableSecondary(scheme))
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("voice.title")
+            .onLongPressGesture(minimumDuration: 0.6) {
+                model.toggleTransportDiagnostics()
+            }
     }
 
     private var showsRestoredCaption: Bool {
@@ -592,16 +613,8 @@ struct VoiceChatView: View {
         let lines = conversationLines
         let blocks = ChatTranscript.blocks(from: lines, toolsRunning: false)
         return VStack(alignment: .leading, spacing: bubbleSpacing) {
-            if !chatTitle.isEmpty {
-                Text(chatTitle)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("voice.title")
-                    .onLongPressGesture(minimumDuration: 0.6) {
-                        model.toggleTransportDiagnostics()
-                    }
+            if model.forcedScreen == "voice-loop", !chatTitle.isEmpty {
+                titleText
             }
             if model.forcedScreen == "voice-loop" {
                 Text("Scripted check. The microphone stays off.")
