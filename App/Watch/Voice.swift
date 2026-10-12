@@ -30,7 +30,7 @@ final class VoicePreferences: ObservableObject {
         didSet { UserDefaults.standard.set(pauseSends, forKey: Keys.pauseSends) }
     }
 
-    /// Off until turned on. Tool prompts are allowed without a tap.
+    /// On until turned off. Tool prompts are allowed without a tap.
     @Published var autoApproveTools: Bool {
         didSet { UserDefaults.standard.set(autoApproveTools, forKey: Keys.autoApprove) }
     }
@@ -54,7 +54,7 @@ final class VoicePreferences: ObservableObject {
         } else {
             pauseSends = defaults.bool(forKey: Keys.pauseSends)
         }
-        autoApproveTools = defaults.bool(forKey: Keys.autoApprove)
+        autoApproveTools = defaults.object(forKey: Keys.autoApprove) == nil ? true : defaults.bool(forKey: Keys.autoApprove)
         actionHintSeen = defaults.bool(forKey: Keys.actionHintSeen)
     }
 
@@ -62,7 +62,7 @@ final class VoicePreferences: ObservableObject {
         static let autoSend = "watch.voice.autoSend"
         static let readAloud = "watch.voice.readAloud"
         static let pauseSends = "watch.voice.pauseSends"
-        static let autoApprove = "watch.voice.autoApprove"
+        static let autoApprove = "watch.voice.autoApprove.v2"
         static let actionHintSeen = "watch.voice.actionHintSeen"
     }
 }
@@ -286,15 +286,6 @@ struct VoiceApprovalMic: View {
             .buttonStyle(QuietButtonStyle(compact: true))
             .accessibilityLabel("Voice command")
             .accessibilityHint("Say allow, then yes. Deny and stop send on the first word. I'm done or the Action Button sends.")
-
-            if model.pendingAllowSessionID == session.id {
-                Button("Yes") {
-                    model.confirmPendingAllow(session)
-                }
-                .buttonStyle(PrimaryButtonStyle(compact: true))
-                .accessibilityLabel("Yes")
-                .accessibilityHint("Confirms the spoken allow. Saying yes does this too.")
-            }
 
             if model.voiceNoteSessionID == session.id, let note = model.voiceNote, !note.isEmpty {
                 Text(note)
@@ -649,16 +640,6 @@ struct VoiceChatView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("voice.diagnostics")
             }
-            if model.pendingAllowSessionID != nil {
-                Button("Yes") {
-                    model.confirmSpokenAllow()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .fixedSize(horizontal: true, vertical: false)
-                .accessibilityLabel("Yes")
-                .accessibilityHint("Confirms the spoken allow. Saying yes does this too.")
-            }
             if model.dictationOffered {
                 Button("Dictate") {
                     model.presentDictationSheet()
@@ -900,9 +881,6 @@ extension WatchModel {
     }
 
     func endVoiceConversation() {
-        declinedVoicePermissionID = pendingAllowSessionID.flatMap { id in
-            snapshot.sessions.first { $0.id == id }?.permission?.id
-        } ?? snapshot.sessions.first { $0.permission != nil }?.permission?.id
         voiceModeActive = false
         resumedSessionID = nil
         pendingAllowSessionID = nil
@@ -981,17 +959,9 @@ extension WatchModel {
             voiceLine = ""
         }
         appIsActive = true
-        declinedVoicePermissionID = nil
         dictationOffered = false
         missedTurns = 0
         voiceModeActive = true
-        if let session = snapshot.sessions.first(where: { $0.permission != nil }),
-           !autoApproves(session.id),
-           pendingAllowSessionID == nil,
-           spokenPermissionIDs.contains(session.permission?.id ?? "") == false {
-            beginAllowReadback(for: session, haptic: false)
-            return
-        }
         applyListenChrome()
         DispatchQueue.main.async { [weak self] in
             self?.armListener()
@@ -1208,27 +1178,6 @@ extension WatchModel {
         }
     }
 
-    func confirmSpokenAllow() {
-        guard let id = pendingAllowSessionID,
-              let session = snapshot.sessions.first(where: { $0.id == id }),
-              session.permission != nil else {
-            pendingAllowSessionID = nil
-            reply("Nothing is waiting for approval.", listenAfter: voiceModeActive)
-            return
-        }
-        confirmPendingAllow(session)
-    }
-
-    func confirmPendingAllow(_ session: GrokSession) {
-        guard pendingAllowSessionID == session.id else { return }
-        pendingAllowSessionID = nil
-        voiceNote = nil
-        voiceNoteSessionID = nil
-        WatchFeedback.success()
-        allow(session)
-        reply("Allowed.", listenAfter: voiceModeActive)
-    }
-
     func noteVoiceSnapshot(previous: PhoneSnapshot, current: PhoneSnapshot) {
         guard forcedScreen == nil else { return }
         let speakResults = VoicePreferences.shared.readAloud || voiceModeActive
@@ -1236,16 +1185,6 @@ extension WatchModel {
         let result = speakResults
             ? VoiceResultPicker.latestResult(previous: previous.sessions, current: current.sessions, includeNew: includeNew)
             : nil
-        let oldIDs = Set(previous.sessions.compactMap(\.permission?.id))
-        let arrived = current.sessions.first { session in
-            guard let permission = session.permission else { return false }
-            return !oldIDs.contains(permission.id)
-        }
-        if let arrived, hasLiveSnapshot, appIsActive, arrived.permission?.id != declinedVoicePermissionID,
-           !autoApproves(arrived.id) {
-            considerSpokenApproval(for: arrived)
-            return
-        }
         // Never cut the user off: a reply that lands mid-utterance stays a bubble and is not read.
         let userIsTalking = capture.isRunning || prepareID != nil || expectID != nil
         if let result, !userIsTalking {
@@ -1261,21 +1200,6 @@ extension WatchModel {
                 self.relinquishListen(status: "")
             }
         }
-    }
-
-    private func beginAllowReadback(for session: GrokSession?, haptic: Bool = true) {
-        guard let session, let permission = session.permission else {
-            reply("Nothing is waiting for approval.", listenAfter: voiceModeActive)
-            return
-        }
-        pendingAllowSessionID = session.id
-        let line = VoiceAllowScript.readback(title: permission.title, detail: permission.detail)
-        voiceNote = line
-        voiceNoteSessionID = session.id
-        if haptic {
-            WatchFeedback.notification()
-        }
-        reply(line, listenAfter: true)
     }
 
     private func turnContext(focused: GrokSession?) -> VoiceTurnContext {
@@ -1359,18 +1283,6 @@ extension WatchModel {
 
     private func session(_ id: String) -> GrokSession? {
         snapshot.sessions.first { $0.id == id }
-    }
-
-    @discardableResult
-    private func considerSpokenApproval(for session: GrokSession) -> Bool {
-        guard hasLiveSnapshot, appIsActive, forcedScreen == nil else { return false }
-        guard let permission = session.permission, !autoApproves(session.id) else { return false }
-        if permission.id == declinedVoicePermissionID { return false }
-        if spokenPermissionIDs.contains(permission.id) { return false }
-        spokenPermissionIDs.insert(permission.id)
-        voiceModeActive = true
-        beginAllowReadback(for: session, haptic: false)
-        return true
     }
 
     func schedulePrepareTimeout(_ id: String) {

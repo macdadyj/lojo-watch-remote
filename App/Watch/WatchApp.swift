@@ -39,12 +39,13 @@ enum WatchTransportTest: String {
 
 @MainActor
 enum WatchApprovalStore {
-    private static let key = "watch.approval.setting"
+    /// v2 starts everyone at on. The first key saved the old default (off) whether or not anyone chose it.
+    private static let key = "watch.approval.setting.v2"
 
     static func load() -> WatchApprovalSetting {
         guard let data = UserDefaults.standard.data(forKey: key),
               let setting = try? JSONDecoder().decode(WatchApprovalSetting.self, from: data) else {
-            return WatchApprovalSetting(value: VoicePreferences.shared.autoApproveTools)
+            return WatchApprovalSetting()
         }
         return setting
     }
@@ -120,9 +121,6 @@ final class WatchModel: ObservableObject {
     var dictationPresented = false
     var missedTurns = 0
     var appIsActive = false
-    var hasLiveSnapshot = false
-    var declinedVoicePermissionID: String?
-    var spokenPermissionIDs = Set<String>()
     private let bridge = WatchBridge()
     private let direct = DirectSession()
     /// The iPhone's latest snapshot. Relay sessions are merged over it.
@@ -800,7 +798,6 @@ final class WatchModel: ObservableObject {
             }
         }
         if let incoming {
-            hasLiveSnapshot = true
             phoneSnapshot = incoming
             if approval.notePhone(incoming.autoApproveTools) {
                 direct.autoApproveDefault = approval.value

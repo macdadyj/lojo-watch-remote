@@ -93,7 +93,8 @@ struct VoiceConversationBar: View {
     }
 }
 
-/// One tap to answer a tool request in the open chat. Saying allow, then yes, does the same.
+/// One tap to answer a tool request in the open chat. It names the kind of action only;
+/// the raw command never reaches the Watch screen. Saying allow, then yes, does the same.
 struct ToolApprovalCard: View {
     var session: GrokSession
     var permission: PermissionRequest
@@ -102,16 +103,11 @@ struct ToolApprovalCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(permission.title.isEmpty ? "Grok wants to use a tool" : permission.title)
+            Text("Allow: \(ChatTranscript.approvalAction(permission.title))?")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                .fixedSize(horizontal: false, vertical: true)
-            if !permission.detail.isEmpty {
-                Text(permission.detail)
-                    .font(.caption2)
-                    .foregroundStyle(LojoTheme.readableSecondary(scheme))
-                    .lineLimit(3)
-            }
+                .lineLimit(2)
+                .accessibilityIdentifier("tool.title")
             HStack(spacing: 4) {
                 Button("Deny") {
                     WatchFeedback.failure()
@@ -130,7 +126,7 @@ struct ToolApprovalCard: View {
                 .controlSize(.small)
                 .accessibilityIdentifier("tool.allow")
             }
-            Button("Always allow in this chat") {
+            Button("Always allow here") {
                 WatchFeedback.success()
                 settle()
                 model.setChatAutoApprove(true, for: session.id)

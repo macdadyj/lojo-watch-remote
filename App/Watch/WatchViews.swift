@@ -334,7 +334,7 @@ struct WatchDetailView: View {
                 }
                 .accessibilityElement(children: .combine)
                 watchActions
-                Text(current.summary)
+                Text(ChatTranscript.lastMessage(summary: current.summary, transcript: nil))
                     .font(.caption)
                     .foregroundStyle(LojoTheme.readablePrimary(scheme))
                     .fixedSize(horizontal: false, vertical: true)
@@ -345,16 +345,10 @@ struct WatchDetailView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if let permission = current.permission {
-                    Text(permission.title)
+                    Text("Allow: \(ChatTranscript.approvalAction(permission.title))?")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(LojoTheme.readablePrimary(scheme))
                         .fixedSize(horizontal: false, vertical: true)
-                    if !permission.detail.isEmpty {
-                        Text(permission.detail)
-                            .font(.caption2)
-                            .foregroundStyle(LojoTheme.readableSecondary(scheme))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
             }
             .padding(.horizontal, 6)

@@ -551,17 +551,25 @@ final class WatchRemoteCoreTests: XCTestCase {
             .newTask("Ask Grok to fix the tests")
         )
 
-        let line = VoiceAllowScript.readback(title: "Edit the file", detail: "Write the tests")
+        let line = VoiceAllowScript.readback(title: "Edit the file")
         XCTAssertTrue(line.contains("Edit the file"))
-        XCTAssertTrue(line.contains("Write the tests"))
         XCTAssertTrue(line.hasSuffix(VoiceAllowScript.confirmCue))
         XCTAssertNotEqual(VoiceDialogueMatcher.interpret(line, phase: .idle), .requestAllow)
         XCTAssertNotEqual(VoiceDialogueMatcher.interpret(line, phase: .awaitingAllowYes), .confirmAllow)
         XCTAssertNotEqual(VoiceDialogueMatcher.interpret(line, phase: .awaitingAllowYes), .requestAllow)
 
-        let long = VoiceAllowScript.readback(title: String(repeating: "word ", count: 80), detail: "detail")
+        let long = VoiceAllowScript.readback(title: String(repeating: "word ", count: 80))
         XCTAssertTrue(long.hasSuffix(VoiceAllowScript.confirmCue))
-        XCTAssertLessThanOrEqual(long.count, 180)
+        XCTAssertLessThanOrEqual(long.count, 60)
+
+        let command = "Execute `timedatectl 2>/dev/null | head -20; curl -s --max-time 5 https://example.com/`"
+        XCTAssertEqual(VoiceAllowScript.readback(title: command), "Allow: Run a command. \(VoiceAllowScript.confirmCue)")
+        XCTAssertEqual(ChatTranscript.approvalAction(command), "Run a command")
+        XCTAssertEqual(ChatTranscript.approvalAction("Read notes.txt"), "Read notes.txt")
+        XCTAssertEqual(ChatTranscript.approvalAction("Web search for the forecast"), "Search the web")
+        XCTAssertEqual(ChatTranscript.approvalAction(""), "Use a tool")
+        XCTAssertEqual(ChatTranscript.approvalAction("Fetch https://example.com/a/very/long/path"), "Use a tool")
+        XCTAssertEqual(ChatTranscript.lastMessage(summary: "Auto-approved: \(command)", transcript: nil), "Ran a command")
 
         XCTAssertEqual(
             VoiceAllowScript.matchingLabel(spoken: "example host", labels: ["example-host"]),

@@ -139,7 +139,7 @@ public enum VoiceTurnPlanner {
         }
         return VoiceTurnEffect(
             command: .requestAllow,
-            spoken: VoiceAllowScript.readback(title: permission.title, detail: permission.detail),
+            spoken: VoiceAllowScript.readback(title: permission.title),
             phase: .awaitingAllowYes,
             pendingAllowSessionID: session.id,
             listenAgain: true,

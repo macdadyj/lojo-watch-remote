@@ -40,19 +40,9 @@ public enum VoiceAllowScript {
     public static let confirmCue = "Say yes to confirm."
 
     /// Spoken and shown before a yes can approve. The cue is always the end of the line.
-    public static func readback(title: String, detail: String) -> String {
-        let name = collapsed(title)
-        let extra = collapsed(detail)
-        let subject = name.isEmpty ? "this action" : name
-        let body: String
-        if extra.isEmpty || extra == subject {
-            body = "Allow \(subject)."
-        } else {
-            body = "Allow \(subject). \(extra)."
-        }
-        let room = 180 - confirmCue.count - 1
-        let clipped = body.count > room ? PhoneSnapshot.clip(body, limit: max(room, 1)) : body
-        return clipped + " " + confirmCue
+    /// It names the kind of action, never the raw command the tool would run.
+    public static func readback(title: String) -> String {
+        "Allow: \(ChatTranscript.approvalAction(title)). \(confirmCue)"
     }
 
     public static func sessionsSpeech(_ sessions: [GrokSession]) -> String {

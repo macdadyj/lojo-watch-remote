@@ -127,7 +127,8 @@ public struct WatchApprovalSetting: Codable, Equatable, Sendable {
     public var awaitingPhone: Bool
     public var chats: [String: Bool]
 
-    public init(value: Bool = false, lastPhone: Bool? = nil, awaitingPhone: Bool = false, chats: [String: Bool] = [:]) {
+    /// On until someone turns it off: tool calls run without a tap.
+    public init(value: Bool = true, lastPhone: Bool? = nil, awaitingPhone: Bool = false, chats: [String: Bool] = [:]) {
         self.value = value
         self.lastPhone = lastPhone
         self.awaitingPhone = awaitingPhone

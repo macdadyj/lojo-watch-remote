@@ -111,8 +111,36 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertFalse(WatchRouting.mentions("Ready", in: lines))
     }
 
+    func testAPollReplyThatSaysMoreIsWaitingStillDecodes() throws {
+        let reply = Data(#"{"ok":true,"epoch":"e1","host":true,"frames":[{"seq":1,"data":"AA=="}],"more":true}"#.utf8)
+        XCTAssertEqual(try XCTUnwrap(RelayPoll.decode(reply)).frames?.map(\.seq), [1])
+    }
+
+    func testALostPollAfterWristUpDoesNotSendTurnsToTheIPhone() {
+        func path(failures: Int, up: Bool = false) -> WatchTurnPath {
+            WatchRouting.path(
+                hasRelayPairing: true,
+                relayHostOnline: WatchRouting.relayHostOnline(relayUp: up, relayFailed: false, failures: failures, lastHostOnline: true),
+                phoneReachable: true,
+                phoneActivated: true
+            )
+        }
+        XCTAssertEqual(path(failures: 0, up: true), .relay)
+        XCTAssertEqual(path(failures: 1), .relay)
+        XCTAssertEqual(path(failures: RelayPoll.unreachableAfterFailures - 1), .relay)
+        XCTAssertEqual(path(failures: RelayPoll.unreachableAfterFailures), .phone, "a relay that stays unreachable hands turns to the iPhone")
+        XCTAssertNil(WatchRouting.relayHostOnline(relayUp: false, relayFailed: false, failures: 0, lastHostOnline: nil))
+        XCTAssertEqual(WatchRouting.relayHostOnline(relayUp: true, relayFailed: false, failures: 0, lastHostOnline: false), false)
+        XCTAssertEqual(WatchRouting.relayHostOnline(relayUp: false, relayFailed: true, failures: 0, lastHostOnline: true), false)
+    }
+
+    func testAutoApproveIsOnUntilTurnedOff() {
+        XCTAssertTrue(WatchApprovalSetting().value)
+        XCTAssertTrue(WatchApprovalSetting().allows(chat: "any"))
+    }
+
     func testApprovalSettingTakesTheLatestChangeFromEitherDevice() {
-        var setting = WatchApprovalSetting()
+        var setting = WatchApprovalSetting(value: false)
         XCTAssertTrue(setting.notePhone(true))
         XCTAssertTrue(setting.allows(chat: nil))
         XCTAssertFalse(setting.notePhone(true))

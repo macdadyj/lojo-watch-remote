@@ -93,6 +93,9 @@ public enum ChatTranscript {
             return spokenText(last)
         }
         let summaryText = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isToolCard(summaryText) || isNote(summaryText) {
+            return toolSummary(toolRawTitle(summaryText))
+        }
         return summaryText.isEmpty ? "Empty chat" : summaryText
     }
 
@@ -170,6 +173,22 @@ public enum ChatTranscript {
         if folded.contains("|") { return "Used a tool" }
         if name.count <= 28, !folded.contains("http"), !name.contains("\n") { return name }
         return "Used a tool"
+    }
+
+    /// What a tool request would do, in a few words, for the approval card and the spoken allow.
+    public static func approvalAction(_ title: String) -> String {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let folded = name.lowercased()
+        if name.isEmpty || folded == "tool" { return "Use a tool" }
+        if folded.contains("web search") || folded.contains("search the web") { return "Search the web" }
+        if folded.contains("grep") || folded.contains("glob") || folded.contains("search files") { return "Search files" }
+        if folded.contains("curl") || folded.contains("execute") || folded.contains("python")
+            || folded.contains("bash") || folded.contains("shell") || folded.contains("`") || folded.contains("|")
+            || folded.hasPrefix("run ") {
+            return "Run a command"
+        }
+        if name.count <= 28, !folded.contains("http"), !name.contains("\n") { return name }
+        return "Use a tool"
     }
 
     public static func toolDetail(_ title: String, limit: Int = 160) -> String {
