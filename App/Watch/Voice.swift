@@ -1004,24 +1004,19 @@ extension WatchModel {
         return session.activationState == .activated && session.isReachable
     }
 
-    func setActive(_ active: Bool) {
+    /// `background` is false while the wrist is down with the app still in front. The relay keeps
+    /// polling then, so a reply lands while the screen is dim.
+    func setActive(_ active: Bool, background: Bool) {
         appIsActive = active
         if !uiTest {
-            directNoteDisplay(active)
+            directNoteDisplay(!background)
         }
         guard forcedScreen == nil, !uiTest else { return }
         if !active {
             holdThroughWristDown()
             return
         }
-        let resumeListen = systemPausedListen || capture.isSuspended || capture.isRunning
         resumeAfterWristUp()
-        if resumeListen || isManualListenActive {
-            return
-        }
-        if let session = snapshot.sessions.first(where: { $0.permission != nil }) {
-            considerSpokenApproval(for: session)
-        }
     }
 
     func flushHeldVoiceTask(announcingFailure: Bool = true) {

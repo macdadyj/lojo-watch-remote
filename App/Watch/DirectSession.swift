@@ -141,21 +141,18 @@ final class DirectSession: ObservableObject {
     var hasPairing: Bool { pairing != nil }
     var label: String { pairing?.label ?? "" }
     var hasPendingSends: Bool { !outbox.isEmpty }
-    /// The relay failed at least once since it last answered.
-    var inTrouble: Bool { phase == .connecting && failures > 0 }
+    /// The relay has failed often enough since it last answered to say so on screen.
+    var inTrouble: Bool { phase == .connecting && failures >= RelayPoll.troubleAfterFailures }
 
-    /// Whether the computer can be reached through the relay right now. Nil while unknown.
+    /// Whether turns should count on the computer through the relay. Nil while unknown.
+    /// A poll lost to wrist-down or Bluetooth does not make the computer offline.
     var hostReachable: Bool? {
-        switch phase {
-        case .up:
-            return hostOnline
-        case .failed:
-            return false
-        case .connecting:
-            return failures >= 2 ? false : nil
-        case .idle:
-            return nil
-        }
+        WatchRouting.relayHostOnline(relayUp: phase == .up, relayFailed: hasFailed, failures: failures, lastHostOnline: hostOnline)
+    }
+
+    private var hasFailed: Bool {
+        if case .failed = phase { return true }
+        return false
     }
 
     var phaseLabel: String {
@@ -226,15 +223,14 @@ final class DirectSession: ObservableObject {
         }
     }
 
+    /// The app is in front again. A poll parked or stalled while the Watch slept is replaced at
+    /// once. The cursor is kept, so the first answer carries every frame the relay held meanwhile.
     func wake() {
         displayOff = false
         guard hasPairing, !giveUp else { return }
         failures = 0
-        if loop == nil {
-            startLoop()
-        } else {
-            send(listMessage())
-        }
+        enqueue(listMessage())
+        startLoop()
     }
 
     func refresh() {
@@ -436,15 +432,13 @@ final class DirectSession: ObservableObject {
         }
     }
 
+    /// One lost poll is normal after a wrist raise. Only a second one in a row is shown.
     private func noteTrouble() {
-        guard !displayOff else { return }
-        if phase != .connecting || failures == 1 {
-            phase = .connecting
-            onBanner?(RelayUserNotice.reconnectingText)
-            onChange?()
-        } else if failures == 2 {
-            onChange?()
-        }
+        guard !displayOff, failures >= RelayPoll.troubleAfterFailures else { return }
+        guard phase != .connecting || failures == RelayPoll.troubleAfterFailures else { return }
+        phase = .connecting
+        onBanner?(RelayUserNotice.reconnectingText)
+        onChange?()
     }
 
     private func pause(_ seconds: Double, _ current: Int) async {

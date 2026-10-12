@@ -52,11 +52,11 @@ struct WatchRootView: View {
             }
         }
         .onAppear {
-            model.setActive(scenePhase == .active)
+            model.setActive(scenePhase == .active, background: scenePhase == .background)
             model.consumeUITestLaunch()
         }
         .onChange(of: scenePhase) { _, phase in
-            model.setActive(phase == .active)
+            model.setActive(phase == .active, background: phase == .background)
             guard phase == .active else { return }
             model.wake()
         }

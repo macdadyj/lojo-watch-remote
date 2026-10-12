@@ -27,6 +27,19 @@ public enum WatchRouting {
         return .unavailable
     }
 
+    /// What routing believes about the computer behind the relay. The last thing the relay said
+    /// stands through a few lost polls and through wrist-down. Sending a turn to a suspended
+    /// iPhone app instead leaves it at "Sent" with no reply.
+    public static func relayHostOnline(relayUp: Bool, relayFailed: Bool, failures: Int, lastHostOnline: Bool?) -> Bool? {
+        if relayFailed {
+            return false
+        }
+        if !relayUp && failures >= RelayPoll.unreachableAfterFailures {
+            return false
+        }
+        return lastHostOnline
+    }
+
     /// One session list from the relay and the iPhone. Relay rows win for the same id because
     /// they come straight from the computer; the longer transcript wins when only one side has it.
     public static func mergeSessions(relay: [GrokSession], phone: [GrokSession]) -> [GrokSession] {

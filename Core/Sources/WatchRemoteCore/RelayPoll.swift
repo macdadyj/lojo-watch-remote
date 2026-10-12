@@ -9,6 +9,11 @@ import Foundation
 public enum RelayPoll {
     public static let maxWaitMilliseconds = 25_000
     public static let maxFramesPerRequest = 16
+    /// Failed polls in a row before the Watch says it is reconnecting. The first poll after a
+    /// wrist raise often dies with the suspended request, and that is not worth a banner.
+    public static let troubleAfterFailures = 2
+    /// Failed polls in a row, roughly 15 seconds of backoff, before turns stop counting on the relay.
+    public static let unreachableAfterFailures = 4
 
     /// The pairing stores the host's `wss://…/v1/room` address. The Watch polls the same relay over https.
     public static func pollURL(fromRelayURL text: String) -> URL? {
