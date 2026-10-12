@@ -209,6 +209,8 @@ public struct DirectMessage: Codable, Equatable, Sendable {
     public var lines: [String]?
     /// Base64 PCM int16 mono at 16 kHz on a `transcribe` request. Older frames omit this.
     public var audio: String?
+    /// The Watch's auto-approve choice: this chat's on `start`, `resume`, or a `ping` with a session, the default otherwise.
+    public var autoApprove: Bool?
 
     public init(
         op: Op,
@@ -221,7 +223,8 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         approvalsAvailable: Bool? = nil,
         message: String? = nil,
         lines: [String]? = nil,
-        audio: String? = nil
+        audio: String? = nil,
+        autoApprove: Bool? = nil
     ) {
         self.op = op
         self.id = id
@@ -234,6 +237,7 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         self.message = message
         self.lines = lines
         self.audio = audio
+        self.autoApprove = autoApprove
     }
 
     public static func encode(_ message: DirectMessage) -> Data? {

@@ -69,6 +69,7 @@ public enum RelayUserNotice: Equatable, Sendable {
 
     public static let pairingRejectedText = "This relay did not accept this pairing."
     public static let reconnectingText = "Reconnecting…"
+    public static let computerOfflineText = "Computer offline"
     public static let repairText = "Pair again on iPhone."
 
     public static func classify(_ fault: RelaySocketFault) -> RelayUserNotice {
