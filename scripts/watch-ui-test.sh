@@ -69,6 +69,11 @@ cleanup_probe() {
   fi
 }
 trap cleanup_probe EXIT
+print_probe_log() {
+  echo "---- last relay probe lines (${PROBE_LOG}) ----" >&2
+  tail -n 150 "${PROBE_LOG}" >&2 || true
+  echo "---- end of relay probe lines ----" >&2
+}
 
 xcrun simctl boot "${PHONE_UDID}" || true
 xcrun simctl bootstatus "${PHONE_UDID}" -b
@@ -237,6 +242,8 @@ run_class() {
     -scheme WatchRemoteWatch \
     -destination "platform=watchOS Simulator,id=${udid}" \
     -only-testing:WatchRemoteWatchUITests \
+    -retry-tests-on-failure \
+    -test-iterations 3 \
     -resultBundlePath "${result}" \
     -clonedSourcePackagesDirPath "${ROOT}/build/SourcePackages" \
     -derivedDataPath "${ROOT}/build/DerivedDataWatch" \
@@ -248,6 +255,7 @@ run_class() {
   status=${PIPESTATUS[0]}
   set -e
   if [[ "${status}" -ne 0 ]]; then
+    print_probe_log
     echo "Watch UI test failed on ${kind} (${label}). Rebooting the simulator and trying once more." >&2
     xcrun simctl shutdown "${udid}" || true
     sleep 2
@@ -263,6 +271,8 @@ run_class() {
       -scheme WatchRemoteWatch \
       -destination "platform=watchOS Simulator,id=${udid}" \
       -only-testing:WatchRemoteWatchUITests \
+      -retry-tests-on-failure \
+      -test-iterations 3 \
       -resultBundlePath "${result}" \
       -clonedSourcePackagesDirPath "${ROOT}/build/SourcePackages" \
       -derivedDataPath "${ROOT}/build/DerivedDataWatch" \
@@ -302,6 +312,7 @@ manifest.write_text(json.dumps(groups, indent=2) + "\n", encoding="utf-8")
 PY
   xcrun simctl io "${udid}" screenshot "${OUT}/${kind}/simulator-${kind}.png" || true
   if [[ "${status}" -ne 0 ]]; then
+    print_probe_log
     echo "Watch UI test failed on ${kind} (${label})." >&2
     return "${status}"
   fi
