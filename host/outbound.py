@@ -200,16 +200,20 @@ def for_watch(row: dict) -> dict:
 
 
 PUSH_INTERVAL = 0.5
-WATCH_SESSIONS = 12
+WATCH_SESSIONS = 24
 FOCUS_LINES = 40
 OTHER_LINES = 4
+RESTORE_LINES = 80
 LINE_LIMIT = 2000
 # The relay refuses frames over 256 KB; stay far below it once sealed and base64'd.
 WATCH_BUDGET = 96 * 1024
+# A frame the relay refuses also costs the computer its relay connection, so nothing larger leaves.
+FRAME_BUDGET = 160 * 1024
+TOO_LARGE = "That reply was too large for the Watch."
 
 
-def watch_rows(rows: list, focus: set[str] | None = None) -> list[dict]:
-    """Rows for an `update` push: recent sessions only, transcripts trimmed to fit one frame."""
+def watch_rows(rows: list, focus: set[str] | None = None, budget: int = WATCH_BUDGET) -> list[dict]:
+    """Rows for the Watch: recent sessions only, transcripts trimmed to fit one frame."""
     focus = focus or set()
     chosen = [row for row in rows if isinstance(row, dict)][:WATCH_SESSIONS]
     out: list[dict] = []
@@ -221,7 +225,7 @@ def watch_rows(rows: list, focus: set[str] | None = None) -> list[dict]:
             copy["transcript"] = [clip_line(line) for line in lines[-keep:]]
         copy.pop("lines", None)
         out.append(copy)
-    while len(json.dumps(out, separators=(",", ":"))) > WATCH_BUDGET:
+    while len(json.dumps(out, separators=(",", ":"))) > budget:
         longest = max(out, key=lambda item: len(item.get("transcript") or []), default=None)
         if not longest or len(longest.get("transcript") or []) <= 1:
             out = out[:-1]
@@ -230,6 +234,29 @@ def watch_rows(rows: list, focus: set[str] | None = None) -> list[dict]:
             continue
         longest["transcript"] = longest["transcript"][len(longest["transcript"]) // 2 :]
     return out
+
+
+def watch_lines(lines: list, keep: int = RESTORE_LINES, budget: int = WATCH_BUDGET) -> list[str]:
+    """The latest transcript lines of one chat, trimmed to fit one frame."""
+    out = [clip_line(str(line)) for line in lines if str(line).strip()][-keep:]
+    while len(out) > 1 and len(json.dumps(out, separators=(",", ":"))) > budget:
+        out = out[len(out) // 2 :]
+    return out
+
+
+def fit_for_watch(message: dict) -> dict:
+    """Shrinks a reply that would be over the relay's frame limit, or swaps it for an error."""
+    if len(relaybox.encode_message(message)) <= FRAME_BUDGET:
+        return message
+    copy = dict(message)
+    op = message.get("op")
+    if op in {"sessions", "update"}:
+        copy["sessions"] = watch_rows(list(message.get("sessions") or []), budget=FRAME_BUDGET // 2)
+    elif op == "restored":
+        copy["lines"] = watch_lines(list(message.get("lines") or []), budget=FRAME_BUDGET // 2)
+    if len(relaybox.encode_message(copy)) <= FRAME_BUDGET:
+        return copy
+    return {"op": "error", "id": str(message.get("id") or ""), "message": TOO_LARGE}
 
 
 def clip_line(line: str) -> str:
@@ -455,10 +482,11 @@ def handle(agent: object, message: dict) -> dict:
         if op == "ping":
             return {"op": "pong", "id": ident}
         if op == "list":
+            focus = getattr(agent, "watch_focus", None)
             return {
                 "op": "sessions",
                 "id": ident,
-                "sessions": [for_watch(row) for row in agent.list_sessions()],
+                "sessions": watch_rows(agent.list_sessions(), focus() if focus else None),
                 "approvalsAvailable": bool(getattr(agent, "available", True)),
             }
         if op == "start":
@@ -477,7 +505,7 @@ def handle(agent: object, message: dict) -> dict:
             return {"op": "started", "id": ident, "sessionID": session_id}
         if op == "resume":
             session_id = str(message.get("sessionID") or "").strip()
-            lines = agent.restore(session_id)
+            lines = watch_lines(agent.restore(session_id))
             return {"op": "restored", "id": ident, "sessionID": session_id, "lines": lines}
         if op == "approve":
             agent.decide(message.get("sessionID"), message.get("permissionID"), True)
@@ -655,13 +683,22 @@ class ACPAgent:
         self.urgent = False
         self.last_push = moment
         self.push_n += 1
-        focus = set(self.awaiting_prompt.values()) | {key.split(":", 1)[0] for key in self.permissions}
         return {
             "op": "update",
             "id": f"push-{self.push_n}",
-            "sessions": watch_rows(self.rows, focus),
+            "sessions": watch_rows(self.rows, self.watch_focus()),
             "approvalsAvailable": True,
         }
+
+    def watch_focus(self) -> set[str]:
+        """Chats that keep their longer transcript on the Watch: answering or asking."""
+        return set(self.awaiting_prompt.values()) | {key.split(":", 1)[0] for key in self.permissions}
+
+    def request_push(self) -> None:
+        """Send the current chats at once, e.g. after a relay reconnect lost the last push."""
+        if self.rows:
+            self.pending_push = True
+            self.urgent = True
 
     def push_due_in(self, now: float | None = None) -> float | None:
         if not self.pending_push:
@@ -1183,7 +1220,8 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
     def seal(message: dict) -> None:
         nonlocal send_n
         send_n = next_counter(send_n)
-        conn.send_binary(relaybox.seal(relaybox.encode_message(message), config["key"], relaybox.HOST_TO_WATCH, send_n))
+        plain = relaybox.encode_message(fit_for_watch(message))
+        conn.send_binary(relaybox.seal(plain, config["key"], relaybox.HOST_TO_WATCH, send_n))
         save_counters(counters, send_n, replay.highest)
 
     try:
@@ -1192,6 +1230,9 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
         if opcode != 1 or b'"ok":true' not in payload:
             raise miniws.SocketError("The relay did not accept this pairing.")
         conn.sock.settimeout(1)
+        caught_up = getattr(slot.agent, "request_push", None)
+        if caught_up is not None:
+            caught_up()
         while True:
             agent = slot.ensure()
             agent_conn = getattr(agent, "conn", None)

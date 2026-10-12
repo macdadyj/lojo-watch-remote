@@ -7,6 +7,7 @@ with canned sentences and asks for permission before it "reads a file".
 
 A second port takes test controls:
   /reset   fresh Grok sessions, fresh approvals, fresh counters, relay restarted
+           (`/reset?heavy=1` seeds a Grok history too large for one relay frame)
   /drop    stop the relay process (the host and Grok keep running)
   /resume  start the relay again
   /state   JSON of what Grok saw: sessions, prompts with their session ids, permission decisions
@@ -133,10 +134,10 @@ def resume_node() -> None:
         STATE["node"] = start_relay(int(STATE["port"]))
 
 
-def reset_all() -> None:
+def reset_all(heavy: bool = False) -> None:
     with LOCK:
         stop_node()
-        STATE["fake"].reset()
+        STATE["fake"].reset(heavy=heavy)
         slot = STATE["slot"]
         slot.close()
         slot.agent = None
@@ -152,11 +153,11 @@ def reset_all() -> None:
 
 class ControlHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
-        path = self.path.split("?", 1)[0]
+        path, _, query = self.path.partition("?")
         if path == "/health":
             self._json({"ok": True})
         elif path == "/reset":
-            reset_all()
+            reset_all(heavy="heavy=1" in query.split("&"))
             self._json({"ok": True})
         elif path == "/drop":
             drop_node()

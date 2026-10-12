@@ -229,6 +229,40 @@ class WatchPathTests(unittest.TestCase):
         listed = fresh.wait_for(lambda message: message.get("id") == ident)
         self.assertEqual(listed["op"], "sessions")
 
+    def test_a_long_used_grok_does_not_knock_the_computer_off_the_relay(self) -> None:
+        self.fake.reset(heavy=True)
+        listed = self.ask("list")
+        self.assertEqual(listed["op"], "sessions", listed)
+        self.assertEqual(listed["sessions"][0]["id"], "session-seed")
+        self.assertLessEqual(len(listed["sessions"]), outbound.WATCH_SESSIONS)
+        restored = self.ask("resume", sessionID="session-seed")
+        self.assertEqual(restored["op"], "restored", restored)
+        self.assertEqual(restored["lines"][-2:], ["You: earlier", "Grok: Ready."])
+        self.assertLessEqual(len(restored["lines"]), outbound.RESTORE_LINES)
+        again = self.ask("list")
+        self.assertEqual(again["op"], "sessions", again)
+        session_id = self.started(self.watch.send("start", prompt="Reopen the chat", sessionID="session-seed"))
+        self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: Reopened."))
+        self.assertTrue(self.watch.host_online)
+
+    def test_a_reply_that_lands_while_the_watch_sleeps_is_there_on_wake(self) -> None:
+        self.fake.reset(heavy=True)
+        self.fake.slow_seconds = 2.0
+        self.ask("resume", sessionID="session-seed")
+        session_id = self.started(self.watch.send("start", prompt="Take your time", sessionID="session-seed"))
+        time.sleep(self.fake.slow_seconds + 3)
+        self.watch.inbox.clear()
+        self.assertEqual(self.ask("list")["op"], "sessions")
+        self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: Thanks for waiting."), timeout=5)
+
+    def test_a_host_that_reconnects_pushes_what_the_watch_missed(self) -> None:
+        session_id = self.started(self.watch.send("start", prompt="Can you hear me"))
+        self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: I can hear you."))
+        stop(self.relay)
+        self.relay = start_relay(self.relay_port)
+        self.watch.inbox.clear()
+        self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: I can hear you."), timeout=15)
+
 
 class HostUnitTests(unittest.TestCase):
     def test_updates_are_coalesced(self) -> None:
@@ -254,6 +288,35 @@ class HostUnitTests(unittest.TestCase):
         self.assertLessEqual(len(json.dumps(trimmed)), outbound.WATCH_BUDGET)
         self.assertTrue(all("lines" not in row for row in trimmed))
         self.assertTrue(all(len(line) <= outbound.LINE_LIMIT for row in trimmed for line in row["transcript"]))
+
+    def test_every_reply_fits_in_one_relay_frame(self) -> None:
+        rows = [
+            {"id": f"s{index}", "title": "T" * 400, "summary": "x" * 160, "status": "idle", "lines": ["Grok: " + "y" * 1500] * 300}
+            for index in range(1500)
+        ]
+        for message in (
+            {"op": "sessions", "id": "w1", "sessions": rows},
+            {"op": "update", "sessions": rows},
+            {"op": "restored", "id": "w2", "sessionID": "s0", "lines": rows[0]["lines"] * 4},
+        ):
+            fitted = outbound.fit_for_watch(message)
+            self.assertEqual(fitted["op"], message["op"])
+            self.assertLessEqual(len(relaybox.encode_message(fitted)), outbound.FRAME_BUDGET)
+        small = {"op": "ok", "id": "w3"}
+        self.assertIs(outbound.fit_for_watch(small), small)
+        huge = {"op": "transcribed", "id": "w4", "text": "z" * (outbound.FRAME_BUDGET * 2)}
+        self.assertEqual(outbound.fit_for_watch(huge), {"op": "error", "id": "w4", "message": outbound.TOO_LARGE})
+
+    def test_a_reconnected_host_pushes_its_rows_at_once(self) -> None:
+        agent = outbound.ACPAgent("secret")
+        agent.request_push()
+        self.assertIsNone(agent.take_update(now=100.0), "nothing to push before Grok listed any chat")
+        agent.rows = [{"id": "s", "title": "T", "summary": "", "status": "idle", "lines": ["Grok: hi"]}]
+        agent.last_push = 100.0
+        agent.request_push()
+        update = agent.take_update(now=100.01)
+        self.assertIsNotNone(update)
+        self.assertEqual(update["sessions"][0]["transcript"], ["Grok: hi"])
 
     def test_counters_follow_the_clock(self) -> None:
         self.assertEqual(outbound.next_counter(0, now_ms=1_700_000_000_000), 1_700_000_000_000)

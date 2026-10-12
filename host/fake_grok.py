@@ -5,7 +5,10 @@ It listens on 127.0.0.1, wants the same Bearer secret as the real server, and
 answers initialize, _x.ai/session/list, session/new, session/load,
 session/prompt, and session/cancel. Replies stream as several
 agent_message_chunk updates. A prompt that mentions a file or a tool asks for
-permission first, the way Grok Build does before it reads a file.
+permission first, the way Grok Build does before it reads a file. A prompt that
+starts with "take your time" is answered after a pause, long enough for a Watch
+to lower the wrist mid-turn. `reset(heavy=True)` gives Grok a long-used history
+that does not fit in one relay frame.
 Nothing here talks to a model.
 """
 
@@ -33,6 +36,35 @@ SEED = {
     "history": [("user", "earlier"), ("agent", "Ready.")],
 }
 
+# A long-used Grok: more chats and a longer seed history than one relay frame can carry.
+HEAVY_SESSIONS = 1500
+HEAVY_TURNS = 300
+HEAVY_TEXT = "The forecast for the valley this week is mostly sunny with a light breeze in the afternoons. " * 9
+SLOW_PROMPT = "take your time"
+SLOW_SECONDS = 6.0
+
+
+def heavy_sessions() -> list[dict]:
+    rows = []
+    for index in range(HEAVY_SESSIONS):
+        rows.append({
+            "sessionId": f"session-old-{index:04d}",
+            "title": f"Earlier chat number {index} about the weather and the week ahead",
+            "summary": HEAVY_TEXT[:160],
+            "status": "idle",
+            "cwd": "/tmp",
+            "history": [("user", "old question"), ("agent", "Old answer.")],
+        })
+    return rows
+
+
+def heavy_history() -> list[tuple[str, str]]:
+    history: list[tuple[str, str]] = []
+    for index in range(HEAVY_TURNS):
+        history.append(("user", f"Question {index}: what is the weather like?"))
+        history.append(("agent", f"Answer {index}: {HEAVY_TEXT}"))
+    return history + list(SEED["history"])
+
 
 def reply_text(prompt: str) -> str:
     """Canned answers. The Watch tests look for these exact sentences."""
@@ -41,6 +73,8 @@ def reply_text(prompt: str) -> str:
         return "Heard again."
     if folded.startswith("reopen"):
         return "Reopened."
+    if folded.startswith(SLOW_PROMPT):
+        return "Thanks for waiting."
     if wants_tool(folded):
         return "I read notes.txt. It says hello."
     return "I can hear you."
@@ -55,6 +89,7 @@ class FakeGrok:
     def __init__(self, secret: str, chunk_delay: float = 0.05) -> None:
         self.secret = secret
         self.chunk_delay = chunk_delay
+        self.slow_seconds = SLOW_SECONDS
         self.lock = threading.Lock()
         self.sessions: dict[str, dict] = {}
         self.order: list[str] = []
@@ -67,12 +102,16 @@ class FakeGrok:
         self.clients: list[socket.socket] = []
         self.reset()
 
-    def reset(self) -> None:
+    def reset(self, heavy: bool = False) -> None:
         with self.lock:
             seed = json.loads(json.dumps(SEED))
-            seed["history"] = [tuple(item) for item in seed["history"]]
+            seed["history"] = heavy_history() if heavy else [tuple(item) for item in seed["history"]]
             self.sessions = {seed["sessionId"]: seed}
             self.order = [seed["sessionId"]]
+            if heavy:
+                for row in heavy_sessions():
+                    self.sessions[row["sessionId"]] = row
+                    self.order.append(row["sessionId"])
             self.prompts = []
             self.decisions = []
             self.loads = []
@@ -280,6 +319,8 @@ class FakeGrok:
                 peer.result(ident, {"stopReason": "cancelled"})
                 return
         answer = reply_text(text)
+        if " ".join(text.split()).lower().startswith(SLOW_PROMPT):
+            time.sleep(self.slow_seconds)
         words = answer.split(" ")
         pieces = [" ".join(words[: max(1, len(words) // 2)]), " " + " ".join(words[max(1, len(words) // 2) :])]
         for piece in pieces:
