@@ -295,11 +295,19 @@ if not manifest.is_file():
     raise SystemExit(0)
 groups = json.loads(manifest.read_text(encoding="utf-8"))
 for group in groups:
+    kept = []
     for item in group.get("attachments", []):
         exported = item.get("exportedFileName") or ""
         suggested = item.get("suggestedHumanReadableName") or ""
         src = dest / exported
         stem = suggested.split("_0_")[0]
+        if src.is_file():
+            # A retried test also leaves hierarchy dumps, recordings and event logs from the failed try.
+            with src.open("rb") as handle:
+                if handle.read(8) != b"\x89PNG\r\n\x1a\n":
+                    src.unlink()
+                    continue
+        kept.append(item)
         if not stem or not src.is_file():
             continue
         if not stem.endswith(".png"):
@@ -308,6 +316,7 @@ for group in groups:
         if target != src:
             src.replace(target)
             item["exportedFileName"] = stem
+    group["attachments"] = kept
 manifest.write_text(json.dumps(groups, indent=2) + "\n", encoding="utf-8")
 PY
   xcrun simctl io "${udid}" screenshot "${OUT}/${kind}/simulator-${kind}.png" || true
