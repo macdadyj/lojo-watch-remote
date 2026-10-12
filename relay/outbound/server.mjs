@@ -36,6 +36,8 @@ export function createRelay(options = {}) {
   const pollsPer10s = numberOption(options.pollsPer10s, process.env.WATCHREMOTE_OUTBOUND_POLLS, 60);
   const maxWaitMs = numberOption(options.maxWaitMs, process.env.WATCHREMOTE_OUTBOUND_MAX_WAIT_MS, 25000);
   const watchQueue = numberOption(options.watchQueue, process.env.WATCHREMOTE_OUTBOUND_WATCH_QUEUE, 64);
+  // A Watch on the iPhone's Bluetooth link downloads slowly; a backlog leaves in pieces it can finish.
+  const maxPollBytes = numberOption(options.maxPollBytes, process.env.WATCHREMOTE_OUTBOUND_MAX_POLL_BYTES, 256 * 1024);
   const idleRoomMs = numberOption(options.idleRoomMs, process.env.WATCHREMOTE_OUTBOUND_IDLE_ROOM_MS, 30 * 60_000);
 
   function note(event, extra = {}) {
@@ -196,11 +198,20 @@ export function createRelay(options = {}) {
         const finish = () => {
           room.polledAt = Date.now();
           room.touched = room.polledAt;
+          const waiting = pending();
+          const out = [];
+          let bytes = 0;
+          for (const frame of waiting) {
+            if (out.length && bytes + frame.data.length > maxPollBytes) break;
+            out.push({ seq: frame.seq, data: frame.data.toString("base64") });
+            bytes += frame.data.length;
+          }
           reply(res, 200, {
             ok: true,
             epoch: room.epoch,
             host: hostOnline(room),
-            frames: pending().map((frame) => ({ seq: frame.seq, data: frame.data.toString("base64") })),
+            frames: out,
+            more: out.length < waiting.length,
           });
         };
         if (wait === 0 || pending().length) {

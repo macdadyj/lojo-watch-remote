@@ -183,6 +183,30 @@ test("frames from the host queue for an HTTP watch that is not polling", async (
   host.socket.destroy();
 });
 
+test("a backlog for a Watch that slept leaves in pieces under the poll byte cap", async () => {
+  const relay = createRelay({ log: () => {}, maxPollBytes: 2500 });
+  const port = await listen(relay);
+  const token = "roomtokenvalue0107";
+  const host = await connect(port);
+  await auth(host, "host", token);
+  for (let index = 0; index < 5; index += 1) host.send(2, Buffer.alloc(1000, 65 + index));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const seen = [];
+  let after = 0;
+  let epoch;
+  for (let round = 0; round < 5 && seen.length < 5; round += 1) {
+    const body = await (await poll(port, token, { after, epoch })).json();
+    assert.ok(body.frames.length >= 1 && body.frames.length <= 2, "a poll carries at most the cap, but always one frame");
+    assert.equal(body.more, seen.length + body.frames.length < 5);
+    for (const frame of body.frames) seen.push(Buffer.from(frame.data, "base64")[0]);
+    after = body.frames.at(-1).seq;
+    epoch = body.epoch;
+  }
+  assert.deepEqual(seen, [65, 66, 67, 68, 69], "every frame arrives once, in order");
+  relay.server.close();
+  host.socket.destroy();
+});
+
 test("an HTTP watch learns when the host is offline and its frames wait for it", async () => {
   const relay = createRelay({ log: () => {} });
   const port = await listen(relay);
