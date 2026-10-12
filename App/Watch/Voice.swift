@@ -211,6 +211,11 @@ struct VoicePreferenceToggles: View {
             }
             .accessibilityIdentifier("settings.autoApprove")
             .accessibilityHint("Allows tool calls without a tap, here and on the iPhone. A chat can override it.")
+
+            Text(AppBuild.label(info: Bundle.main.infoDictionary))
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("settings.build")
         }
     }
 }

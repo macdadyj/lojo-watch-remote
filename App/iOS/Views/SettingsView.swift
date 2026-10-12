@@ -48,7 +48,7 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Auto-approve tools")
                                 .font(.headline)
-                            Text("Allows tool calls without a tap. Off until you turn it on.")
+                            Text("Allows tool calls without a tap. On until you turn it off.")
                                 .font(.footnote)
                                 .foregroundStyle(LojoTheme.secondaryText)
                         }
@@ -71,6 +71,11 @@ struct SettingsView: View {
                     Text("Demo stays on this iPhone. SSH is how the Watch reaches the computer.")
                         .font(.footnote)
                         .foregroundStyle(LojoTheme.secondaryText)
+
+                    Text(AppBuild.label(info: Bundle.main.infoDictionary))
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(LojoTheme.secondaryText)
+                        .accessibilityIdentifier("settings.build")
                         .padding(.bottom, 12)
                 }
                 .padding(20)

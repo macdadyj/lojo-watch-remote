@@ -140,6 +140,18 @@ final class PhoneChatUITests: XCTestCase {
         shot(app, "phone-mid-turn-background")
     }
 
+    func testBuildNumberIsInSettings() throws {
+        let app = launch()
+        XCTAssertTrue(app.tabBars.buttons["Settings"].waitForExistence(timeout: 8))
+        app.tabBars.buttons["Settings"].tap()
+        let build = app.staticTexts["settings.build"]
+        if !build.waitForExistence(timeout: 3) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(build.waitForExistence(timeout: 4), "Settings does not show the build")
+        XCTAssertTrue(build.label.contains("build"), "unexpected build line: \(build.label)")
+    }
+
     func testBackgroundForegroundKeepsTheThreadResponsive() throws {
         let app = launch()
         openIdle(app)

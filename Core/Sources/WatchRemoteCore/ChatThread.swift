@@ -48,6 +48,15 @@ public enum ForegroundCatchUp {
     }
 }
 
+/// The line Settings shows, so a tester can tell which TestFlight build is installed.
+public enum AppBuild {
+    public static func label(info: [String: Any]?) -> String {
+        let version = (info?["CFBundleShortVersionString"] as? String) ?? "?"
+        let build = (info?["CFBundleVersion"] as? String) ?? "?"
+        return "Version \(version) (build \(build))"
+    }
+}
+
 /// Dictation fills the composer without throwing away what was already typed there.
 public enum DictationText {
     public static func merge(typed: String, spoken: String) -> String {

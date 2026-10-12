@@ -158,6 +158,11 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertEqual(DemoTiming.replyDelay(for: "add a note"), DemoTiming.quickSeconds)
     }
 
+    func testSettingsShowsTheBuild() {
+        XCTAssertEqual(AppBuild.label(info: ["CFBundleShortVersionString": "1.0", "CFBundleVersion": "219"]), "Version 1.0 (build 219)")
+        XCTAssertEqual(AppBuild.label(info: nil), "Version ? (build ?)")
+    }
+
     func testAutoApproveIsOnUntilTurnedOff() {
         XCTAssertTrue(WatchApprovalSetting().value)
         XCTAssertTrue(WatchApprovalSetting().allows(chat: "any"))
