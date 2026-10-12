@@ -143,7 +143,7 @@ def reset_all(heavy: bool = False) -> None:
         slot.agent = None
         slot.next_open = 0.0
         if slot.approvals is not None:
-            slot.approvals.default = False
+            slot.approvals.default = True
             slot.approvals.chats.clear()
             if slot.approvals.path is not None and slot.approvals.path.exists():
                 slot.approvals.path.unlink()

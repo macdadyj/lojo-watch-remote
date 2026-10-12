@@ -326,16 +326,36 @@ class HostUnitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "approvals.json"
             policy = outbound.ApprovalPolicy(path)
-            self.assertFalse(policy.allows("a"))
-            self.assertTrue(policy.note({"autoApprove": True}))
-            self.assertTrue(policy.note({"autoApprove": False, "sessionID": "b"}))
+            self.assertTrue(policy.allows("a"), "auto-approve is on until the Watch turns it off")
+            self.assertTrue(policy.note({"autoApprove": False}))
+            self.assertTrue(policy.note({"autoApprove": True, "sessionID": "b"}))
             again = outbound.ApprovalPolicy(path)
-            self.assertTrue(again.allows("a"))
-            self.assertFalse(again.allows("b"))
+            self.assertFalse(again.allows("a"))
+            self.assertTrue(again.allows("b"))
             self.assertFalse(again.note({"op": "ping"}))
+
+    def test_a_permission_is_answered_at_once_when_auto_approve_is_on(self) -> None:
+        agent = outbound.ACPAgent("secret")
+        sent: list[dict] = []
+        agent._send_raw = sent.append  # type: ignore[method-assign]
+        agent.rows = [{"id": "s", "title": "T", "summary": "", "status": "running", "lines": []}]
+        agent._ingest(json.dumps({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": "s",
+                "toolCall": {"title": "Run tests"},
+                "options": [{"optionId": "ok", "kind": "allow_once"}, {"optionId": "no", "kind": "reject_once"}],
+            },
+        }))
+        self.assertEqual(sent, [{"jsonrpc": "2.0", "id": 7, "result": {"outcome": {"outcome": "selected", "optionId": "ok"}}}])
+        self.assertNotIn("permission", agent.rows[0])
+        self.assertEqual(agent.permissions, {})
 
     def test_a_permission_request_does_not_crash_the_host(self) -> None:
         agent = outbound.ACPAgent("secret")
+        agent.approvals.default = False
         agent.rows = [{"id": "s", "title": "T", "summary": "", "status": "running", "lines": []}]
         agent._ingest(json.dumps({
             "jsonrpc": "2.0",

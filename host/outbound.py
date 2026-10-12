@@ -269,7 +269,7 @@ class ApprovalPolicy:
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path
-        self.default = False
+        self.default = True
         self.chats: dict[str, bool] = {}
         if path is not None and path.is_file():
             try:
