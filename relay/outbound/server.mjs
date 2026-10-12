@@ -313,6 +313,11 @@ export function createRelay(options = {}) {
         closePeer(peer, 1002);
       }
     });
+    // Upgraded sockets are half-open: a peer that hangs up sends `end`, and `close` waits for us.
+    socket.on("end", () => {
+      detach(peer);
+      socket.destroy();
+    });
     socket.on("close", () => detach(peer));
     socket.on("error", () => detach(peer));
     if (peer.buffer.length) drain(peer);
@@ -327,6 +332,7 @@ export function createRelay(options = {}) {
       if (room && current.role && room[current.role] === current) {
         room[current.role] = null;
         note("left", { role: current.role, room: room.id });
+        if (current.role === "host") wakeWatchPolls(room);
         dropRoom(room);
       }
     }
@@ -409,6 +415,8 @@ export function createRelay(options = {}) {
         const queued = room.queue[role];
         room.queue[role] = [];
         for (const frame of queued) sendFrame(current.socket, 2, Buffer.isBuffer(frame) ? frame : frame.data);
+        // A parked Watch poll reports whether the computer is in the room. Answer it now.
+        if (role === "host") wakeWatchPolls(room);
         return;
       }
       if (opcode !== 2) {

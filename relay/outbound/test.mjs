@@ -196,6 +196,32 @@ test("an HTTP watch learns when the host is offline and its frames wait for it",
   host.socket.destroy();
 });
 
+test("a parked HTTP poll hears at once when the host joins or leaves", async () => {
+  const relay = createRelay({ log: () => {} });
+  const port = await listen(relay);
+  const token = "roomtokenvalue0106";
+  const first = await (await poll(port, token, {})).json();
+  assert.equal(first.host, false);
+
+  let started = Date.now();
+  const joining = poll(port, token, { after: 0, epoch: first.epoch, wait: 5000 });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const host = await connect(port);
+  await auth(host, "host", token);
+  const joined = await (await joining).json();
+  assert.equal(joined.host, true);
+  assert.ok(Date.now() - started < 3000, "the poll waited out its timer after the host joined");
+
+  started = Date.now();
+  const leaving = poll(port, token, { after: 0, epoch: first.epoch, wait: 5000 });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  host.socket.destroy();
+  const left = await (await leaving).json();
+  assert.equal(left.host, false);
+  assert.ok(Date.now() - started < 3000, "the poll waited out its timer after the host left");
+  relay.server.close();
+});
+
 test("an HTTP poll needs a well-formed token and a POST", async () => {
   const relay = createRelay({ log: () => {} });
   const port = await listen(relay);
