@@ -199,6 +199,98 @@ def for_watch(row: dict) -> dict:
     return copy
 
 
+PUSH_INTERVAL = 0.5
+WATCH_SESSIONS = 12
+FOCUS_LINES = 40
+OTHER_LINES = 4
+LINE_LIMIT = 2000
+# The relay refuses frames over 256 KB; stay far below it once sealed and base64'd.
+WATCH_BUDGET = 96 * 1024
+
+
+def watch_rows(rows: list, focus: set[str] | None = None) -> list[dict]:
+    """Rows for an `update` push: recent sessions only, transcripts trimmed to fit one frame."""
+    focus = focus or set()
+    chosen = [row for row in rows if isinstance(row, dict)][:WATCH_SESSIONS]
+    out: list[dict] = []
+    for row in chosen:
+        copy = for_watch(row)
+        lines = copy.get("transcript")
+        if isinstance(lines, list):
+            keep = FOCUS_LINES if str(copy.get("id")) in focus else OTHER_LINES
+            copy["transcript"] = [clip_line(line) for line in lines[-keep:]]
+        copy.pop("lines", None)
+        out.append(copy)
+    while len(json.dumps(out, separators=(",", ":"))) > WATCH_BUDGET:
+        longest = max(out, key=lambda item: len(item.get("transcript") or []), default=None)
+        if not longest or len(longest.get("transcript") or []) <= 1:
+            out = out[:-1]
+            if not out:
+                break
+            continue
+        longest["transcript"] = longest["transcript"][len(longest["transcript"]) // 2 :]
+    return out
+
+
+def clip_line(line: str) -> str:
+    text = str(line)
+    return text if len(text) <= LINE_LIMIT else text[: LINE_LIMIT - 1] + "…"
+
+
+class ApprovalPolicy:
+    """Auto-approve choice sent by the Watch: a default plus per-chat overrides."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        self.path = path
+        self.default = False
+        self.chats: dict[str, bool] = {}
+        if path is not None and path.is_file():
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                raw = {}
+            if isinstance(raw, dict):
+                self.default = raw.get("default") is True
+                chats = raw.get("chats")
+                if isinstance(chats, dict):
+                    self.chats = {str(key): value for key, value in chats.items() if isinstance(value, bool)}
+
+    def allows(self, session_id: str) -> bool:
+        return self.chats.get(str(session_id or ""), self.default)
+
+    def note(self, message: dict) -> bool:
+        """Apply `autoApprove` from a Watch message. True when something changed."""
+        value = message.get("autoApprove")
+        if not isinstance(value, bool):
+            return False
+        session_id = str(message.get("sessionID") or "").strip()
+        if session_id:
+            if self.chats.get(session_id) == value:
+                return False
+            self.chats[session_id] = value
+            if len(self.chats) > 200:
+                for key in list(self.chats)[: len(self.chats) - 200]:
+                    self.chats.pop(key, None)
+        else:
+            if self.default == value:
+                return False
+            self.default = value
+        self._save()
+        return True
+
+    def _save(self) -> None:
+        if self.path is None:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_name(self.path.name + ".tmp")
+            temporary.write_text(json.dumps({"default": self.default, "chats": self.chats}), encoding="utf-8")
+            temporary.chmod(0o600)
+            os.replace(temporary, self.path)
+        except OSError:
+            pass
+
+
 def merge_session_rows(previous: list, fresh: list) -> list:
     """Keep transcript lines when a session list arrives in the middle of a reply."""
     prior = {str(row.get("id")): row for row in previous if isinstance(row, dict) and row.get("id")}
@@ -351,6 +443,14 @@ def _transcript_stdout(completed: object, empty: str) -> str:
 def handle(agent: object, message: dict) -> dict:
     op = message.get("op")
     ident = str(message.get("id") or "")
+    approvals = getattr(agent, "approvals", None)
+    if approvals is not None and op in {"ping", "list", "resume"} and approvals.note(message):
+        approve_waiting = getattr(agent, "approve_waiting", None)
+        if approve_waiting is not None:
+            try:
+                approve_waiting()
+            except (RuntimeError, OSError):
+                pass
     try:
         if op == "ping":
             return {"op": "pong", "id": ident}
@@ -367,9 +467,13 @@ def handle(agent: object, message: dict) -> dict:
                 return {"op": "error", "id": ident, "message": "Say what the task should do."}
             session_id = str(message.get("sessionID") or "").strip()
             if session_id:
+                if approvals is not None:
+                    approvals.note({"autoApprove": message.get("autoApprove"), "sessionID": session_id})
                 continued = agent.continue_session(session_id, prompt, str(message.get("cwd") or ""))
                 return {"op": "started", "id": ident, "sessionID": continued}
             session_id = agent.start(prompt, str(message.get("cwd") or ""))
+            if approvals is not None:
+                approvals.note({"autoApprove": message.get("autoApprove"), "sessionID": session_id})
             return {"op": "started", "id": ident, "sessionID": session_id}
         if op == "resume":
             session_id = str(message.get("sessionID") or "").strip()
@@ -393,12 +497,20 @@ def handle(agent: object, message: dict) -> dict:
     except RuntimeError as error:
         text = str(error).strip() or "The computer could not do that."
         return {"op": "error", "id": ident, "message": text}
+    except (OSError, miniws.SocketError):
+        if hasattr(agent, "broken"):
+            agent.broken = True
+        return {"op": "error", "id": ident, "message": AGENT_DOWN}
+    except Exception as error:  # noqa: BLE001 - the Watch gets an answer instead of a dead host
+        print(f"Command failed: {type(error).__name__}", file=sys.stderr)
+        return {"op": "error", "id": ident, "message": "The computer could not do that."}
 
 
 class ACPAgent:
     available = True
 
-    def __init__(self, secret: str, host: str = "127.0.0.1", port: int = 2419) -> None:
+    def __init__(self, secret: str, host: str = "127.0.0.1", port: int = 2419, approvals: "ApprovalPolicy | None" = None) -> None:
+        self.broken = False
         self.secret = secret
         self.host = host
         self.port = port
@@ -412,6 +524,10 @@ class ACPAgent:
         self.capture_replay = False
         self.replay_lines: list[str] = []
         self.awaiting_prompt: dict[int, str] = {}
+        self.loaded: set[str] = set()
+        self.urgent = False
+        self.last_push = 0.0
+        self.approvals = approvals if approvals is not None else ApprovalPolicy()
 
     def open(self) -> None:
         # The secret is a header so a proxy access log cannot record it from the URL.
@@ -454,6 +570,7 @@ class ACPAgent:
             "cwd": directory,
         }
         self.rows = [row] + [item for item in self.rows if item.get("id") != session_id]
+        self.loaded.add(session_id)
         self._arm_prompt(session_id, prompt)
         return session_id
 
@@ -482,6 +599,9 @@ class ACPAgent:
         match = next((row for row in rows if row.get("id") == session_id), None)
         if match is None:
             raise RuntimeError(MISSING_SESSION)
+        stored = match.get("lines") if isinstance(match.get("lines"), list) else []
+        if session_id in self.loaded and stored:
+            return list(stored)
         directory = str(match.get("cwd") or Path.home())
         self.replay_lines = []
         self.capture_replay = True
@@ -493,7 +613,7 @@ class ACPAgent:
             })
         finally:
             self.capture_replay = False
-        stored = match.get("lines") if isinstance(match.get("lines"), list) else []
+        self.loaded.add(session_id)
         chosen = best_transcript(self.replay_lines, transcript_lines(loaded.get("result")), stored)
         if chosen:
             match["lines"] = chosen
@@ -501,6 +621,8 @@ class ACPAgent:
         return []
 
     def continue_session(self, session_id: str, prompt: str, cwd: str) -> str:
+        if session_id in self.awaiting_prompt.values():
+            raise RuntimeError("Grok is still answering in that chat.")
         self.restore(session_id)
         for row in self.rows:
             if row.get("id") == session_id:
@@ -522,17 +644,32 @@ class ACPAgent:
     def transcribe(self, audio: object) -> str:
         return transcribe_audio(audio)
 
-    def take_update(self) -> dict | None:
+    def take_update(self, now: float | None = None) -> dict | None:
+        """Streaming chunks are coalesced so the relay sees at most a few frames a second."""
         if not self.pending_push:
             return None
+        moment = time.monotonic() if now is None else now
+        if not self.urgent and moment - self.last_push < PUSH_INTERVAL:
+            return None
         self.pending_push = False
+        self.urgent = False
+        self.last_push = moment
         self.push_n += 1
+        focus = set(self.awaiting_prompt.values()) | {key.split(":", 1)[0] for key in self.permissions}
         return {
             "op": "update",
             "id": f"push-{self.push_n}",
-            "sessions": [for_watch(row) for row in self.rows],
+            "sessions": watch_rows(self.rows, focus),
             "approvalsAvailable": True,
         }
+
+    def push_due_in(self, now: float | None = None) -> float | None:
+        if not self.pending_push:
+            return None
+        if self.urgent:
+            return 0.0
+        moment = time.monotonic() if now is None else now
+        return max(0.0, PUSH_INTERVAL - (moment - self.last_push))
 
     def pump(self) -> None:
         if self.conn is None:
@@ -630,6 +767,7 @@ class ACPAgent:
             if grok:
                 row["summary"] = clip(grok.split(":", 1)[-1].strip())
         self.pending_push = True
+        self.urgent = True
 
     def _remember_permission(self, obj: dict) -> None:
         params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
@@ -644,13 +782,14 @@ class ACPAgent:
         title = params.get("title") or tool.get("title") or "Approve this action"
         detail = params.get("description") or ""
         permission_id = f"{session_id}:{rpc_text}"
-        self.permissions[permission_id] = {
-            "rpc": rpc_text,
-            "number": number,
-            "allow": allow,
-            "deny": deny,
-            "permission": permission,
-        }
+        if allow and self.approvals.allows(session_id):
+            self.permissions[permission_id] = {"rpc": rpc_text, "number": number, "allow": allow, "deny": deny, "permission": {}}
+            self.decide(session_id, permission_id, True)
+            for row in self.rows:
+                if row.get("id") == session_id:
+                    row["lines"] = list(row.get("lines") or []) + [f"Auto-approved: {clip(str(title), 120)}"]
+                    row["summary"] = clip(f"Auto-approved: {title}")
+            return
         permission = {
             "id": permission_id,
             "sessionID": session_id,
@@ -661,6 +800,14 @@ class ACPAgent:
             "allowOptionID": allow,
             "denyOptionID": deny,
         }
+        self.permissions[permission_id] = {
+            "rpc": rpc_text,
+            "number": number,
+            "allow": allow,
+            "deny": deny,
+            "permission": permission,
+        }
+        self.urgent = True
         found = False
         for row in self.rows:
             if row.get("id") == session_id:
@@ -682,6 +829,15 @@ class ACPAgent:
         session_id = str(params.get("sessionId") or "")
         update = params.get("update") if isinstance(params.get("update"), dict) else {}
         kind = str(update.get("sessionUpdate") or "")
+        if kind == "tool_call":
+            title = clip(str(update.get("title") or "Tool"), 120)
+            if self.capture_replay:
+                self.replay_lines.append(f"Tool: {title}")
+                return
+            for row in self.rows:
+                if row.get("id") == session_id:
+                    row["lines"] = list(row.get("lines") or []) + [f"Tool: {title}"]
+            return
         if kind in {"user_message_chunk", "user_message"}:
             prefix = "You:"
         elif kind in {"agent_message_chunk", "agent_message"}:
@@ -697,12 +853,31 @@ class ACPAgent:
         if not text:
             return
         if self.capture_replay:
+            # session/load replays the whole history; it must not be appended to the live row again.
             self.replay_lines = fold_speaker(self.replay_lines, prefix, text)
+            return
+        if prefix == "You:" and session_id in self.awaiting_prompt.values():
+            # _arm_prompt already recorded this prompt; an echo would be glued onto it.
+            return
         for row in self.rows:
             if row.get("id") == session_id:
                 if prefix == "Grok:":
                     row["summary"] = clip((row.get("summary") or "") + text)
                 row["lines"] = fold_speaker(list(row.get("lines") or []), prefix, text)
+
+    def approve_waiting(self) -> None:
+        """Allow approvals that were already waiting when auto-approve was turned on."""
+        for permission_id, stored in list(self.permissions.items()):
+            session_id = permission_id.split(":", 1)[0]
+            if not stored.get("allow") or not self.approvals.allows(session_id):
+                continue
+            title = str((stored.get("permission") or {}).get("title") or "Approve this action")
+            self.decide(session_id, permission_id, True)
+            for row in self.rows:
+                if row.get("id") == session_id:
+                    row["lines"] = list(row.get("lines") or []) + [f"Auto-approved: {clip(title, 120)}"]
+            self.pending_push = True
+            self.urgent = True
 
     def _apply_permissions(self) -> None:
         for row in self.rows:
@@ -886,8 +1061,6 @@ def saved_token(text: str) -> str | None:
 
 
 def saved_key(text: str) -> bytes | None:
-    import base64
-
     trimmed = text.strip().replace("=", "")
     if not trimmed or any(char.isspace() for char in trimmed):
         return None
@@ -936,56 +1109,126 @@ def read_secret() -> str:
     return secret
 
 
-def open_agent() -> object:
+def agent_port(environ: dict[str, str] | None = None) -> int:
+    env = os.environ if environ is None else environ
     try:
-        agent = ACPAgent(read_secret())
+        port = int(str(env.get("GROK_AGENT_PORT") or "2419"))
+    except ValueError:
+        return 2419
+    return port if 0 < port < 65536 else 2419
+
+
+def open_agent(approvals: ApprovalPolicy | None = None) -> object:
+    try:
+        agent = ACPAgent(read_secret(), port=agent_port(), approvals=approvals)
         agent.open()
         return agent
     except (OSError, RuntimeError, miniws.SocketError, relaybox.RelayBoxError):
-        return AgentDown()
+        down = AgentDown()
+        down.approvals = approvals
+        return down
 
 
-def run(config_path: Path, agent: object | None = None) -> None:
-    serve_connection(load_config(config_path), agent, counter_path(config_path))
+def next_counter(previous: int, now_ms: int | None = None) -> int:
+    """Counters follow the clock, so a side that lost its saved counter still moves past the peer's replay window."""
+    clock = int(time.time() * 1000) if now_ms is None else now_ms
+    return max(previous + 1, clock)
 
 
-def serve_connection(config: dict, agent: object | None, counters: Path) -> None:
+AGENT_RETRY = 5.0
+
+
+class AgentSlot:
+    """Owns the agent connection across relay reconnects, so a relay blip does not lose a reply in flight."""
+
+    def __init__(self, counters: Path, agent: object | None = None) -> None:
+        self.owned = agent is None
+        self.approvals = ApprovalPolicy(counters.with_name("outbound-approvals.json")) if self.owned else None
+        self.agent = agent
+        self.next_open = 0.0
+
+    def ensure(self) -> object:
+        agent = self.agent
+        if not self.owned:
+            return agent
+        if agent is None or getattr(agent, "broken", False) or not getattr(agent, "available", True):
+            if time.monotonic() >= self.next_open or agent is None:
+                self.close()
+                self.agent = open_agent(self.approvals)
+                self.next_open = time.monotonic() + AGENT_RETRY
+        return self.agent
+
+    def close(self) -> None:
+        conn = getattr(self.agent, "conn", None)
+        if conn is not None and self.owned:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+
+def run(config_path: Path, agent: object | None = None, slot: AgentSlot | None = None) -> None:
+    counters = counter_path(config_path)
+    serve_connection(load_config(config_path), agent, counters, slot)
+
+
+def serve_connection(config: dict, agent: object | None, counters: Path, slot: AgentSlot | None = None) -> None:
     send_n, recv_n = load_counters(counters)
     replay = relaybox.ReplayWindow.restored(recv_n)
     conn = miniws.connect(config["relay"])
+    local = slot is None
+    if slot is None:
+        slot = AgentSlot(counters, agent)
+
+    def seal(message: dict) -> None:
+        nonlocal send_n
+        send_n = next_counter(send_n)
+        conn.send_binary(relaybox.seal(relaybox.encode_message(message), config["key"], relaybox.HOST_TO_WATCH, send_n))
+        save_counters(counters, send_n, replay.highest)
+
     try:
         conn.send_text(json.dumps({"role": "host", "token": config["token"]}, separators=(",", ":")))
         opcode, payload = conn.recv()
         if opcode != 1 or b'"ok":true' not in payload:
             raise miniws.SocketError("The relay did not accept this pairing.")
-        if agent is None:
-            agent = open_agent()
         conn.sock.settimeout(1)
-        agent_conn = getattr(agent, "conn", None)
-        if agent_conn is not None:
-            agent_conn.sock.settimeout(1)
         while True:
-            sockets = [conn.sock]
+            agent = slot.ensure()
+            agent_conn = getattr(agent, "conn", None)
             agent_sock = getattr(agent_conn, "sock", None)
+            if agent_sock is not None:
+                agent_sock.settimeout(1)
+            sockets = [conn.sock]
             if agent_sock is not None:
                 sockets.append(agent_sock)
             # A frame can already be in the client buffer from the previous read.
             # select does not see that, so a queued hello-plus-command would stall.
-            wait = 0 if conn.pending() else 1
+            wait = 1.0
+            due = getattr(agent, "push_due_in", None)
+            if due is not None:
+                pending = due()
+                if pending is not None:
+                    wait = min(wait, pending)
+            if conn.pending() or (agent_conn is not None and agent_conn.pending()):
+                wait = 0
             readable, _, _ = select.select(sockets, [], [], wait)
             if conn.pending() and conn.sock not in readable:
                 readable = [*readable, conn.sock]
+            if agent_conn is not None and agent_conn.pending() and agent_sock not in readable:
+                readable = [*readable, agent_sock]
             if agent_sock is not None and agent_sock in readable:
                 try:
                     agent.pump()
-                except (OSError, miniws.SocketError, TimeoutError):
-                    agent_conn = None
-                    agent_sock = None
+                except TimeoutError:
+                    pass
+                except (OSError, miniws.SocketError):
+                    if hasattr(agent, "broken"):
+                        agent.broken = True
+                except Exception as error:  # noqa: BLE001 - one bad agent message must not stop the host
+                    print(f"Skipped an agent message: {type(error).__name__}", file=sys.stderr)
             update = agent.take_update()
             if update is not None:
-                send_n += 1
-                conn.send_binary(relaybox.seal(relaybox.encode_message(update), config["key"], relaybox.HOST_TO_WATCH, send_n))
-                save_counters(counters, send_n, replay.highest)
+                seal(update)
             if conn.sock not in readable:
                 continue
             try:
@@ -996,14 +1239,14 @@ def serve_connection(config: dict, agent: object | None, counters: Path) -> None
                 continue
             try:
                 plain = relaybox.open_frame(payload, config["key"], relaybox.WATCH_TO_HOST, replay)
-            except relaybox.RelayBoxError:
+                message = relaybox.decode_message(plain)
+            except (relaybox.RelayBoxError, ValueError):
                 continue
-            reply = handle(agent, relaybox.decode_message(plain))
-            send_n += 1
-            conn.send_binary(relaybox.seal(relaybox.encode_message(reply), config["key"], relaybox.HOST_TO_WATCH, send_n))
-            save_counters(counters, send_n, replay.highest)
+            seal(handle(agent, message))
     finally:
         conn.close()
+        if local:
+            slot.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1012,11 +1255,15 @@ def main(argv: list[str] | None = None) -> int:
     if not path.is_file():
         print("No direct pairing yet. Run watch-remote-pair --relay-url with your wss address.", file=sys.stderr)
         return 1
+    slot = AgentSlot(counter_path(path))
     while True:
         try:
-            run(path)
+            run(path, slot=slot)
         except (OSError, miniws.SocketError, relaybox.RelayBoxError, json.JSONDecodeError):
             print("Direct connection dropped. Trying again.", file=sys.stderr)
+            time.sleep(2)
+        except Exception as error:  # noqa: BLE001 - systemd should not have to restart us for one bug
+            print(f"Direct connection failed: {type(error).__name__}. Trying again.", file=sys.stderr)
             time.sleep(2)
 
 

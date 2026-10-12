@@ -41,6 +41,7 @@ jobs:
         run: |
           python3 host/test_relaybox.py
           python3 host/test_outbound.py
+          python3 host/test_watch_path.py
           python3 host/test_agentdoor.py
           host/watch-remote-stt --self-test
           node --test relay/outbound/test.mjs
@@ -255,6 +256,7 @@ jobs:
         run: |
           python3 host/test_relaybox.py
           python3 host/test_outbound.py
+          python3 host/test_watch_path.py
           python3 host/test_agentdoor.py
           host/watch-remote-stt --self-test
           node --test relay/outbound/test.mjs
