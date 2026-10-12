@@ -457,13 +457,10 @@ struct ChatThreadView: View {
 
     private func permissionCard(_ permission: PermissionRequest) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(permission.title)
+            Text("Allow: \(ChatTranscript.approvalAction(permission.title))?")
                 .font(.headline)
-            if !permission.detail.isEmpty {
-                Text(permission.detail)
-                    .font(.subheadline)
-                    .foregroundStyle(LojoTheme.secondaryText)
-            }
+                .lineLimit(2)
+                .accessibilityIdentifier("chat.permissionTitle")
             Button("Allow") {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
                 store.allow(sessionID)

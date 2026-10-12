@@ -156,7 +156,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         computers: [ComputerSummary] = [],
         activeComputerID: String = "",
         directReady: Bool = false,
-        autoApproveTools: Bool = false
+        autoApproveTools: Bool = true
     ) {
         self.mode = mode
         self.link = link
@@ -194,7 +194,7 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         computers = try container.decodeIfPresent([ComputerSummary].self, forKey: .computers) ?? []
         activeComputerID = try container.decodeIfPresent(String.self, forKey: .activeComputerID) ?? ""
         directReady = try container.decodeIfPresent(Bool.self, forKey: .directReady) ?? false
-        autoApproveTools = try container.decodeIfPresent(Bool.self, forKey: .autoApproveTools) ?? false
+        autoApproveTools = try container.decodeIfPresent(Bool.self, forKey: .autoApproveTools) ?? true
     }
 
     public func encode(to encoder: Encoder) throws {

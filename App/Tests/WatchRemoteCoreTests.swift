@@ -1184,11 +1184,12 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertFalse(ApprovalPreference(globalAutoApprove: true, sessionOverride: false).autoApproves)
         XCTAssertTrue(ApprovalPreference(globalAutoApprove: false, sessionOverride: true).autoApproves)
         var snapshot = DemoCatalog.snapshot()
-        snapshot.autoApproveTools = true
+        XCTAssertTrue(snapshot.autoApproveTools)
+        snapshot.autoApproveTools = false
         let text = LinkCodec.encodeSnapshot(snapshot)
-        XCTAssertEqual(text.flatMap(LinkCodec.decodeSnapshot)?.autoApproveTools, true)
+        XCTAssertEqual(text.flatMap(LinkCodec.decodeSnapshot)?.autoApproveTools, false)
         let legacy = #"{"mode":"demo","link":"demo","sessions":[],"approvalsAvailable":true,"hostLabel":"example-host"}"#
-        XCTAssertEqual(LinkCodec.decodeSnapshot(legacy)?.autoApproveTools, false)
+        XCTAssertEqual(LinkCodec.decodeSnapshot(legacy)?.autoApproveTools, true)
         let command = PhoneCommand(kind: .setAutoApprove, enabled: true)
         let encoded = command.encodeCheck()
         XCTAssertEqual(encoded?.kind, .setAutoApprove)

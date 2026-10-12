@@ -164,7 +164,9 @@ final class RemoteStore: ObservableObject {
     @Published var trustPrompt: TrustPrompt?
     @Published var showCompose = false
     @Published var selectedSessionID: String?
-    @Published var autoApproveTools = false
+    @Published var autoApproveTools = true
+    /// v2 so installs that saved the old off default start with auto-approve on.
+    private static let autoApproveKey = "autoApproveTools.v2"
     /// One-line state when a saved chat cannot be loaded or a send cannot be delivered.
     @Published var resumeNotice: String?
     private var resumeNoticeID: String?
@@ -201,7 +203,7 @@ final class RemoteStore: ObservableObject {
         } else {
             appearance = AppearanceChoice(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .dark
         }
-        autoApproveTools = defaults.bool(forKey: "autoApproveTools")
+        autoApproveTools = defaults.object(forKey: Self.autoApproveKey) as? Bool ?? true
         cwd = defaults.string(forKey: "cwd") ?? ""
         relayURL = defaults.string(forKey: "relayURL") ?? ""
         if let data = defaults.data(forKey: "computers"),
@@ -715,7 +717,7 @@ final class RemoteStore: ObservableObject {
 
     func setAutoApprove(_ enabled: Bool) {
         autoApproveTools = enabled
-        UserDefaults.standard.set(enabled, forKey: "autoApproveTools")
+        UserDefaults.standard.set(enabled, forKey: Self.autoApproveKey)
         publish()
         sweepAutoApprovals()
     }
