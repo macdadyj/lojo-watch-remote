@@ -36,7 +36,7 @@ Use a hostname you control and a certificate the Watch will trust. The pairing U
 {"send": ["<base64 ciphertext>"], "after": 12, "epoch": "<from the last reply>", "wait": 25000}
 ```
 
-The reply is `{"ok":true,"epoch":"...","host":true,"frames":[{"seq":13,"data":"<base64>"}],"more":false}`. `host` says whether the computer is connected. Frames for the Watch stay queued (up to 64) until a later poll acks them with `after`, so a reply is not lost when a poll dies in flight. One reply carries at most 256 KB of frames (always at least one); `more` is true when more are waiting, and the next poll returns them at once. A poll with nothing to send waits up to `wait` milliseconds (at most 25 seconds) for the next frame. A new `epoch` means the room was recreated; start again from `after: 0`.
+The reply is `{"ok":true,"epoch":"...","host":true,"frames":[{"seq":13,"data":"<base64>"}],"more":false}`. `host` says whether the computer is connected. Frames for the Watch stay queued (up to 64) until a later poll acks them with `after`, so a reply is not lost when a poll dies in flight. One reply carries at most 512 KB of frames (always at least one); `more` is true when more are waiting, and the next poll returns them at once. A poll with nothing to send waits up to `wait` milliseconds (at most 25 seconds) for the next frame. A new `epoch` means the room was recreated; start again from `after: 0`.
 
 ## Limits
 
@@ -45,7 +45,7 @@ The reply is `{"ok":true,"epoch":"...","host":true,"frames":[{"seq":13,"data":"<
 | `WATCHREMOTE_OUTBOUND_RATE` | 120 | Frames per 10 seconds on one socket, or from one room's Watch polls |
 | `WATCHREMOTE_OUTBOUND_POLLS` | 60 | Watch polls per 10 seconds from one address |
 | `WATCHREMOTE_OUTBOUND_WATCH_QUEUE` | 64 | Frames held for a Watch that is between polls |
-| `WATCHREMOTE_OUTBOUND_MAX_POLL_BYTES` | 262144 | Frame bytes in one poll reply |
+| `WATCHREMOTE_OUTBOUND_MAX_POLL_BYTES` | 524288 | Frame bytes in one poll reply |
 | `WATCHREMOTE_OUTBOUND_UPGRADES` | 30 | New sockets per minute from one address |
 | `WATCHREMOTE_OUTBOUND_AUTH_FAILURES` | 8 | Bad tokens per minute from one address |
 | `WATCHREMOTE_OUTBOUND_MAX` | 200 | Open sockets |

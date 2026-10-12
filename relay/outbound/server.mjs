@@ -37,7 +37,7 @@ export function createRelay(options = {}) {
   const maxWaitMs = numberOption(options.maxWaitMs, process.env.WATCHREMOTE_OUTBOUND_MAX_WAIT_MS, 25000);
   const watchQueue = numberOption(options.watchQueue, process.env.WATCHREMOTE_OUTBOUND_WATCH_QUEUE, 64);
   // A Watch on the iPhone's Bluetooth link downloads slowly; a backlog leaves in pieces it can finish.
-  const maxPollBytes = numberOption(options.maxPollBytes, process.env.WATCHREMOTE_OUTBOUND_MAX_POLL_BYTES, 256 * 1024);
+  const maxPollBytes = numberOption(options.maxPollBytes, process.env.WATCHREMOTE_OUTBOUND_MAX_POLL_BYTES, 512 * 1024);
   const idleRoomMs = numberOption(options.idleRoomMs, process.env.WATCHREMOTE_OUTBOUND_IDLE_ROOM_MS, 30 * 60_000);
 
   function note(event, extra = {}) {
