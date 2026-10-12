@@ -34,6 +34,8 @@ public enum SessionKeepalive {
 /// every reply that finished while the phone was away.
 public enum ForegroundCatchUp {
     public static let maxChats = 3
+    /// How long a returning app waits for the old socket to answer before reopening it.
+    public static let probeSeconds: TimeInterval = 4
 
     public static func chatsToReload(open: String?, sessions: [GrokSession]) -> [String] {
         var ids: [String] = []

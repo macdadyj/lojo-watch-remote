@@ -1309,7 +1309,12 @@ final class RemoteStore: ObservableObject {
         case .relay:
             await refresh(quiet: true)
         case .ssh:
-            let intact = live?.isSessionActive == true && !streamLost
+            let answers = await sshAnswers()
+            if !answers, live?.isSessionActive == true {
+                live?.disconnect()
+                streamLost = true
+            }
+            let intact = answers && !streamLost
             await refresh(quiet: true)
             guard !intact else { return }
         }
@@ -1318,6 +1323,24 @@ final class RemoteStore: ObservableObject {
         }
         if live?.isSessionActive == true {
             streamLost = false
+        }
+    }
+
+    /// A socket iOS closed during suspension can still look active. One bounded round trip tells,
+    /// so a dead link is reopened at once instead of after keepalives time out.
+    private func sshAnswers() async -> Bool {
+        guard let live, live.isSessionActive else { return false }
+        let directory = cwd.isEmpty ? nil : cwd
+        let settled = ProbeOnce()
+        return await withCheckedContinuation { continuation in
+            Task {
+                let ok = (try? await live.list(cwd: directory)) != nil
+                if settled.claim() { continuation.resume(returning: ok) }
+            }
+            Task {
+                try? await Task.sleep(nanoseconds: UInt64(ForegroundCatchUp.probeSeconds * 1_000_000_000))
+                if settled.claim() { continuation.resume(returning: false) }
+            }
         }
     }
 
@@ -1917,6 +1940,17 @@ final class RemoteStore: ObservableObject {
     private func argument(_ name: String, arguments: [String]) -> String? {
         guard let index = arguments.firstIndex(of: name), arguments.index(after: index) < arguments.endIndex else { return nil }
         return arguments[arguments.index(after: index)]
+    }
+}
+
+@MainActor
+private final class ProbeOnce {
+    private var done = false
+
+    func claim() -> Bool {
+        guard !done else { return false }
+        done = true
+        return true
     }
 }
 
