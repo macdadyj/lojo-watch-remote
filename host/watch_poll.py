@@ -45,7 +45,9 @@ class HttpWatch:
         with urllib.request.urlopen(request, timeout=wait_ms / 1000 + 10) as response:
             reply = json.loads(response.read().decode("utf-8"))
         if reply.get("epoch") != self.epoch:
+            # A new epoch restarts sequence numbers at 1. Keeping the old cursor would ack them unseen.
             self.epoch = str(reply.get("epoch") or "")
+            self.after = 0
         self.host_online = bool(reply.get("host"))
         opened: list[dict] = []
         for frame in reply.get("frames") or []:

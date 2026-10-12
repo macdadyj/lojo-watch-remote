@@ -197,6 +197,15 @@ class WatchPathTests(unittest.TestCase):
         self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: Heard again."))
         self.assertEqual(self.fake.state()["connections"], 1, "a relay restart must not reopen the agent")
 
+    def test_a_send_right_after_a_relay_restart_is_answered(self) -> None:
+        session_id = self.started(self.watch.send("start", prompt="Can you hear me"))
+        self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: I can hear you."))
+        stop(self.relay)
+        self.relay = start_relay(self.relay_port)
+        self.watch.inbox.clear()
+        self.watch.send("start", prompt="Again", sessionID=session_id)
+        self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: Heard again."), timeout=15)
+
     def test_agent_restart_recovers(self) -> None:
         self.started(self.watch.send("start", prompt="Can you hear me"))
         self.fake.drop_clients()
