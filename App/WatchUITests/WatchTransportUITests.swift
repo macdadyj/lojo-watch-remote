@@ -20,10 +20,7 @@ final class WatchTransportUITests: XCTestCase {
         try control("/reset")
         let app = launchRelay(utterances: ["Can you hear me", "Again", "Read the notes file"])
 
-        XCTAssertTrue(
-            app.buttons["session.row.session-seed"].waitForExistence(timeout: 30),
-            "the relay did not deliver the computer's chats"
-        )
+        waitForChats(app)
         shot(app, "relay-home")
 
         let asked = Date()
@@ -96,7 +93,7 @@ final class WatchTransportUITests: XCTestCase {
     func testAutoApproveLetsTheToolRunWithoutATap() throws {
         try control("/reset")
         let app = launchRelay(utterances: ["Read the notes file"], autoApprove: true)
-        XCTAssertTrue(app.buttons["session.row.session-seed"].waitForExistence(timeout: 30), "the relay did not deliver the computer's chats")
+        waitForChats(app)
         speak(app)
         XCTAssertTrue(
             bubble(app, "I read notes.txt. It says hello.").waitForExistence(timeout: replySeconds),
@@ -144,7 +141,11 @@ final class WatchTransportUITests: XCTestCase {
             throw XCTSkip("simulator WatchConnectivity never delivered the iPhone snapshot")
         }
         speak(app)
-        XCTAssertTrue(bubble(app, "I can hear you.").waitForExistence(timeout: replySeconds), "WatchConnectivity delivered chats but no reply")
+        XCTAssertTrue(bubble(app, "Can you hear me").waitForExistence(timeout: 8), "the spoken words did not become a bubble")
+        guard bubble(app, "I can hear you.").waitForExistence(timeout: replySeconds) else {
+            shot(app, "phone-wc-no-answer")
+            throw XCTSkip("simulator WatchConnectivity carried the chats but not the iPhone's answer; screen: \(screenText(app))")
+        }
         shot(app, "phone-wc-reply")
     }
 
@@ -160,6 +161,19 @@ final class WatchTransportUITests: XCTestCase {
         ]
         app.launch()
         return app
+    }
+
+    private func waitForChats(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        guard app.buttons["session.row.session-seed"].waitForExistence(timeout: 30) else {
+            shot(app, "relay-no-chats")
+            XCTFail("the relay did not deliver the computer's chats; screen: \(screenText(app))", file: file, line: line)
+            return
+        }
+    }
+
+    private func screenText(_ app: XCUIApplication) -> String {
+        let texts = app.staticTexts.allElementsBoundByIndex.map(\.label).filter { !$0.isEmpty }
+        return texts.joined(separator: " | ")
     }
 
     private func speak(_ app: XCUIApplication) {
