@@ -175,6 +175,10 @@ final class RemoteStore: ObservableObject {
     private var echoPushTask: Task<Void, Never>?
     private var userDisconnected = false
     private var heartbeatTask: Task<Void, Never>?
+    private let backgroundHold = TurnBackgroundHold()
+    /// The SSH stream dropped since the last catch-up, so live updates may have been missed.
+    private var streamLost = false
+    private var demoDue: [String: DemoReply] = [:]
     private var autoApprovedPermissionIDs = Set<String>()
     @Published var hasAgentSecret = false
     @Published var hasRelayToken = false
@@ -234,6 +238,7 @@ final class RemoteStore: ObservableObject {
             onCLI: { [weak self] id, event in self?.applyCLI(id: id, event: event) },
             onDropped: { [weak self] in
                 guard let self, self.mode == .ssh, !self.userDisconnected else { return }
+                self.streamLost = true
                 self.link = .connecting
                 self.statusLine = "Reconnecting"
                 self.banner = nil
@@ -626,9 +631,7 @@ final class RemoteStore: ObservableObject {
             sessions = engine.sessions
             selectedSessionID = session.id
             publish()
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            _ = engine.deliverReply(sessionID: session.id, reply: "Done. \(text)")
-            sessions = engine.sessions
+            await answerDemo(session.id, prompt: text)
         case .ssh:
             await startSSH(prompt: text)
         case .relay:
@@ -905,9 +908,7 @@ final class RemoteStore: ObservableObject {
             selectedSessionID = sessionID
             banner = nil
             publish()
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            _ = engine.deliverReply(sessionID: sessionID, reply: "Done. \(prompt)")
-            sessions = engine.sessions
+            await answerDemo(sessionID, prompt: prompt)
         case .ssh:
             await continueSSH(sessionID: sessionID, prompt: prompt)
         case .relay:
@@ -1295,6 +1296,52 @@ final class RemoteStore: ObservableObject {
         }
     }
 
+    /// The app is in front again. iOS may have suspended it and dropped the SSH socket, but the
+    /// computer kept working, so reconnect quietly and reload the open chat and any running ones.
+    /// Replies that finished meanwhile land without a tap.
+    func returnToForeground() async {
+        backgroundHold.noteForeground()
+        guard !holdsLaunchFixture, !userDisconnected else { return }
+        switch mode {
+        case .demo:
+            deliverDueDemoReplies()
+            return
+        case .relay:
+            await refresh(quiet: true)
+        case .ssh:
+            let intact = live?.isSessionActive == true && !streamLost
+            await refresh(quiet: true)
+            guard !intact else { return }
+        }
+        for id in ForegroundCatchUp.chatsToReload(open: selectedSessionID, sessions: sessions) {
+            await resume(sessionID: id)
+        }
+        if live?.isSessionActive == true {
+            streamLost = false
+        }
+    }
+
+    /// The demo computer answers on its own clock, like a real one. A reply that came due while
+    /// the iPhone was suspended lands on the foreground catch-up.
+    private func answerDemo(_ sessionID: String, prompt: String) async {
+        let delay = DemoTiming.replyDelay(for: prompt)
+        demoDue[sessionID] = DemoReply(due: Date().addingTimeInterval(delay), text: "Done. \(prompt)")
+        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        deliverDueDemoReplies()
+    }
+
+    private func deliverDueDemoReplies() {
+        let now = Date()
+        let ready = demoDue.filter { $0.value.due <= now }
+        guard !ready.isEmpty else { return }
+        for (id, reply) in ready {
+            demoDue[id] = nil
+            _ = engine.deliverReply(sessionID: id, reply: reply.text)
+        }
+        sessions = engine.sessions
+        publish()
+    }
+
     func reconnectIfNeeded() async {
         guard !holdsLaunchFixture, !userDisconnected else { return }
         switch mode {
@@ -1569,6 +1616,7 @@ final class RemoteStore: ObservableObject {
     }
 
     private func publish() {
+        backgroundHold.update(turnRunning: sessions.contains { $0.status == .running })
         persistThreads()
         bridge.push(snapshot, direct: directContext)
     }
@@ -1870,6 +1918,11 @@ final class RemoteStore: ObservableObject {
         guard let index = arguments.firstIndex(of: name), arguments.index(after: index) < arguments.endIndex else { return nil }
         return arguments[arguments.index(after: index)]
     }
+}
+
+private struct DemoReply {
+    var due: Date
+    var text: String
 }
 
 final class PhoneBridge: NSObject, WCSessionDelegate {

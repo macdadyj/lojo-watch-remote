@@ -112,6 +112,34 @@ final class PhoneChatUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Done. \(expected)"].waitForExistence(timeout: 8), "the dictated task got no reply")
     }
 
+    /// Leaving the app mid-turn must not lose the reply: it is on screen when the app comes back.
+    func testReplyLandsWhenTheAppLeavesMidTurn() throws {
+        let app = launch()
+        let newChat = app.buttons["chat.new"]
+        XCTAssertTrue(newChat.waitForExistence(timeout: 8))
+        newChat.tap()
+        let prompt = composer(app, identifier: "chat.prompt")
+        XCTAssertTrue(prompt.waitForExistence(timeout: 4))
+        prompt.tap()
+        prompt.typeText("Take your time on this")
+        app.buttons["chat.start"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["chat.thread"].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.staticTexts["Done. Take your time on this"].exists, "the slow reply came before the app left")
+
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 9)
+        app.activate()
+
+        XCTAssertTrue(
+            app.staticTexts["Done. Take your time on this"].waitForExistence(timeout: 6),
+            "the reply that finished while the app was away never showed"
+        )
+        XCTAssertFalse(app.staticTexts["Offline"].exists, "coming back showed the computer offline")
+        send(app, "still here")
+        XCTAssertTrue(app.staticTexts["Done. still here"].waitForExistence(timeout: 8), "the chat stopped answering after the app came back")
+        shot(app, "phone-mid-turn-background")
+    }
+
     func testBackgroundForegroundKeepsTheThreadResponsive() throws {
         let app = launch()
         openIdle(app)

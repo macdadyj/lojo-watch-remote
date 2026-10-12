@@ -1,5 +1,18 @@
 import Foundation
 
+/// How long the demo computer takes to answer. A prompt that starts with "take your time" is
+/// slow enough for a test to lock the screen or leave the app mid-turn, like `host/fake_grok.py`.
+public enum DemoTiming {
+    public static let slowPrompt = "take your time"
+    public static let slowSeconds: TimeInterval = 6
+    public static let quickSeconds: TimeInterval = 0.2
+
+    public static func replyDelay(for prompt: String) -> TimeInterval {
+        let folded = prompt.split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
+        return folded.hasPrefix(slowPrompt) ? slowSeconds : quickSeconds
+    }
+}
+
 public struct MockEngine: Equatable, Sendable {
     public private(set) var sessions: [GrokSession]
 

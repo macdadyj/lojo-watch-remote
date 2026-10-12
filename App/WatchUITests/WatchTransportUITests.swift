@@ -104,6 +104,45 @@ final class WatchTransportUITests: XCTestCase {
         shot(app, "relay-auto-approved")
     }
 
+    /// The wrist goes down or another app opens while Grok is still answering. The reply must be on
+    /// screen when the app comes back, with no offline state and no second prompt sent.
+    func testReplyLandsAfterTheWatchLeavesMidTurn() throws {
+        try control("/reset")
+        let app = launchRelay(utterances: ["Take your time", "Again"])
+        waitForChats(app)
+        speak(app)
+        XCTAssertTrue(bubble(app, "Take your time").waitForExistence(timeout: 8), "the spoken words did not become a bubble")
+        XCTAssertFalse(bubble(app, "Thanks for waiting.").exists, "the slow reply came before the Watch left")
+
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 10)
+        app.activate()
+
+        XCTAssertTrue(
+            bubble(app, "Thanks for waiting.").waitForExistence(timeout: replySeconds),
+            "the reply that finished while the Watch was away never showed; screen: \(screenText(app))"
+        )
+        XCTAssertFalse(app.staticTexts["Computer offline"].exists, "coming back showed the computer offline")
+        assertBubbles(app, ["Take your time", "Thanks for waiting."])
+        XCTAssertEqual(try grokState().prompts.map(\.text), ["Take your time"], "the prompt was sent twice or lost")
+        shot(app, "relay-mid-turn-background")
+
+        speak(app)
+        XCTAssertTrue(bubble(app, "Heard again.").waitForExistence(timeout: replySeconds), "the chat stopped answering after the Watch came back")
+        XCTAssertEqual(Set(try grokState().prompts.map(\.session)).count, 1, "the follow-up opened a new chat")
+    }
+
+    /// A long-used Grok with more history than one relay frame holds still lists and answers.
+    func testHeavyHistoryStillListsAndReplies() throws {
+        try control("/reset?heavy=1")
+        let app = launchRelay(utterances: ["Can you hear me"])
+        waitForChats(app)
+        speak(app)
+        XCTAssertTrue(bubble(app, "I can hear you.").waitForExistence(timeout: replySeconds), "no reply with a heavy Grok history")
+        XCTAssertFalse(app.staticTexts["Computer offline"].exists, "a heavy history knocked the computer offline")
+        shot(app, "relay-heavy-history")
+    }
+
     /// The Watch's phone path against an in-process iPhone echo. This gates: it does not depend on
     /// the simulator's WatchConnectivity, which CI runners have not delivered.
     func testPhonePathRepliesAndContinues() throws {

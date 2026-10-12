@@ -134,10 +134,28 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertEqual(WatchRouting.relayHostOnline(relayUp: false, relayFailed: true, failures: 0, lastHostOnline: true), false)
     }
 
+    func testComingBackReloadsTheOpenChatAndRunningOnes() {
+        let sessions = [
+            GrokSession(id: "done", title: "", summary: "", status: .idle),
+            GrokSession(id: "busy", title: "", summary: "", status: .running),
+            GrokSession(id: "asks", title: "", summary: "", status: .needsApproval),
+            GrokSession(id: "local-1", title: "", summary: "", status: .running),
+            GrokSession(id: "more", title: "", summary: "", status: .running),
+        ]
+        XCTAssertEqual(ForegroundCatchUp.chatsToReload(open: "done", sessions: sessions), ["done", "busy", "asks"])
+        XCTAssertEqual(ForegroundCatchUp.chatsToReload(open: "busy", sessions: sessions), ["busy", "asks", "more"])
+        XCTAssertEqual(ForegroundCatchUp.chatsToReload(open: nil, sessions: [sessions[0]]), [])
+    }
+
     func testDictationAddsToWhatWasTyped() {
         XCTAssertEqual(DictationText.merge(typed: "", spoken: "summarize the changes"), "summarize the changes")
         XCTAssertEqual(DictationText.merge(typed: "Please ", spoken: "summarize the changes"), "Please summarize the changes")
         XCTAssertEqual(DictationText.merge(typed: "Please", spoken: "  "), "Please")
+    }
+
+    func testDemoTakesItsTimeOnlyWhenAsked() {
+        XCTAssertEqual(DemoTiming.replyDelay(for: "Take your  time on this"), DemoTiming.slowSeconds)
+        XCTAssertEqual(DemoTiming.replyDelay(for: "add a note"), DemoTiming.quickSeconds)
     }
 
     func testAutoApproveIsOnUntilTurnedOff() {

@@ -29,6 +29,25 @@ public enum SessionKeepalive {
     }
 }
 
+/// What the iPhone reloads when it comes back to the front. iOS drops the SSH socket of a
+/// suspended app, but the computer keeps running the turn, so reloading these chats replays
+/// every reply that finished while the phone was away.
+public enum ForegroundCatchUp {
+    public static let maxChats = 3
+
+    public static func chatsToReload(open: String?, sessions: [GrokSession]) -> [String] {
+        var ids: [String] = []
+        if let open, !open.isEmpty {
+            ids.append(open)
+        }
+        for session in sessions where session.status == .running || session.status == .needsApproval {
+            guard !ids.contains(session.id), !session.id.hasPrefix("local-") else { continue }
+            ids.append(session.id)
+        }
+        return Array(ids.prefix(maxChats))
+    }
+}
+
 /// Dictation fills the composer without throwing away what was already typed there.
 public enum DictationText {
     public static func merge(typed: String, spoken: String) -> String {
