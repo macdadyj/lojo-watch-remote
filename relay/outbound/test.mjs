@@ -120,8 +120,117 @@ test("health does not require a token", async () => {
   const port = await listen(relay);
   const response = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { ok: true });
+  assert.deepEqual(await response.json(), { ok: true, watchPoll: true });
   relay.server.close();
+});
+
+function poll(port, token, body, headers = {}) {
+  return fetch(`http://127.0.0.1:${port}/v1/watch`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+test("an HTTP watch reaches a WebSocket host and long-polls the reply", async () => {
+  const logs = [];
+  const relay = createRelay({ log: (entry) => logs.push(entry) });
+  const port = await listen(relay);
+  const token = "roomtokenvalue0101";
+  const host = await connect(port);
+  await auth(host, "host", token);
+  const secret = Buffer.from("watch-body-not-logged");
+  const sent = await poll(port, token, { send: [secret.toString("base64")] });
+  assert.equal(sent.status, 200);
+  const first = await sent.json();
+  assert.equal(first.ok, true);
+  assert.equal(first.host, true);
+  assert.deepEqual(first.frames, []);
+  await host.waitFor((frames) => frames.some((frame) => frame.opcode === 2 && frame.payload.equals(secret)));
+
+  const started = Date.now();
+  const waiting = poll(port, token, { after: 0, epoch: first.epoch, wait: 5000 });
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  host.send(2, Buffer.from("host-reply"));
+  const answered = await (await waiting).json();
+  assert.ok(Date.now() - started < 3000);
+  assert.equal(answered.frames.length, 1);
+  assert.equal(Buffer.from(answered.frames[0].data, "base64").toString(), "host-reply");
+
+  const again = await (await poll(port, token, { after: 0, epoch: first.epoch })).json();
+  assert.equal(again.frames.length, 1, "unacked frames are redelivered");
+  const acked = await (await poll(port, token, { after: answered.frames[0].seq, epoch: first.epoch })).json();
+  assert.deepEqual(acked.frames, []);
+  const dumped = JSON.stringify(logs);
+  assert.equal(dumped.includes(token), false);
+  assert.equal(dumped.includes("watch-body-not-logged"), false);
+  relay.server.close();
+  host.socket.destroy();
+});
+
+test("frames from the host queue for an HTTP watch that is not polling", async () => {
+  const relay = createRelay({ log: () => {} });
+  const port = await listen(relay);
+  const token = "roomtokenvalue0102";
+  const host = await connect(port);
+  await auth(host, "host", token);
+  host.send(2, Buffer.from("one"));
+  host.send(2, Buffer.from("two"));
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const body = await (await poll(port, token, { after: 5, epoch: "stale-epoch" })).json();
+  assert.deepEqual(body.frames.map((frame) => Buffer.from(frame.data, "base64").toString()), ["one", "two"]);
+  relay.server.close();
+  host.socket.destroy();
+});
+
+test("an HTTP watch learns when the host is offline and its frames wait for it", async () => {
+  const relay = createRelay({ log: () => {} });
+  const port = await listen(relay);
+  const token = "roomtokenvalue0103";
+  const body = await (await poll(port, token, { send: [Buffer.from("early").toString("base64")] })).json();
+  assert.equal(body.host, false);
+  const host = await connect(port);
+  await auth(host, "host", token);
+  await host.waitFor((frames) => frames.some((frame) => frame.opcode === 2 && frame.payload.toString() === "early"));
+  relay.server.close();
+  host.socket.destroy();
+});
+
+test("an HTTP poll needs a well-formed token and a POST", async () => {
+  const relay = createRelay({ log: () => {} });
+  const port = await listen(relay);
+  assert.equal((await poll(port, "short", {})).status, 401);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/watch`)).status, 405);
+  const bad = await fetch(`http://127.0.0.1:${port}/v1/watch`, {
+    method: "POST",
+    headers: { authorization: "Bearer roomtokenvalue0104" },
+    body: "{nope",
+  });
+  assert.equal(bad.status, 400);
+  relay.server.close();
+});
+
+test("an HTTP watch is rate limited by frames sent", async () => {
+  const relay = createRelay({ log: () => {}, ratePer10s: 2 });
+  const port = await listen(relay);
+  const token = "roomtokenvalue0105";
+  const one = Buffer.from("a").toString("base64");
+  assert.equal((await poll(port, token, { send: [one, one] })).status, 200);
+  assert.equal((await poll(port, token, { send: [one] })).status, 429);
+  relay.server.close();
+});
+
+test("closing the relay releases a parked poll", async () => {
+  const relay = createRelay({ log: () => {} });
+  const port = await listen(relay);
+  const token = "roomtokenvalue0106";
+  const waiting = poll(port, token, { wait: 20000 });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const started = Date.now();
+  relay.server.close();
+  const body = await (await waiting).json();
+  assert.ok(Date.now() - started < 2000);
+  assert.deepEqual(body.frames, []);
 });
 
 test("a room accepts one host and one watch and forwards only ciphertext", async () => {

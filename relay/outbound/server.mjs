@@ -17,9 +17,10 @@ import net from "node:net";
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const MAX_FRAME = 256 * 1024;
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,128}$/;
+const MAX_POLL_BODY = 16 * Math.ceil((MAX_FRAME * 4) / 3) + 4096;
 
 export function createRelay(options = {}) {
-  const ratePer10s = numberOption(options.ratePer10s, process.env.WATCHREMOTE_OUTBOUND_RATE, 40);
+  const ratePer10s = numberOption(options.ratePer10s, process.env.WATCHREMOTE_OUTBOUND_RATE, 120);
   const upgradesPerMinute = numberOption(options.upgradesPerMinute, process.env.WATCHREMOTE_OUTBOUND_UPGRADES, 30);
   const maxConnections = numberOption(options.maxConnections, process.env.WATCHREMOTE_OUTBOUND_MAX, 200);
   const authFailuresPerMinute = numberOption(options.authFailuresPerMinute, process.env.WATCHREMOTE_OUTBOUND_AUTH_FAILURES, 8);
@@ -32,6 +33,10 @@ export function createRelay(options = {}) {
   const peers = new Set();
   let connections = 0;
   const heartbeatMs = numberOption(options.heartbeatMs, process.env.WATCHREMOTE_OUTBOUND_HEARTBEAT_MS, 25000);
+  const pollsPer10s = numberOption(options.pollsPer10s, process.env.WATCHREMOTE_OUTBOUND_POLLS, 60);
+  const maxWaitMs = numberOption(options.maxWaitMs, process.env.WATCHREMOTE_OUTBOUND_MAX_WAIT_MS, 25000);
+  const watchQueue = numberOption(options.watchQueue, process.env.WATCHREMOTE_OUTBOUND_WATCH_QUEUE, 64);
+  const idleRoomMs = numberOption(options.idleRoomMs, process.env.WATCHREMOTE_OUTBOUND_IDLE_ROOM_MS, 30 * 60_000);
 
   function note(event, extra = {}) {
     const safe = { event };
@@ -56,22 +61,197 @@ export function createRelay(options = {}) {
     const id = crypto.createHash("sha256").update(token).digest("hex");
     let room = rooms.get(id);
     if (!room) {
-      room = { id, host: null, watch: null, queue: { host: [], watch: [] } };
+      room = {
+        id,
+        host: null,
+        watch: null,
+        queue: { host: [], watch: [] },
+        epoch: crypto.randomBytes(8).toString("hex"),
+        seq: 0,
+        waiters: new Set(),
+        polledAt: 0,
+        sent: [],
+        touched: Date.now(),
+      };
       rooms.set(id, room);
     }
+    room.touched = Date.now();
     return room;
   }
 
   function dropRoom(room) {
-    if (!room.host && !room.watch && room.queue.host.length === 0 && room.queue.watch.length === 0) {
+    if (!room.host && !room.watch && room.queue.host.length === 0 && room.queue.watch.length === 0 && room.waiters.size === 0) {
       rooms.delete(room.id);
     }
   }
 
+  /** Frames for the Watch carry a sequence number so an HTTP poll can ack them by position. */
+  function deliverToWatch(room, payload) {
+    const watch = room.watch;
+    if (watch && !watch.closed) {
+      sendFrame(watch.socket, 2, payload);
+      return;
+    }
+    room.seq += 1;
+    room.queue.watch.push({ seq: room.seq, data: Buffer.from(payload) });
+    if (room.queue.watch.length > watchQueue) room.queue.watch.splice(0, room.queue.watch.length - watchQueue);
+    wakeWatchPolls(room);
+  }
+
+  function wakeWatchPolls(room) {
+    for (const waiter of [...room.waiters]) waiter();
+  }
+
+  function deliverToHost(room, payload) {
+    const host = room.host;
+    if (host && !host.closed) {
+      sendFrame(host.socket, 2, payload);
+    } else if (room.queue.host.length < 32) {
+      room.queue.host.push(Buffer.from(payload));
+    }
+  }
+
+  function hostOnline(room) {
+    return Boolean(room.host && !room.host.closed);
+  }
+
+  /**
+   * POST /v1/watch — the Watch's transport. A real Apple Watch denies WebSockets to
+   * ordinary apps, so the Watch long-polls here with plain HTTPS instead.
+   *
+   * Request:  Authorization: Bearer <room token>
+   *           {"send": [base64 ciphertext...], "after": <last seq seen>, "epoch": "<from last reply>", "wait": <ms>}
+   * Response: {"ok": true, "epoch": "...", "host": <host connected>, "frames": [{"seq": n, "data": base64}]}
+   *
+   * Frames stay queued until a later poll acks them with `after`, so a reply is never lost
+   * when a poll dies in flight. A different `epoch` means the room was recreated; the
+   * client restarts from zero.
+   */
+  function handleWatchPoll(req, res) {
+    const ip = clientAddress(req.socket.remoteAddress, req.headers["x-forwarded-for"], trustedProxies);
+    if (limits.get(`${ip}:auth`)?.blocked || limited(ip, "poll", pollsPer10s, 10_000)) {
+      note("rate");
+      reply(res, 429, { ok: false, error: "rate" });
+      return;
+    }
+    const header = String(req.headers.authorization || "");
+    const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+    if (!TOKEN_RE.test(token)) {
+      failHttpAuth(ip);
+      reply(res, 401, { ok: false, error: "auth" });
+      req.resume();
+      return;
+    }
+    readBody(req, MAX_POLL_BODY)
+      .then((raw) => {
+        let body;
+        try {
+          body = raw.length ? JSON.parse(raw.toString("utf8")) : {};
+        } catch {
+          reply(res, 400, { ok: false, error: "json" });
+          return;
+        }
+        if (!body || typeof body !== "object") {
+          reply(res, 400, { ok: false, error: "json" });
+          return;
+        }
+        const send = Array.isArray(body.send) ? body.send : [];
+        if (send.length > 16) {
+          reply(res, 413, { ok: false, error: "too-many" });
+          return;
+        }
+        const frames = [];
+        for (const item of send) {
+          if (typeof item !== "string") {
+            reply(res, 400, { ok: false, error: "frame" });
+            return;
+          }
+          const data = Buffer.from(item, "base64");
+          if (data.length === 0 || data.length > MAX_FRAME) {
+            reply(res, 413, { ok: false, error: "frame" });
+            return;
+          }
+          frames.push(data);
+        }
+        const room = roomFor(token);
+        const now = Date.now();
+        room.sent = room.sent.filter((stamp) => now - stamp < 10_000);
+        if (room.sent.length + frames.length > ratePer10s) {
+          note("rate");
+          reply(res, 429, { ok: false, error: "rate" });
+          return;
+        }
+        for (const frame of frames) {
+          room.sent.push(now);
+          deliverToHost(room, frame);
+        }
+        const firstPoll = room.polledAt === 0;
+        room.polledAt = now;
+        if (firstPoll) note("joined", { role: "watch", room: room.id });
+        const sameEpoch = typeof body.epoch === "string" && body.epoch === room.epoch;
+        const after = sameEpoch && Number.isInteger(body.after) && body.after > 0 ? body.after : 0;
+        if (after > 0) room.queue.watch = room.queue.watch.filter((frame) => frame.seq > after);
+        const wait = frames.length ? 0 : Math.max(0, Math.min(maxWaitMs, Number(body.wait) || 0));
+        const pending = () => room.queue.watch.filter((frame) => frame.seq > after);
+        const finish = () => {
+          room.polledAt = Date.now();
+          room.touched = room.polledAt;
+          reply(res, 200, {
+            ok: true,
+            epoch: room.epoch,
+            host: hostOnline(room),
+            frames: pending().map((frame) => ({ seq: frame.seq, data: frame.data.toString("base64") })),
+          });
+        };
+        if (wait === 0 || pending().length) {
+          finish();
+          return;
+        }
+        let done = false;
+        const settle = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          room.waiters.delete(waiter);
+          finish();
+        };
+        const waiter = () => settle();
+        const timer = setTimeout(settle, wait);
+        room.waiters.add(waiter);
+        res.on("close", () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          room.waiters.delete(waiter);
+        });
+      })
+      .catch((error) => {
+        reply(res, error?.code === "too-large" ? 413 : 400, { ok: false, error: "body" });
+      });
+  }
+
+  function failHttpAuth(ip) {
+    if (limited(ip, "auth", authFailuresPerMinute, 60_000)) {
+      const row = limits.get(`${ip}:auth`);
+      if (row) row.blocked = true;
+      note("rate");
+    } else {
+      note("auth-failed");
+    }
+  }
+
   const server = http.createServer((req, res) => {
-    if (req.method === "GET" && (req.url === "/health" || req.url === "/health/")) {
-      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-      res.end('{"ok":true}\n');
+    const path = (req.url || "").split("?")[0];
+    if (req.method === "GET" && (path === "/health" || path === "/health/")) {
+      reply(res, 200, { ok: true, watchPoll: true });
+      return;
+    }
+    if (path === "/v1/watch") {
+      if (req.method !== "POST") {
+        reply(res, 405, { ok: false, error: "method" });
+        return;
+      }
+      handleWatchPoll(req, res);
       return;
     }
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
@@ -228,20 +408,16 @@ export function createRelay(options = {}) {
         note("joined", { role, room: room.id });
         const queued = room.queue[role];
         room.queue[role] = [];
-        for (const frame of queued) sendFrame(current.socket, 2, frame);
+        for (const frame of queued) sendFrame(current.socket, 2, Buffer.isBuffer(frame) ? frame : frame.data);
         return;
       }
       if (opcode !== 2) {
         closePeer(current, 1003);
         return;
       }
-      const otherRole = current.role === "host" ? "watch" : "host";
-      const other = current.room[otherRole];
-      if (other && !other.closed) {
-        sendFrame(other.socket, 2, payload);
-      } else if (current.room.queue[otherRole].length < 32) {
-        current.room.queue[otherRole].push(Buffer.from(payload));
-      }
+      current.room.touched = Date.now();
+      if (current.role === "host") deliverToWatch(current.room, payload);
+      else deliverToHost(current.room, payload);
     }
 
     function failAuth(current) {
@@ -279,6 +455,25 @@ export function createRelay(options = {}) {
     server.on("close", () => clearInterval(heartbeat));
   }
 
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const room of rooms.values()) {
+      if (room.host || room.watch || room.waiters.size) continue;
+      if (now - room.touched > idleRoomMs) rooms.delete(room.id);
+    }
+    for (const [key, row] of limits) {
+      if (now >= row.reset && !row.blocked) limits.delete(key);
+      else if (row.blocked && now >= row.reset + 60_000) limits.delete(key);
+    }
+  }, 60_000);
+  sweep.unref?.();
+  const closeServer = server.close.bind(server);
+  server.close = (callback) => {
+    clearInterval(sweep);
+    for (const room of rooms.values()) wakeWatchPolls(room);
+    return closeServer(callback);
+  };
+
   return {
     server,
     rooms,
@@ -286,6 +481,46 @@ export function createRelay(options = {}) {
     requestHandler: server.listeners("request")[0],
     upgradeHandler: server.listeners("upgrade")[0],
   };
+}
+
+function reply(res, status, body) {
+  if (res.headersSent || res.writableEnded) return;
+  const text = `${JSON.stringify(body)}\n`;
+  res.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+    "content-length": Buffer.byteLength(text),
+  });
+  res.end(text);
+}
+
+function readBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let failed = false;
+    req.on("data", (chunk) => {
+      if (failed) return;
+      size += chunk.length;
+      if (size > limit) {
+        failed = true;
+        const error = new Error("too large");
+        error.code = "too-large";
+        reject(error);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (!failed) resolve(Buffer.concat(chunks));
+    });
+    req.on("error", (error) => {
+      if (!failed) {
+        failed = true;
+        reject(error);
+      }
+    });
+  });
 }
 
 function refuse(socket, status) {
