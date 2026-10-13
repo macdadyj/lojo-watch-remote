@@ -3,7 +3,10 @@
 
 Run it on the host computer (the one the iPhone SSHes into), from a checkout of the repo:
 
-    python3 e2e/real_host_check.py
+    e2e/run-real-host-check.sh
+
+That installs this checkout's door and outbound service first. `python3 e2e/real_host_check.py`
+runs the check alone against whatever is installed.
 
 It talks to the door on 127.0.0.1:2419 exactly as the iPhone does after SSH forwards the port
 (same upgrade headers, same ACP requests, same transcript rules; see e2e/phone_mirror.py), and,
@@ -25,6 +28,7 @@ import getpass
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -33,7 +37,7 @@ import time
 import traceback
 import uuid
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -46,6 +50,8 @@ import watch_poll  # noqa: E402
 DEFAULT_PROMPT = "What's the weather today in Argyle Texas"
 DEFAULT_SECOND = "And what about tomorrow there?"
 DEFAULT_OTHER = "What's the weather today in Amarillo Texas"
+# "Texas.Pulling": a chunk boundary lost its space (a reload trimmed the line it streamed onto).
+GLUED_SENTENCE = re.compile(r"[a-z][.!?][A-Z][a-z]")
 SCENARIOS = ["turns", "reopen", "background", "relaunch", "crossing", "watch", "together"]
 
 
@@ -99,7 +105,12 @@ class Context:
         self.secret = read_secret(Path(args.secret_file).expanduser())
         home = str(Path.home())
         user = getpass.getuser()
-        self.redactions = [(home, "~"), (f"/{user}/", "/user/"), (platform.node(), "host")]
+        # Grok names its per-folder session directories with the folder path percent-encoded.
+        self.redactions = [
+            (home, "~"), (quote(home, safe=""), "~"),
+            (f"/{user}/", "/user/"), (f"%2F{user}%2F", "%2Fuser%2F"),
+            (platform.node(), "host"),
+        ]
         self.results: list[tuple[str, bool, str]] = []
         self.meta = {
             "grok": grok_version(),
@@ -191,6 +202,9 @@ def check_turn(model: phone.PhoneModel, session_id: str, prompt: str, words: lis
         text = " ".join(phone.spoken_text(line) for line in replies)
         expect(word.lower() not in text.lower(), f"{what}: the reply mentions {word!r}, which belongs to another chat: {text[:300]!r}")
     expect(not any(line == "Tool: Tool" for line in lines), f"{what}: a title-less tool update became its own step: {lines}")
+    for line in replies:
+        glued = GLUED_SENTENCE.search(line)
+        expect(glued is None, f"{what}: two streamed chunks were glued together at {glued.group(0) if glued else ''!r}: {line[:300]!r}")
     return final
 
 
@@ -293,7 +307,7 @@ def scenario_background(ctx: Context, recording: Recording) -> str:
     model = ctx.model(recording)
     link = new_link()
     pipe = ctx.connect(model, link)
-    expect(pipe.door_version >= 3, "the agent door on this computer predates the shared Grok connection; install host/agentdoor.py (e2e/santa-e2e.sh does)")
+    expect(pipe.door_version >= 3, "the agent door on this computer predates the shared Grok connection; install host/agentdoor.py (e2e/run-real-host-check.sh does)")
     session_id = model.start(args.prompt)
     log(f"chat {short(session_id)}: sent, waiting for the first tool step")
     expect(model.wait(lambda: first_tool_or_permission(model, session_id), args.timeout), "no tool step or answer arrived")
@@ -391,7 +405,12 @@ class WatchSide:
             self.base, str(config["token"]), config["key"],
             on_message=lambda message: recording.add({"k": "relay-in", "f": message}),
         )
+        # A just-restarted outbound service takes a few seconds to reach the relay.
+        deadline = time.monotonic() + 30
         self.watch.poll(wait_ms=0)
+        while not self.watch.host_online and time.monotonic() < deadline:
+            time.sleep(1)
+            self.watch.poll(wait_ms=0)
         expect(self.watch.host_online, f"the relay at {self.base} says this computer's outbound service is offline")
 
     def start(self, prompt: str, session_id: str | None = None) -> str:

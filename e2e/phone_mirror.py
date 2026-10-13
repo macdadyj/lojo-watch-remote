@@ -320,6 +320,20 @@ def prompt_key(line: str) -> str:
 
 
 def merge(local: list[str], host: list[str]) -> list[str]:
+    return keeping_trailing_space(host, merged_lines(local, host))
+
+
+def keeping_trailing_space(host: list[str], merged: list[str]) -> list[str]:
+    raw = next((line for line in reversed(host) if line.strip()), None)
+    if not merged or raw is None:
+        return merged
+    last = merged[-1]
+    if raw == last or not raw.startswith(last) or raw.strip() != last:
+        return merged
+    return merged[:-1] + [raw]
+
+
+def merged_lines(local: list[str], host: list[str]) -> list[str]:
     host_chat = chat_lines(host)
     local_chat = chat_lines(local)
     host_prompts = [prompt_key(line) for line in host_chat if line.startswith("You:")]
@@ -421,6 +435,9 @@ class Pipe:
         self.waiters: dict[int, dict] = {}
         self.done: dict[int, threading.Event] = {}
         self.captures: dict[str, list[tuple]] = {}
+        self.loads: dict[int, str] = {}
+        self.replays: dict[str, list[tuple]] = {}
+        self.held: dict[str, list[tuple]] = {}
         self.dead = False
         self.sock = socket.create_connection(address, timeout=10)
         key = base64.b64encode(os.urandom(16)).decode("ascii")
@@ -504,17 +521,31 @@ class Pipe:
                     event = self.done.get(ident)
                     if event is not None:
                         self.waiters[ident] = inbound[2] if kind == "result" else {"error": inbound[2]}
+                    loading = self.loads.pop(ident, None)
+                    if loading is not None:
+                        # endReplay: the replay is complete; later frames wait for releaseHeld.
+                        self.replays[loading] = self.captures.pop(loading, [])
+                        self.held.setdefault(loading, [])
                 if event is not None:
                     event.set()
             return
-        if kind == "update":
-            session_id = inbound[1]
+        session_id = inbound[1] if kind == "update" else inbound[1]["sessionID"] if kind == "permission" else None
+        if session_id is not None:
             with self.lock:
+                held = self.held.get(session_id)
+                if held is not None:
+                    held.append(inbound)
+                    return
                 capture = self.captures.get(session_id)
-                if capture is not None:
+                if capture is not None and kind == "update":
                     capture.append(inbound[2])
                     return
         self.on_inbound(self, inbound)
+
+    def release_held(self, session_id: str) -> list[tuple]:
+        """Frames for this chat that came after its load result, for after the merge (LiveLink.releaseHeld)."""
+        with self.lock:
+            return self.held.pop(session_id, [])
 
     def _fail(self) -> None:
         with self.lock:
@@ -539,11 +570,13 @@ class Pipe:
         self.on_frame(self.label, "out", obj)
         self.sock.sendall(_client_frame(1, text.encode("utf-8")))
 
-    def request(self, method: str, params: dict, timeout: float | None = 12) -> dict:
+    def request(self, method: str, params: dict, timeout: float | None = 12, loading: str | None = None) -> dict:
         ident = self.link.take_id()
         event = threading.Event()
         with self.lock:
             self.done[ident] = event
+            if loading is not None:
+                self.loads[ident] = loading
         self.send({"jsonrpc": "2.0", "id": ident, "method": method, "params": params})
         event.wait(timeout)
         with self.lock:
@@ -580,13 +613,22 @@ class Pipe:
         return [row for row in rows or [] if isinstance(row, dict)]
 
     def load_captured(self, session_id: str, cwd: str) -> tuple[dict, list[tuple]]:
+        """The load result and its replay. Later frames for the chat are held until release_held."""
         with self.lock:
             self.captures[session_id] = []
         try:
-            result = self.request("session/load", {"sessionId": session_id, "cwd": cwd, "mcpServers": []}, timeout=30)
-        finally:
+            result = self.request("session/load", {"sessionId": session_id, "cwd": cwd, "mcpServers": []}, timeout=30,
+                                  loading=session_id)
+        except DoorError:
             with self.lock:
-                replay = self.captures.pop(session_id, [])
+                self.captures.pop(session_id, None)
+                self.replays.pop(session_id, None)
+                held = self.held.pop(session_id, [])
+            for inbound in held:
+                self.on_inbound(self, inbound)
+            raise
+        with self.lock:
+            replay = self.replays.pop(session_id, self.captures.pop(session_id, []))
         return result, replay
 
     def prompt_async(self, session_id: str, text: str, on_done: Callable[[dict | None], None]) -> int:
@@ -769,6 +811,9 @@ class PhoneModel:
                 chat.turns.loaded(running)
                 if chat.permission is None:
                     chat.status = "running" if running else "idle"
+            # adoptHeld: what came after the load result applies on top of the merged chat.
+            for inbound in pipe.release_held(session_id):
+                self.on_inbound(pipe, inbound)
             self.cond.notify_all()
         return result
 

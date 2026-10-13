@@ -12,3 +12,4 @@ __pycache__/
 *.pyc
 .venv/
 .build/
+e2e/recordings/
