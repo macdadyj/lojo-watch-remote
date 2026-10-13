@@ -91,6 +91,22 @@ public enum SessionResume {
     /// A longer phone copy must not win. Live tool updates and missed first prompts made the cached
     /// copy longer than the replay while it was also out of order and missing the final answer.
     public static func merge(local: [String], host: [String]) -> [String] {
+        keepingTrailingSpace(of: host, in: mergedLines(local: local, host: host))
+    }
+
+    /// Grok streams "…Texas. " and then "Pulling…". When a reload ends on the computer's last
+    /// line mid-answer, that line keeps its trailing space so the next live chunk is not glued on.
+    private static func keepingTrailingSpace(of host: [String], in merged: [String]) -> [String] {
+        guard let last = merged.last,
+              let raw = host.last(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              raw != last, raw.hasPrefix(last),
+              raw.trimmingCharacters(in: .whitespacesAndNewlines) == last else { return merged }
+        var copy = merged
+        copy[copy.count - 1] = raw
+        return copy
+    }
+
+    private static func mergedLines(local: [String], host: [String]) -> [String] {
         let hostChat = chatLines(host)
         let localChat = chatLines(local)
         let hostPrompts = hostChat.filter { $0.hasPrefix("You:") }.map(promptKey)

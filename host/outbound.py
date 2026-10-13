@@ -1043,8 +1043,15 @@ def merge_transcript(local: list, host: list) -> list[str]:
     def key(line: str) -> str:
         return " ".join(line[4:].split()).lower()
 
-    host_chat = chat(host)
-    local_chat = chat(local)
+    merged = _merged_lines(chat(local), chat(host), key)
+    # Grok streams "…Texas. " then "Pulling…": a reload mid-answer keeps that trailing space.
+    raw = next((str(line) for line in reversed(host) if str(line).strip()), None)
+    if merged and raw is not None and raw != merged[-1] and raw.startswith(merged[-1]) and raw.strip() == merged[-1]:
+        return merged[:-1] + [raw]
+    return merged
+
+
+def _merged_lines(local_chat: list[str], host_chat: list[str], key) -> list[str]:
     prompts = [key(line) for line in host_chat if line.startswith("You:")]
     if not prompts:
         return local_chat if len(local_chat) > len(host_chat) else host_chat

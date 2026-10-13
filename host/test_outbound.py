@@ -224,6 +224,13 @@ class HandleTests(unittest.TestCase):
         self.assertEqual(outbound.merge_transcript(pending, host), host + ["You: and tomorrow?"])
         self.assertEqual(outbound.merge_transcript(["You: hi", "Grok: hello"], []), ["You: hi", "Grok: hello"])
 
+    def test_a_reload_mid_answer_keeps_the_space_before_the_next_chunk(self) -> None:
+        # Real Grok 1.0.52: the replay of a running turn ends "Texas. ", the next live chunk is "Pulling".
+        host = outbound.fold_speaker(["You: weather in Argyle Texas"], "Grok:", "I'll check: Argyle Texas. ")
+        merged = outbound.merge_transcript(["You: weather in Argyle Texas"], host)
+        lines = outbound.fold_speaker(merged, "Grok:", "Pulling a few readings first.")
+        self.assertEqual(lines[-1], "Grok: I'll check: Argyle Texas. Pulling a few readings first.")
+
     def test_a_finished_chat_reaches_the_watch_with_its_prompt(self) -> None:
         lines = ["You: weather in Argyle", "Tool: a", "Tool: b", "Tool: c"]
         lines = outbound.fold_speaker(lines, "Grok:", "Final answer for Argyle Texas. ")
