@@ -11,3 +11,4 @@ Config/Local.xcconfig
 __pycache__/
 *.pyc
 .venv/
+.build/
