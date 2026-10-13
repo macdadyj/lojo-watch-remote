@@ -326,6 +326,40 @@ class AgentDoorTests(unittest.TestCase):
             worker.join(timeout=5)
             grok.close()
 
+    def test_an_approval_grok_settled_is_not_resent(self) -> None:
+        door_side, grok_side = socket.socketpair()
+        registry = agentdoor.LinkRegistry(60)
+        hub = agentdoor.Hub(registry, door_side, b"")
+        link = agentdoor.Link("phone-link-0003", True, registry, hub)
+        hub.add(link)
+        hub.follow(link, "s1")
+
+        def frame(body: dict) -> bytes:
+            return json.dumps(body).encode("utf-8")
+
+        def ask(ident: int, tool: str) -> None:
+            hub._from_grok(frame({"jsonrpc": "2.0", "id": ident, "method": "session/request_permission", "params": {
+                "sessionId": "s1", "toolCall": {"toolCallId": tool, "title": "Run"}, "options": [],
+            }}))
+
+        try:
+            ask(0, "call-a")
+            ask(1, "call-b")
+            self.assertEqual(len(hub.pending_for(link)), 2)
+            # Real Grok 1.0.52 shapes: interaction_resolved names the tool call, prompt_complete the turn.
+            hub._from_grok(frame({"jsonrpc": "2.0", "method": "_x.ai/session_notification", "params": {
+                "sessionId": "s1", "update": {"sessionUpdate": "interaction_resolved", "tool_call_id": "call-a"},
+            }}))
+            self.assertEqual([item.tool_call_id for item in hub.pending_for(link)], ["call-b"])
+            hub._from_grok(frame({"jsonrpc": "2.0", "method": "_x.ai/session/prompt_complete", "params": {
+                "sessionId": "s1", "promptId": "p1", "stopReason": "cancelled",
+            }}))
+            self.assertEqual(hub.pending_for(link), [])
+            self.assertEqual(sum(1 for _seq, payload in link.ring if b"request_permission" in payload), 2)
+        finally:
+            hub.shutdown()
+            grok_side.close()
+
     def test_a_parked_link_keeps_grok_and_resends_the_unanswered_approval(self) -> None:
         grok = fake_grok.FakeGrok(SECRET, chunk_delay=0.01, newest_only=True)
         upstream_port = grok.listen(0)

@@ -391,13 +391,31 @@ def _session_of(obj: dict) -> str:
     return str(params.get("sessionId") or "")
 
 
+def _tool_call_of(obj: dict) -> str:
+    params = obj.get("params")
+    tool = params.get("toolCall") if isinstance(params, dict) else None
+    return str(tool.get("toolCallId") or "") if isinstance(tool, dict) else ""
+
+
+def _resolved_tool_call(obj: dict) -> str | None:
+    """The tool call of an `interaction_resolved` notification, else None."""
+    if obj.get("method") != "_x.ai/session_notification":
+        return None
+    params = obj.get("params")
+    update = params.get("update") if isinstance(params, dict) else None
+    if not isinstance(update, dict) or update.get("sessionUpdate") != "interaction_resolved":
+        return None
+    return str(update.get("tool_call_id") or "")
+
+
 class _Pending:
     """A request Grok sent the clients (an approval) that nobody has answered yet."""
 
-    def __init__(self, ident: object, payload: bytes, session_id: str) -> None:
+    def __init__(self, ident: object, payload: bytes, session_id: str, tool_call_id: str) -> None:
         self.ident = ident
         self.payload = payload
         self.session_id = session_id
+        self.tool_call_id = tool_call_id
         self.since = time.monotonic()
 
 
@@ -533,14 +551,20 @@ class Hub:
             return
         session_id = _session_of(obj)
         if ident is not None:
-            item = _Pending(ident, payload, session_id)
+            item = _Pending(ident, payload, session_id, _tool_call_of(obj))
             with self.lock:
                 self.pending[_id_key(ident)] = item
                 targets = self._targets_locked(session_id)
             for link in targets:
                 link.offer(_id_key(ident), payload)
             return
+        resolved = _resolved_tool_call(obj)
         with self.lock:
+            if resolved is not None or method == "_x.ai/session/prompt_complete":
+                # Grok settled it (answered elsewhere, cancelled, or the turn ended): never resend it.
+                for key, item in list(self.pending.items()):
+                    if item.session_id == session_id and (resolved is None or item.tool_call_id == resolved):
+                        del self.pending[key]
             loader = self.loading.get(session_id) if method in _REPLAY_METHODS else None
             targets = [loader] if loader is not None else self._targets_locked(session_id)
         for link in targets:
