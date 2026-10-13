@@ -222,6 +222,11 @@ def watch_rows(rows: list, focus: set[str] | None = None, budget: int = WATCH_BU
         lines = copy.get("transcript")
         if isinstance(lines, list):
             keep = FOCUS_LINES if str(copy.get("id")) in focus else OTHER_LINES
+            # The Watch shows these lines as the chat. Cutting the latest prompt off left its
+            # answer with no question above it, and the Watch put the prompt back below it.
+            prompts = [index for index, line in enumerate(lines) if str(line).startswith("You:")]
+            if prompts:
+                keep = min(FOCUS_LINES, max(keep, len(lines) - prompts[-1]))
             copy["transcript"] = [clip_line(line) for line in lines[-keep:]]
         copy.pop("lines", None)
         out.append(copy)
@@ -1075,8 +1080,9 @@ def fold_speaker(lines: list[str], prefix: str, text: str) -> list[str]:
     if lines and lines[-1].startswith(prefix):
         lines[-1] = (lines[-1] + text)[:8000]
         return lines
-    body = " ".join(text.split())
-    if not body:
+    # Only leading space goes: a first chunk ending "Texas. " must not glue onto "Today".
+    body = text.lstrip()
+    if not body.strip():
         return lines
     lines.append(f"{prefix} {body}")
     return lines

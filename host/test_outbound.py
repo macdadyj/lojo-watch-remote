@@ -224,6 +224,17 @@ class HandleTests(unittest.TestCase):
         self.assertEqual(outbound.merge_transcript(pending, host), host + ["You: and tomorrow?"])
         self.assertEqual(outbound.merge_transcript(["You: hi", "Grok: hello"], []), ["You: hi", "Grok: hello"])
 
+    def test_a_finished_chat_reaches_the_watch_with_its_prompt(self) -> None:
+        lines = ["You: weather in Argyle", "Tool: a", "Tool: b", "Tool: c"]
+        lines = outbound.fold_speaker(lines, "Grok:", "Final answer for Argyle Texas. ")
+        lines = outbound.fold_speaker(lines, "Grok:", "Today it is 74°F.")
+        self.assertEqual(lines[-1], "Grok: Final answer for Argyle Texas. Today it is 74°F.")
+        row = outbound.watch_rows([{"id": "s", "title": "T", "status": "idle", "lines": lines}])[0]
+        self.assertEqual(row["transcript"], lines)
+        older = [f"Grok: old {index}" for index in range(60)] + lines
+        trimmed = outbound.watch_rows([{"id": "s", "title": "T", "status": "idle", "lines": older}])[0]
+        self.assertEqual(trimmed["transcript"][0], "You: weather in Argyle")
+
     def test_approvals_answer_once_and_note_once(self) -> None:
         options = [
             {"optionId": "always", "name": "Always allow", "kind": "allow_always"},
