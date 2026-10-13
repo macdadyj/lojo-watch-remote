@@ -5,25 +5,50 @@ The phone key can only forward to 127.0.0.1:2419. This process is what listens
 there. It checks the agent secret from the Authorization header, then either
 proxies to ``grok agent serve`` or runs headless ``grok -p`` on this computer.
 It never asks SSH to execute a command, and it never puts the secret in a URL.
+
+A client that sends ``X-WatchRemote-Link`` gets a parked link: the door keeps
+Grok's connection open while the phone is away (iOS drops the SSH socket of a
+suspended app), and when the same link comes back it resends every frame the
+phone missed. Grok never re-sends an approval request on a new connection, so
+without this a turn that asked for approval while the phone slept waited forever.
 """
 
 from __future__ import annotations
 
 import base64
+import collections
 import hashlib
 import hmac
 import json
 import os
 import queue
+import re
 import select
 import socket
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 AGENT_DOWN = "The agent server on this computer is not answering."
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 HANDSHAKE_LIMIT = 8192
+DOOR_VERSION = 2
+LINK_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
+RING_FRAMES = 4000
+RING_BYTES = 16 * 1024 * 1024
+LINK_LIMIT = 16
+IDLE_PING_SECONDS = 30
+CLIENT_SEND_SECONDS = 15
+
+
+def park_seconds() -> float:
+    text = os.environ.get("WATCHREMOTE_DOOR_PARK_SECONDS", "").strip()
+    try:
+        value = float(text) if text else 6 * 3600
+    except ValueError:
+        value = 6 * 3600
+    return max(5.0, value)
 
 
 class DoorError(Exception):
@@ -118,23 +143,35 @@ def serve(
     listener.listen(8)
     listener.settimeout(0.5)
     program = binary or grok_binary()
+    links = LinkRegistry(park_seconds())
     ready.set()
+    last_sweep = time.monotonic()
     try:
         while not stop.is_set():
+            if time.monotonic() - last_sweep > 15:
+                last_sweep = time.monotonic()
+                links.sweep()
             try:
                 client, _address = listener.accept()
             except TimeoutError:
                 continue
             threading.Thread(
                 target=_client,
-                args=(client, secret, upstream, program),
+                args=(client, secret, upstream, program, links),
                 daemon=True,
             ).start()
     finally:
         listener.close()
+        links.close_all()
 
 
-def _client(client: socket.socket, secret: str, upstream: tuple[str, int] | None, binary: str) -> None:
+def _client(
+    client: socket.socket,
+    secret: str,
+    upstream: tuple[str, int] | None,
+    binary: str,
+    links: LinkRegistry | None = None,
+) -> None:
     try:
         client.settimeout(10)
         header = _read_header(client)
@@ -159,6 +196,15 @@ def _client(client: socket.socket, secret: str, upstream: tuple[str, int] | None
         if not key:
             _reject(client)
             return
+        link_id = headers.get("x-watchremote-link", "").strip()
+        if upstream is not None and links is not None and LINK_PATTERN.match(link_id):
+            seen = _seen(headers.get("x-watchremote-seen", ""))
+            link, resumed = links.open(link_id, upstream, secret)
+            if link is not None:
+                _accept(client, key, resumed=resumed)
+                client.settimeout(None)
+                link.serve_client(client, seen if resumed else 0)
+                return
         _accept(client, key)
         client.settimeout(None)
         if upstream is not None and _proxy(client, upstream, secret):
@@ -212,23 +258,37 @@ def _reject(client: socket.socket) -> None:
         return
 
 
-def _accept(client: socket.socket, key: str) -> None:
+def _seen(text: str) -> int:
+    try:
+        return max(0, int(text.strip()))
+    except ValueError:
+        return 0
+
+
+def _accept(client: socket.socket, key: str, resumed: bool | None = None) -> None:
     digest = hashlib.sha1((key + GUID).encode("ascii")).digest()
     accept = base64.b64encode(digest).decode("ascii")
+    extra = f"X-WatchRemote-Door: {DOOR_VERSION}\r\n"
+    if resumed is not None:
+        extra += f"X-WatchRemote-Resumed: {'yes' if resumed else 'no'}\r\n"
     raw = (
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
+        f"{extra}"
         f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
     )
     client.sendall(raw.encode("ascii"))
 
 
-def _proxy(client: socket.socket, upstream: tuple[str, int], secret: str) -> bool:
+def _open_upstream(upstream: tuple[str, int], secret: str) -> tuple[socket.socket, bytes] | None:
+    """Opens a WebSocket to ``grok agent serve``. Returns the socket and any bytes past the handshake."""
+    if any(ord(char) < 0x21 or ord(char) > 0x7E for char in secret):
+        return None
     try:
         remote = socket.create_connection(upstream, timeout=2)
     except OSError:
-        return False
+        return None
     try:
         key = base64.b64encode(os.urandom(16)).decode("ascii")
         request = (
@@ -240,32 +300,52 @@ def _proxy(client: socket.socket, upstream: tuple[str, int], secret: str) -> boo
             f"Sec-WebSocket-Key: {key}\r\n"
             "Sec-WebSocket-Version: 13\r\n\r\n"
         )
-        if any(ord(char) < 0x21 or ord(char) > 0x7E for char in secret):
-            return False
         remote.sendall(request.encode("ascii"))
         header = b""
         remote.settimeout(4)
         while b"\r\n\r\n" not in header:
             chunk = remote.recv(1)
             if not chunk:
-                return False
+                remote.close()
+                return None
             header += chunk
             if len(header) > HANDSHAKE_LIMIT:
-                return False
+                remote.close()
+                return None
         status = header.split(b"\r\n", 1)[0]
         if b" 101 " not in status and not status.endswith(b" 101"):
-            return False
-        leftover = header.split(b"\r\n\r\n", 1)[1]
+            remote.close()
+            return None
+        remote.settimeout(None)
+        return remote, header.split(b"\r\n\r\n", 1)[1]
+    except OSError:
+        try:
+            remote.close()
+        except OSError:
+            pass
+        return None
+
+
+def _proxy(client: socket.socket, upstream: tuple[str, int], secret: str) -> bool:
+    """Plain proxy for clients without a link id. Grok's connection closes with the client's."""
+    opened = _open_upstream(upstream, secret)
+    if opened is None:
+        return False
+    remote, leftover = opened
+    try:
         if leftover:
             client.sendall(leftover)
-        remote.settimeout(None)
-        client.setblocking(False)
-        remote.setblocking(False)
+        # Blocking sends with a deadline. A non-blocking sendall dropped the link on the first
+        # full socket buffer, which a long session/load replay hits.
+        client.settimeout(CLIENT_SEND_SECONDS)
+        remote.settimeout(CLIENT_SEND_SECONDS)
         pending = b""
         while True:
-            readable, _, _ = select.select([client, remote], [], [], 30)
+            readable, _, _ = select.select([client, remote], [], [], IDLE_PING_SECONDS)
             if not readable:
-                return True
+                # A quiet turn (a long tool, a pending approval) is not a dead link. A ping finds dead ones.
+                client.sendall(_server_frame(9, b"door"))
+                continue
             if client in readable:
                 chunk = client.recv(65536)
                 if not chunk:
@@ -330,6 +410,368 @@ def _rewrite_outbound(opcode: int, payload: bytes) -> bytes | None:
     if not changed:
         return None
     return json.dumps(obj, separators=(",", ":")).encode("utf-8")
+
+
+def _id_key(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"))
+
+
+def _loads(payload: bytes) -> dict | None:
+    try:
+        obj = json.loads(payload)
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+class _Pending:
+    def __init__(self, ident: object, payload: bytes, session_id: str) -> None:
+        self.ident = ident
+        self.payload = payload
+        self.session_id = session_id
+
+
+class Link:
+    """One Grok connection that outlives the phone's socket.
+
+    Every frame Grok sends is numbered and kept in a ring. The phone reports how many it has
+    seen when it reattaches and gets the rest. Requests Grok sent the phone (approvals) stay
+    pending until answered and are sent again on every reattach.
+    """
+
+    def __init__(self, link_id: str, registry: LinkRegistry, remote: socket.socket, leftover: bytes) -> None:
+        self.id = link_id
+        self.registry = registry
+        self.remote = remote
+        self.remote_lock = threading.Lock()
+        # Held while numbering and sending a frame, so the phone receives frames in ring order.
+        self.send_lock = threading.Lock()
+        self.seq = 0
+        self.ring: collections.deque[tuple[int, bytes]] = collections.deque()
+        self.ring_bytes = 0
+        self.client: socket.socket | None = None
+        self.pending: dict[str, _Pending] = {}
+        self.forwarded: dict[str, tuple[Link, object]] = {}
+        self.init_result: object | None = None
+        self.init_ids: set[str] = set()
+        self.loads: dict[str, str] = {}
+        self.detached_at = time.monotonic()
+        self.closed = False
+        threading.Thread(target=self._read_upstream, args=(leftover,), daemon=True).start()
+
+    # Grok to phone
+
+    def _read_upstream(self, leftover: bytes) -> None:
+        buffer = leftover
+        fragments = b""
+        fragment_opcode = 0
+        try:
+            while not self.closed:
+                parsed = _parse_full(buffer)
+                if parsed is None:
+                    chunk = self.remote.recv(65536)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    continue
+                fin, opcode, payload, size = parsed
+                buffer = buffer[size:]
+                if opcode == 9:
+                    self._send_upstream(_client_frame(10, payload))
+                    continue
+                if opcode == 10:
+                    continue
+                if opcode == 8:
+                    break
+                if opcode == 0:
+                    fragments += payload
+                    if not fin:
+                        continue
+                    opcode, payload, fragments = fragment_opcode, fragments, b""
+                elif not fin:
+                    fragment_opcode, fragments = opcode, payload
+                    continue
+                if opcode == 1:
+                    self._from_grok(payload)
+        except OSError:
+            pass
+        self.close(answer_pending=False)
+
+    def _from_grok(self, payload: bytes) -> None:
+        obj = _loads(payload)
+        forward_session = None
+        if obj is not None:
+            ident = obj.get("id")
+            method = obj.get("method")
+            if method is not None and ident is not None:
+                params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+                with self.send_lock:
+                    self.pending[_id_key(ident)] = _Pending(ident, payload, str(params.get("sessionId") or ""))
+            elif method is None and ident is not None:
+                key = _id_key(ident)
+                if key in self.init_ids and "result" in obj:
+                    self.init_ids.discard(key)
+                    self.init_result = obj["result"]
+                forward_session = self.loads.pop(key, None)
+        self.emit(payload)
+        if forward_session:
+            self.registry.forward_pending(forward_session, self)
+
+    def emit(self, payload: bytes) -> None:
+        with self.send_lock:
+            self.seq += 1
+            self.ring.append((self.seq, payload))
+            self.ring_bytes += len(payload)
+            while self.ring and (len(self.ring) > RING_FRAMES or self.ring_bytes > RING_BYTES):
+                _seq, dropped = self.ring.popleft()
+                self.ring_bytes -= len(dropped)
+            client = self.client
+            if client is None:
+                return
+            try:
+                client.sendall(_server_frame(1, payload))
+            except OSError:
+                self._detach_locked(client)
+
+    # Phone to Grok
+
+    def serve_client(self, client: socket.socket, seen: int) -> None:
+        self._attach(client, seen)
+        buffer = b""
+        fragments = b""
+        fragment_opcode = 0
+        try:
+            client.settimeout(IDLE_PING_SECONDS)
+            while not self.closed:
+                parsed = _parse_full(buffer)
+                if parsed is None:
+                    try:
+                        chunk = client.recv(65536)
+                    except TimeoutError:
+                        with self.send_lock:
+                            if self.client is not client:
+                                return
+                            client.sendall(_server_frame(9, b"door"))
+                        continue
+                    if not chunk:
+                        break
+                    buffer += chunk
+                    continue
+                fin, opcode, payload, size = parsed
+                buffer = buffer[size:]
+                if opcode == 8:
+                    # An explicit close means the phone is done with this link.
+                    self.detach(client)
+                    self.close(answer_pending=True)
+                    return
+                if opcode == 9:
+                    with self.send_lock:
+                        client.sendall(_server_frame(10, payload))
+                    continue
+                if opcode == 10:
+                    continue
+                if opcode == 0:
+                    fragments += payload
+                    if not fin:
+                        continue
+                    opcode, payload, fragments = fragment_opcode, fragments, b""
+                elif not fin:
+                    fragment_opcode, fragments = opcode, payload
+                    continue
+                if opcode == 1:
+                    self._from_phone(payload)
+        except OSError:
+            pass
+        self.detach(client)
+
+    def _from_phone(self, payload: bytes) -> None:
+        obj = _loads(payload)
+        if obj is not None:
+            ident = obj.get("id")
+            method = obj.get("method")
+            if method is None and ident is not None:
+                if not self._answer(obj):
+                    return
+            elif method == "initialize" and ident is not None:
+                if self.init_result is not None:
+                    reply = {"jsonrpc": "2.0", "id": ident, "result": self.init_result}
+                    self.emit(json.dumps(reply, separators=(",", ":")).encode("utf-8"))
+                    return
+                self.init_ids.add(_id_key(ident))
+            elif method == "session/load" and ident is not None:
+                params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+                session_id = str(params.get("sessionId") or "")
+                if session_id:
+                    self.loads[_id_key(ident)] = session_id
+        rewritten = _rewrite_outbound(1, payload)
+        self._send_upstream(_client_frame(1, rewritten if rewritten is not None else payload))
+
+    def _answer(self, obj: dict) -> bool:
+        """True when this answer should go to this link's Grok connection."""
+        key = _id_key(obj.get("id"))
+        with self.send_lock:
+            target = self.forwarded.pop(key, None)
+            mine = self.pending.pop(key, None)
+        if target is not None:
+            other, original = target
+            other.answer_from_elsewhere(original, obj)
+            return False
+        # An answer to a request already answered (a resend reached two places) is dropped.
+        return mine is not None
+
+    def answer_from_elsewhere(self, original: object, obj: dict) -> None:
+        with self.send_lock:
+            pending = self.pending.pop(_id_key(original), None)
+        if pending is None:
+            return
+        reply = dict(obj)
+        reply["id"] = original
+        self._send_upstream(_client_frame(1, json.dumps(reply, separators=(",", ":")).encode("utf-8")))
+
+    def _send_upstream(self, frame: bytes) -> None:
+        with self.remote_lock:
+            try:
+                self.remote.sendall(frame)
+            except OSError:
+                pass
+
+    # Attachment
+
+    def _attach(self, client: socket.socket, seen: int) -> None:
+        with self.send_lock:
+            old = self.client
+            self.client = client
+            if old is not None and old is not client:
+                try:
+                    old.close()
+                except OSError:
+                    pass
+            try:
+                client.settimeout(CLIENT_SEND_SECONDS)
+                for seq, payload in list(self.ring):
+                    if seq > seen:
+                        client.sendall(_server_frame(1, payload))
+                resend = [item for item in self.pending.values() if not self._in_ring_after(item.payload, seen)]
+                for item in resend:
+                    self.seq += 1
+                    self.ring.append((self.seq, item.payload))
+                    self.ring_bytes += len(item.payload)
+                    client.sendall(_server_frame(1, item.payload))
+            except OSError:
+                self._detach_locked(client)
+
+    def _in_ring_after(self, payload: bytes, seen: int) -> bool:
+        return any(seq > seen and item is payload for seq, item in self.ring)
+
+    def detach(self, client: socket.socket) -> None:
+        with self.send_lock:
+            self._detach_locked(client)
+
+    def _detach_locked(self, client: socket.socket) -> None:
+        if self.client is client:
+            self.client = None
+            self.detached_at = time.monotonic()
+        try:
+            client.close()
+        except OSError:
+            pass
+
+    def attached(self) -> bool:
+        return self.client is not None
+
+    def pending_for(self, session_id: str) -> list[_Pending]:
+        with self.send_lock:
+            return [item for item in self.pending.values() if item.session_id == session_id]
+
+    def close(self, answer_pending: bool) -> None:
+        if self.closed:
+            return
+        if answer_pending:
+            # Closing with an approval still open would leave Grok's turn waiting forever.
+            with self.send_lock:
+                waiting = list(self.pending.values())
+                self.pending.clear()
+            for item in waiting:
+                reply = {"jsonrpc": "2.0", "id": item.ident, "result": {"outcome": {"outcome": "cancelled"}}}
+                self._send_upstream(_client_frame(1, json.dumps(reply, separators=(",", ":")).encode("utf-8")))
+        self.closed = True
+        with self.send_lock:
+            client = self.client
+            self.client = None
+        for sock in (client, self.remote):
+            if sock is None:
+                continue
+            try:
+                sock.close()
+            except OSError:
+                pass
+        self.registry.forget(self)
+
+
+class LinkRegistry:
+    def __init__(self, park: float) -> None:
+        self.park = park
+        self.lock = threading.Lock()
+        self.links: dict[str, Link] = {}
+        self.forward_count = 0
+
+    def open(self, link_id: str, upstream: tuple[str, int], secret: str) -> tuple[Link | None, bool]:
+        with self.lock:
+            existing = self.links.get(link_id)
+            if existing is not None and not existing.closed:
+                return existing, True
+        opened = _open_upstream(upstream, secret)
+        if opened is None:
+            return None, False
+        remote, leftover = opened
+        self._make_room()
+        link = Link(link_id, self, remote, leftover)
+        with self.lock:
+            self.links[link_id] = link
+        return link, False
+
+    def _make_room(self) -> None:
+        with self.lock:
+            parked = sorted((link for link in self.links.values() if not link.attached()), key=lambda link: link.detached_at)
+            extra = len(self.links) - LINK_LIMIT + 1
+        for link in parked[: max(0, extra)]:
+            link.close(answer_pending=True)
+
+    def forget(self, link: Link) -> None:
+        with self.lock:
+            if self.links.get(link.id) is link:
+                del self.links[link.id]
+
+    def sweep(self) -> None:
+        now = time.monotonic()
+        with self.lock:
+            expired = [link for link in self.links.values() if not link.attached() and now - link.detached_at > self.park]
+        for link in expired:
+            link.close(answer_pending=True)
+
+    def forward_pending(self, session_id: str, to: Link) -> None:
+        """A phone that came back as a new link (the app was relaunched) loaded a chat whose
+        approval is waiting on its old, parked link. Send that approval here and route the answer back."""
+        with self.lock:
+            others = [link for link in self.links.values() if link is not to and not link.attached()]
+        for other in others:
+            for item in other.pending_for(session_id):
+                obj = _loads(item.payload)
+                if obj is None:
+                    continue
+                with self.lock:
+                    self.forward_count += 1
+                    alias = f"door-{self.forward_count}"
+                obj["id"] = alias
+                with to.send_lock:
+                    to.forwarded[_id_key(alias)] = (other, item.ident)
+                to.emit(json.dumps(obj, separators=(",", ":")).encode("utf-8"))
+
+    def close_all(self) -> None:
+        with self.lock:
+            links = list(self.links.values())
+        for link in links:
+            link.close(answer_pending=False)
 
 
 class _Session:
@@ -688,6 +1130,14 @@ def _client_frame(opcode: int, payload: bytes) -> bytes:
         header += length.to_bytes(8, "big")
     masked = bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload))
     return bytes(header) + mask + masked
+
+
+def _parse_full(buffer: bytes) -> tuple[bool, int, bytes, int] | None:
+    parsed = _parse(buffer)
+    if parsed is None:
+        return None
+    opcode, payload, size = parsed
+    return bool(buffer[0] & 0x80), opcode, payload, size
 
 
 def _parse(buffer: bytes) -> tuple[int, bytes, int] | None:

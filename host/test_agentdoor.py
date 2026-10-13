@@ -17,6 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agentdoor  # noqa: E402
+import fake_grok  # noqa: E402
+import miniws  # noqa: E402
 import outbound  # noqa: E402
 
 
@@ -238,6 +240,75 @@ class AgentDoorTests(unittest.TestCase):
                 worker.join(timeout=3)
                 upstream_listener.close()
                 os.environ.pop("GROK_AGENT_SECRET", None)
+
+    def test_a_parked_link_keeps_grok_and_resends_the_unanswered_approval(self) -> None:
+        grok = fake_grok.FakeGrok(SECRET, chunk_delay=0.01)
+        upstream_port = grok.listen(0)
+        port = self._port()
+        stop = threading.Event()
+        ready = threading.Event()
+        worker = threading.Thread(
+            target=agentdoor.serve,
+            args=(SECRET, "127.0.0.1", port, ("127.0.0.1", upstream_port), ready, stop, "grok"),
+            daemon=True,
+        )
+        worker.start()
+        self.assertTrue(ready.wait(5))
+        link = "phone-link-0001"
+        seen = 0
+
+        def attach() -> miniws.WSConn:
+            return miniws.connect(f"ws://127.0.0.1:{port}/ws", timeout=5, headers={
+                "Authorization": "Bearer " + SECRET,
+                "X-WatchRemote-Link": link,
+                "X-WatchRemote-Seen": str(seen),
+            })
+
+        def read(conn: miniws.WSConn, until) -> dict:
+            nonlocal seen
+            while True:
+                _opcode, payload = conn.recv()
+                seen += 1
+                body = json.loads(payload)
+                if until(body):
+                    return body
+
+        try:
+            first = attach()
+            self.assertIn("X-WatchRemote-Door: 2", first.response_head)
+            self.assertIn("X-WatchRemote-Resumed: no", first.response_head)
+            first.send_text(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}))
+            read(first, lambda body: body.get("id") == 1)
+            first.send_text(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": "/tmp", "mcpServers": []}}))
+            session_id = read(first, lambda body: body.get("id") == 2)["result"]["sessionId"]
+            first.send_text(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {
+                "sessionId": session_id, "prompt": [{"type": "text", "text": "Read the notes file"}],
+            }}))
+            asked = read(first, lambda body: body.get("method") == "session/request_permission")
+            # What iOS does to a suspended app: the socket is gone, with no close frame.
+            first.sock.shutdown(socket.SHUT_RDWR)
+            first.close()
+            time.sleep(0.3)
+
+            again = attach()
+            self.assertIn("X-WatchRemote-Resumed: yes", again.response_head)
+            again.send_text(json.dumps({"jsonrpc": "2.0", "id": 4, "method": "initialize", "params": {}}))
+            resent = read(again, lambda body: body.get("method") == "session/request_permission")
+            self.assertEqual(resent["id"], asked["id"])
+            read(again, lambda body: body.get("id") == 4)
+            again.send_text(json.dumps({"jsonrpc": "2.0", "id": resent["id"], "result": {
+                "outcome": {"outcome": "selected", "optionId": "allow-once"},
+            }}))
+            done = read(again, lambda body: body.get("id") == 3)
+            self.assertEqual(done["result"]["stopReason"], "end_turn")
+            again.close()
+            state = grok.state()
+            self.assertEqual(state["decisions"], [{"sessionId": session_id, "outcome": "allow-once"}])
+            self.assertEqual(state["connections"], 1, "the door opened a second Grok connection")
+        finally:
+            stop.set()
+            worker.join(timeout=5)
+            grok.close()
 
     def _assert_query_refused(self, port: int) -> None:
         sock = socket.create_connection(("127.0.0.1", port), timeout=3)
