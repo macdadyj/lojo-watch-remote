@@ -27,6 +27,7 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -45,7 +46,7 @@ import watch_poll  # noqa: E402
 DEFAULT_PROMPT = "What's the weather today in Argyle Texas"
 DEFAULT_SECOND = "And what about tomorrow there?"
 DEFAULT_OTHER = "What's the weather today in Amarillo Texas"
-SCENARIOS = ["turns", "reopen", "background", "relaunch", "crossing", "watch"]
+SCENARIOS = ["turns", "reopen", "background", "relaunch", "crossing", "watch", "together"]
 
 
 class CheckFailed(Exception):
@@ -128,7 +129,8 @@ def read_secret(path: Path) -> str:
 
 
 def grok_version() -> str:
-    for binary in (str(Path.home() / ".grok" / "bin" / "grok"), "grok"):
+    candidates = [os.environ.get("GROK_BIN", ""), str(Path.home() / ".grok" / "bin" / "grok"), "grok"]
+    for binary in [item for item in candidates if item]:
         try:
             completed = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10, check=False)
         except (OSError, subprocess.TimeoutExpired):
@@ -136,6 +138,11 @@ def grok_version() -> str:
         if completed.stdout.strip():
             return completed.stdout.strip()
     return "unknown"
+
+
+def short(session_id: str) -> str:
+    """Grok's session ids are time-ordered, so chats made a moment apart share a prefix."""
+    return session_id[-8:]
 
 
 def new_link() -> phone.LinkState:
@@ -228,7 +235,7 @@ def scenario_turns(ctx: Context, recording: Recording) -> str:
     ctx.connect(model, new_link())
     sent = time.monotonic()
     session_id = model.start(args.prompt)
-    log(f"chat {session_id[:8]}: sent {args.prompt!r}")
+    log(f"chat {short(session_id)}: sent {args.prompt!r}")
     elapsed = wait_idle(model, session_id, args.timeout, "first prompt")
     log(f"final answer after {elapsed:.1f}s")
     first_line_is(model, session_id, args.prompt, "first prompt")
@@ -247,7 +254,7 @@ def scenario_turns(ctx: Context, recording: Recording) -> str:
     recording.check(session_id, transcript, first=f"You: {args.prompt}")
     ctx.meta.setdefault("chats", {})["turns"] = session_id
     total = time.monotonic() - sent
-    return f"chat {session_id[:8]}: both answers in order ({total:.0f}s). Final: {final[:80]!r}"
+    return f"chat {short(session_id)}: both answers in order ({total:.0f}s). Final: {final[:80]!r}"
 
 
 def scenario_reopen(ctx: Context, recording: Recording) -> str:
@@ -260,7 +267,7 @@ def scenario_reopen(ctx: Context, recording: Recording) -> str:
     pipe = ctx.connect(model, new_link())
     rows = pipe.list_sessions()
     listed = next((row for row in rows if row.get("sessionId") == session_id), None)
-    expect(listed is not None, f"chat {session_id[:8]} is not in _x.ai/session/list")
+    expect(listed is not None, f"chat {short(session_id)} is not in _x.ai/session/list")
     # The copy build 221 kept: the first prompt missing, one card per tool update, an old reply on top.
     stale = ["Grok: an older reply about tomorrow's forecast", "Tool: Tool", "Tool: Tool", "Tool: Tool", f"You: {args.second}"]
     model.set_cache(session_id, stale)
@@ -272,7 +279,7 @@ def scenario_reopen(ctx: Context, recording: Recording) -> str:
     check_turn(model, session_id, args.second, [], [], "reopen, second turn")
     expect(model.chat(session_id).status == "idle", f"reopen: a finished chat shows {model.chat(session_id).status}")
     recording.check(session_id, transcript, first=f"You: {args.prompt}")
-    return f"chat {session_id[:8]} reopened in the computer's order ({len(transcript)} lines), title {listed.get('title')!r}"
+    return f"chat {short(session_id)} reopened in the computer's order ({len(transcript)} lines), title {listed.get('title')!r}"
 
 
 def first_tool_or_permission(model: phone.PhoneModel, session_id: str) -> bool:
@@ -286,9 +293,9 @@ def scenario_background(ctx: Context, recording: Recording) -> str:
     model = ctx.model(recording)
     link = new_link()
     pipe = ctx.connect(model, link)
-    expect(pipe.door_version >= 2, "the agent door on this computer predates links; install host/agentdoor.py (e2e/santa-e2e.sh does)")
+    expect(pipe.door_version >= 3, "the agent door on this computer predates the shared Grok connection; install host/agentdoor.py (e2e/santa-e2e.sh does)")
     session_id = model.start(args.prompt)
-    log(f"chat {session_id[:8]}: sent, waiting for the first tool step")
+    log(f"chat {short(session_id)}: sent, waiting for the first tool step")
     expect(model.wait(lambda: first_tool_or_permission(model, session_id), args.timeout), "no tool step or answer arrived")
     if model.chat(session_id).status == "idle":
         log("the turn finished before the phone could leave; dropping anyway")
@@ -317,7 +324,7 @@ def scenario_relaunch(ctx: Context, recording: Recording) -> str:
     model = ctx.model(recording, auto_approve=False)
     pipe = ctx.connect(model, new_link())
     session_id = model.start(args.prompt)
-    log(f"chat {session_id[:8]}: sent with auto-approve off, waiting for an approval request")
+    log(f"chat {short(session_id)}: sent with auto-approve off, waiting for an approval request")
     asked = model.wait(lambda: model.chat(session_id).permission is not None or model.chat(session_id).status == "idle", args.timeout)
     expect(asked, "neither an approval request nor an answer arrived")
     had_approval = model.chat(session_id).permission is not None
@@ -337,7 +344,7 @@ def scenario_relaunch(ctx: Context, recording: Recording) -> str:
     recording.check(session_id, relaunched.chat(session_id).transcript, first=f"You: {args.prompt}")
     if not had_approval:
         return f"Grok asked for no approval (this folder may have an always-allow grant); relaunch reload verified in {elapsed:.0f}s"
-    expect(any(str(item["rpcID"]).startswith("door-") for item in relaunched.permissions_seen),
+    expect(any(item.get("sessionID") == session_id for item in relaunched.permissions_seen),
            "the relaunched app never received the approval that was waiting")
     return f"the waiting approval reached the relaunched app; answer {elapsed:.0f}s later: {final[:60]!r}"
 
@@ -349,7 +356,7 @@ def scenario_crossing(ctx: Context, recording: Recording) -> str:
     ctx.connect(model, new_link())
     first = model.start(args.prompt)
     second = model.start(args.other)
-    log(f"chats {first[:8]} and {second[:8]} running at once")
+    log(f"chats {short(first)} and {short(second)} running at once")
     model.wait(lambda: any(line.startswith("Grok:") for line in model.chat(second).transcript), args.timeout)
     model.resume(first)
     wait_idle(model, first, args.timeout, "first chat")
@@ -367,73 +374,106 @@ def scenario_crossing(ctx: Context, recording: Recording) -> str:
     return "each chat holds only its own prompt and answer"
 
 
-def scenario_watch(ctx: Context, recording: Recording) -> str:
-    """The Watch path: the deployed relay, this computer's outbound service, the same door and Grok."""
-    args = ctx.args
-    config_path = Path(args.relay_config).expanduser()
-    if not config_path.is_file():
-        raise CheckFailed(f"skipped: {config_path} does not exist (this computer is not paired with the relay)")
-    config = outbound.load_config(config_path)
-    parts = urlsplit(str(config["relay"]))
-    scheme = "https" if parts.scheme == "wss" else "http"
-    http_base = f"{scheme}://{parts.netloc}"
-    token = str(config["token"])
-    key = config["key"]
-    recording.add({"k": "ui", "a": "relay", "url": http_base})
-    watch = watch_poll.HttpWatch(http_base, token, key)
-    watch.poll(wait_ms=0)
-    expect(watch.host_online, f"the relay at {http_base} says this computer's outbound service is offline")
+class WatchSide:
+    """The Watch on the deployed relay, polling the way the Watch app does."""
 
-    def note_inbox(start: int) -> int:
-        for message in watch.inbox[start:]:
-            recording.add({"k": "relay-in", "f": message})
-        return len(watch.inbox)
+    def __init__(self, ctx: Context, recording: Recording) -> None:
+        config_path = Path(ctx.args.relay_config).expanduser()
+        if not config_path.is_file():
+            raise CheckFailed(f"skipped: {config_path} does not exist (this computer is not paired with the relay)")
+        config = outbound.load_config(config_path)
+        parts = urlsplit(str(config["relay"]))
+        scheme = "https" if parts.scheme == "wss" else "http"
+        self.base = f"{scheme}://{parts.netloc}"
+        self.recording = recording
+        recording.add({"k": "ui", "a": "relay", "url": self.base})
+        self.watch = watch_poll.HttpWatch(
+            self.base, str(config["token"]), config["key"],
+            on_message=lambda message: recording.add({"k": "relay-in", "f": message}),
+        )
+        self.watch.poll(wait_ms=0)
+        expect(self.watch.host_online, f"the relay at {self.base} says this computer's outbound service is offline")
 
-    seen = note_inbox(0)
-    ident = watch.send("start", prompt=args.prompt, autoApprove=True)
-    recording.add({"k": "relay-out", "f": {"op": "start", "id": ident, "prompt": args.prompt}})
-    started = watch.wait_for(lambda message: message.get("id") == ident, timeout=30)
-    expect(started.get("op") == "started", f"the computer answered the Watch start with {started}")
-    session_id = str(started.get("sessionID") or "")
+    def start(self, prompt: str, session_id: str | None = None) -> str:
+        ident = self.watch.send("start", prompt=prompt, sessionID=session_id, autoApprove=True)
+        self.recording.add({"k": "relay-out", "f": {"op": "start", "id": ident, "sessionID": session_id, "prompt": prompt}})
+        started = self.watch.wait_for(lambda message: message.get("id") == ident, timeout=30)
+        expect(started.get("op") == "started", f"the computer answered the Watch start with {started}")
+        return str(started.get("sessionID") or session_id or "")
 
-    def row() -> dict:
-        for message in reversed(watch.inbox):
+    def row(self, session_id: str) -> dict:
+        for message in reversed(self.watch.inbox):
             for item in message.get("sessions") or []:
                 if item.get("id") == session_id:
                     return item
         return {}
 
-    def answered(prompt: str) -> bool:
-        item = row()
+    def answered(self, session_id: str, prompt: str) -> bool:
+        item = self.row(session_id)
         lines = [str(line) for line in item.get("transcript") or []]
         if f"You: {prompt}" not in lines:
             return False
         tail = lines[len(lines) - 1 - lines[::-1].index(f"You: {prompt}"):]
         return item.get("status") == "idle" and any(line.startswith("Grok:") for line in tail[1:])
 
-    deadline = time.monotonic() + args.timeout
-    while not answered(args.prompt) and time.monotonic() < deadline:
-        watch.poll(wait_ms=4000)
-    seen = note_inbox(seen)
-    expect(answered(args.prompt), f"the Watch never got the final answer for chat {session_id[:8]}: {row()}")
-    lines = [str(line) for line in row().get("transcript") or []]
-    expect(lines.index(f"You: {args.prompt}") < max(index for index, line in enumerate(lines) if line.startswith("Grok:")),
-           f"the Watch shows the answer above the prompt: {lines}")
-    ident = watch.send("start", prompt=args.second, sessionID=session_id, autoApprove=True)
-    recording.add({"k": "relay-out", "f": {"op": "start", "id": ident, "sessionID": session_id, "prompt": args.second}})
-    deadline = time.monotonic() + args.timeout
-    while not answered(args.second) and time.monotonic() < deadline:
-        watch.poll(wait_ms=4000)
-    seen = note_inbox(seen)
-    expect(answered(args.second), f"the Watch never got the second answer: {row()}")
-    ident = watch.send("resume", sessionID=session_id)
-    restored = watch.wait_for(lambda message: message.get("id") == ident, timeout=30)
-    note_inbox(seen)
-    restored_lines = [str(line) for line in restored.get("lines") or []]
+    def wait_answer(self, session_id: str, prompt: str, timeout: float, what: str) -> list[str]:
+        deadline = time.monotonic() + timeout
+        while not self.answered(session_id, prompt) and time.monotonic() < deadline:
+            self.watch.poll(wait_ms=4000)
+        expect(self.answered(session_id, prompt), f"{what}: the Watch never got the final answer for chat {short(session_id)}: {self.row(session_id)}")
+        lines = [str(line) for line in self.row(session_id).get("transcript") or []]
+        expect(lines.index(f"You: {prompt}") < max(index for index, line in enumerate(lines) if line.startswith("Grok:")),
+               f"{what}: the Watch shows the answer above the prompt: {lines}")
+        return lines
+
+    def resume(self, session_id: str) -> list[str]:
+        ident = self.watch.send("resume", sessionID=session_id)
+        restored = self.watch.wait_for(lambda message: message.get("id") == ident, timeout=30)
+        return [str(line) for line in restored.get("lines") or []]
+
+
+def scenario_watch(ctx: Context, recording: Recording) -> str:
+    """The Watch path: the deployed relay, this computer's outbound service, the same door and Grok."""
+    args = ctx.args
+    side = WatchSide(ctx, recording)
+    session_id = side.start(args.prompt)
+    side.wait_answer(session_id, args.prompt, args.timeout, "first Watch prompt")
+    side.start(args.second, session_id)
+    side.wait_answer(session_id, args.second, args.timeout, "second Watch prompt")
+    restored_lines = side.resume(session_id)
     prompts = [line for line in restored_lines if line.startswith("You:")]
     expect(prompts[-2:] == [f"You: {args.prompt}", f"You: {args.second}"], f"reopening on the Watch shows {prompts}")
     expect(restored_lines[-1].startswith("Grok:"), f"reopening on the Watch does not end with the answer: {restored_lines[-3:]}")
-    return f"Watch chat {session_id[:8]}: both answers through {http_base}, reopen in order"
+    return f"Watch chat {short(session_id)}: both answers through {side.base}, reopen in order"
+
+
+def scenario_together(ctx: Context, recording: Recording) -> str:
+    """The phone and the Watch run chats at the same moment, as on Jon's wrist and in his hand.
+    Grok streams only to its newest connection, so before door v3 one of them never got its answer."""
+    args = ctx.args
+    side = WatchSide(ctx, recording)
+    model = ctx.model(recording)
+    ctx.connect(model, new_link())
+    phone_chat = model.start(args.prompt)
+    log(f"phone chat {short(phone_chat)} sent; starting a Watch chat while it runs")
+    watch_chat = side.start(args.other)
+    log(f"Watch chat {short(watch_chat)} sent")
+    wait_idle(model, phone_chat, args.timeout, "phone chat beside the Watch")
+    city_one = args.expect[0] if args.expect else "Argyle"
+    check_turn(model, phone_chat, args.prompt, args.expect, [args.other_expect], "phone chat beside the Watch")
+    check_ownership(model, phone_chat, args.prompt, "phone chat beside the Watch")
+    first_line_is(model, phone_chat, args.prompt, "phone chat beside the Watch")
+    lines = side.wait_answer(watch_chat, args.other, args.timeout, "Watch chat beside the phone")
+    replies = " ".join(line for line in lines if line.startswith("Grok:"))
+    expect(city_one.lower() not in replies.lower(), f"the Watch chat got the phone chat's answer: {replies[:300]!r}")
+    expect(watch_chat not in model.chats or not model.chat(watch_chat).transcript,
+           "the phone's open chat list picked up the Watch chat's stream")
+    recording.check(phone_chat, model.chat(phone_chat).transcript, first=f"You: {args.prompt}")
+    model.continue_chat(phone_chat, args.second)
+    wait_idle(model, phone_chat, args.timeout, "second phone prompt beside the Watch")
+    check_turn(model, phone_chat, args.second, [], [], "second phone prompt beside the Watch")
+    recording.check(phone_chat, model.chat(phone_chat).transcript, first=f"You: {args.prompt}")
+    return f"phone chat {short(phone_chat)} and Watch chat {short(watch_chat)} both answered, neither crossed"
 
 
 RUNNERS = {
@@ -443,6 +483,7 @@ RUNNERS = {
     "relaunch": scenario_relaunch,
     "crossing": scenario_crossing,
     "watch": scenario_watch,
+    "together": scenario_together,
 }
 
 
@@ -459,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--door-port", type=int, default=int(os.environ.get("WATCHREMOTE_DOOR_PORT", "2419")))
     parser.add_argument("--secret-file", default=os.environ.get("GROK_AGENT_SECRET_FILE", "~/.config/watch-remote/agent-secret"))
     parser.add_argument("--relay-config", default="~/.config/watch-remote/outbound.json")
-    parser.add_argument("--cwd", default="", help="Chat folder. Empty means home, resolved by the door like the app.")
+    parser.add_argument("--cwd", default=None, help="Chat folder. Default: a new empty folder, so no saved always-allow grant skips the approval cases.")
     parser.add_argument("--prompt", default=DEFAULT_PROMPT)
     parser.add_argument("--second", default=DEFAULT_SECOND)
     parser.add_argument("--other", default=DEFAULT_OTHER)
@@ -469,7 +510,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--away", type=float, default=40.0, help="Seconds the phone sleeps in the background scenario.")
     parser.add_argument("--only", default=",".join(SCENARIOS), help="Comma-separated scenarios: " + ", ".join(SCENARIOS))
     parser.add_argument("--out", default=str(HERE / "recordings" / time.strftime("%Y%m%d-%H%M%S")))
+    parser.add_argument("--allow-skip", action="store_true", help="A skipped scenario (no relay pairing) does not fail the run.")
     args = parser.parse_args(argv)
+    if args.cwd is None:
+        args.cwd = tempfile.mkdtemp(prefix="watch-remote-e2e-")
     if args.expect is None:
         args.expect = ["Argyle"]
     wanted = [name.strip() for name in args.only.split(",") if name.strip()]
@@ -495,9 +539,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  PASS {summary}")
         except CheckFailed as error:
             skipped = str(error).startswith("skipped:")
-            ctx.results.append((name, skipped, str(error)))
+            passed = skipped and args.allow_skip
+            ctx.results.append((name, passed, str(error)))
             print(f"  {'SKIP' if skipped else 'FAIL'} {error}")
-            failed = failed or not skipped
+            failed = failed or not passed
         except Exception as error:  # noqa: BLE001 - a broken scenario is a failed scenario
             ctx.results.append((name, False, f"{type(error).__name__}: {error}"))
             print(f"  FAIL {type(error).__name__}: {error}")

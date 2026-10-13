@@ -11,13 +11,15 @@ import json
 import time
 import urllib.error
 import urllib.request
+from typing import Callable
 
 import outbound
 import relaybox
 
 
 class HttpWatch:
-    def __init__(self, base_url: str, token: str, key: bytes) -> None:
+    def __init__(self, base_url: str, token: str, key: bytes, on_message: Callable[[dict], None] | None = None) -> None:
+        self.on_message = on_message
         self.url = base_url.rstrip("/") + "/v1/watch"
         self.token = token
         self.key = key
@@ -54,9 +56,12 @@ class HttpWatch:
             self.after = max(self.after, int(frame.get("seq") or 0))
             try:
                 plain = relaybox.open_frame(base64.b64decode(frame["data"]), self.key, relaybox.HOST_TO_WATCH, self.replay)
-                opened.append(relaybox.decode_message(plain))
+                message = relaybox.decode_message(plain)
             except (relaybox.RelayBoxError, ValueError, KeyError):
                 continue
+            opened.append(message)
+            if self.on_message is not None:
+                self.on_message(message)
         self.inbox.extend(opened)
         return opened
 
