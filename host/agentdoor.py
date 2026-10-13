@@ -6,11 +6,13 @@ there. It checks the agent secret from the Authorization header, then either
 proxies to ``grok agent serve`` or runs headless ``grok -p`` on this computer.
 It never asks SSH to execute a command, and it never puts the secret in a URL.
 
-A client that sends ``X-WatchRemote-Link`` gets a parked link: the door keeps
-Grok's connection open while the phone is away (iOS drops the SSH socket of a
-suspended app), and when the same link comes back it resends every frame the
-phone missed. Grok never re-sends an approval request on a new connection, so
-without this a turn that asked for approval while the phone slept waited forever.
+Every client shares one connection to Grok, because Grok sends session
+notifications only to its newest connection (see ``Hub``). A client that sends
+``X-WatchRemote-Link`` gets a parked link: while the phone is away (iOS drops
+the SSH socket of a suspended app) the door keeps the frames for its chats, and
+when the same link comes back it resends every frame the phone missed and every
+approval still waiting. Grok never re-sends an approval request, so without this
+a turn that asked for approval while the phone slept waited forever.
 """
 
 from __future__ import annotations
@@ -33,7 +35,7 @@ from pathlib import Path
 AGENT_DOWN = "The agent server on this computer is not answering."
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 HANDSHAKE_LIMIT = 8192
-DOOR_VERSION = 2
+DOOR_VERSION = 3
 LINK_PATTERN = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
 RING_FRAMES = 4000
 RING_BYTES = 16 * 1024 * 1024
@@ -143,7 +145,7 @@ def serve(
     listener.listen(8)
     listener.settimeout(0.5)
     program = binary or grok_binary()
-    links = LinkRegistry(park_seconds())
+    links = LinkRegistry(park_seconds(), upstream, secret)
     ready.set()
     last_sweep = time.monotonic()
     try:
@@ -196,19 +198,19 @@ def _client(
         if not key:
             _reject(client)
             return
-        link_id = headers.get("x-watchremote-link", "").strip()
-        if upstream is not None and links is not None and LINK_PATTERN.match(link_id):
-            seen = _seen(headers.get("x-watchremote-seen", ""))
-            link, resumed = links.open(link_id, upstream, secret)
+        header_link = headers.get("x-watchremote-link", "").strip()
+        link_id = header_link if LINK_PATTERN.match(header_link) else None
+        if upstream is not None:
+            registry = links if links is not None else LinkRegistry(park_seconds(), upstream, secret)
+            link, resumed = registry.open(link_id)
             if link is not None:
-                _accept(client, key, resumed=resumed)
+                _accept(client, key, resumed=resumed if link_id is not None else None)
                 client.settimeout(None)
+                seen = _seen(headers.get("x-watchremote-seen", ""))
                 link.serve_client(client, seen if resumed else 0)
                 return
         _accept(client, key)
         client.settimeout(None)
-        if upstream is not None and _proxy(client, upstream, secret):
-            return
         _fallback(client, binary)
     except (OSError, DoorError, UnicodeError, ValueError):
         return
@@ -326,74 +328,20 @@ def _open_upstream(upstream: tuple[str, int], secret: str) -> tuple[socket.socke
         return None
 
 
-def _proxy(client: socket.socket, upstream: tuple[str, int], secret: str) -> bool:
-    """Plain proxy for clients without a link id. Grok's connection closes with the client's."""
-    opened = _open_upstream(upstream, secret)
-    if opened is None:
-        return False
-    remote, leftover = opened
-    try:
-        if leftover:
-            client.sendall(leftover)
-        # Blocking sends with a deadline. A non-blocking sendall dropped the link on the first
-        # full socket buffer, which a long session/load replay hits.
-        client.settimeout(CLIENT_SEND_SECONDS)
-        remote.settimeout(CLIENT_SEND_SECONDS)
-        pending = b""
-        while True:
-            readable, _, _ = select.select([client, remote], [], [], IDLE_PING_SECONDS)
-            if not readable:
-                # A quiet turn (a long tool, a pending approval) is not a dead link. A ping finds dead ones.
-                client.sendall(_server_frame(9, b"door"))
-                continue
-            if client in readable:
-                chunk = client.recv(65536)
-                if not chunk:
-                    return True
-                pending += chunk
-                while True:
-                    parsed = _parse(pending)
-                    if parsed is None:
-                        break
-                    opcode, payload, size = parsed
-                    original = pending[:size]
-                    pending = pending[size:]
-                    rewritten = _rewrite_outbound(opcode, payload)
-                    if rewritten is None:
-                        remote.sendall(original)
-                    else:
-                        remote.sendall(_client_frame(opcode, rewritten))
-            if remote in readable:
-                chunk = remote.recv(65536)
-                if not chunk:
-                    return True
-                client.sendall(chunk)
-    except (OSError, UnicodeError, ValueError):
-        return True
-    finally:
-        try:
-            remote.close()
-        except OSError:
-            pass
-
-
 # Grok's ACP dispatcher requires the leading underscore. The bare name is "Method not found".
 _GROK_METHOD = {
     "x.ai/session/list": "_x.ai/session/list",
     "x.ai/session/usage": "_x.ai/session/usage",
 }
 
+# A client that prompts, loads, or stops a chat gets that chat's stream and approvals.
+_FOLLOW_METHODS = {"session/prompt", "session/load", "session/cancel"}
+# What session/load replays the history as. It goes only to the client that asked for it.
+_REPLAY_METHODS = {"session/update", "_x.ai/session/update"}
 
-def _rewrite_outbound(opcode: int, payload: bytes) -> bytes | None:
-    """Rename extension methods and resolve cwd before the frame is proxied to grok."""
-    if opcode != 1:
-        return None
-    try:
-        obj = json.loads(payload)
-    except (UnicodeError, json.JSONDecodeError):
-        return None
-    if not isinstance(obj, dict):
-        return None
+
+def _rewrite_object(obj: dict) -> bool:
+    """Rename extension methods and resolve cwd. True when something changed."""
     changed = False
     method = obj.get("method")
     if isinstance(method, str) and method in _GROK_METHOD:
@@ -407,9 +355,17 @@ def _rewrite_outbound(opcode: int, payload: bytes) -> bytes | None:
             if params.get("cwd") != resolved:
                 params["cwd"] = resolved
                 changed = True
-    if not changed:
+    return changed
+
+
+def _rewrite_outbound(opcode: int, payload: bytes) -> bytes | None:
+    """The frame with extension methods renamed and cwd resolved, or None when nothing changes."""
+    if opcode != 1:
         return None
-    return json.dumps(obj, separators=(",", ":")).encode("utf-8")
+    obj = _loads(payload)
+    if obj is None or not _rewrite_object(obj):
+        return None
+    return _dumps(obj)
 
 
 def _id_key(value: object) -> str:
@@ -424,44 +380,108 @@ def _loads(payload: bytes) -> dict | None:
     return obj if isinstance(obj, dict) else None
 
 
+def _dumps(obj: dict) -> bytes:
+    return json.dumps(obj, separators=(",", ":")).encode("utf-8")
+
+
+def _session_of(obj: dict) -> str:
+    params = obj.get("params")
+    if not isinstance(params, dict):
+        return ""
+    return str(params.get("sessionId") or "")
+
+
 class _Pending:
+    """A request Grok sent the clients (an approval) that nobody has answered yet."""
+
     def __init__(self, ident: object, payload: bytes, session_id: str) -> None:
         self.ident = ident
         self.payload = payload
         self.session_id = session_id
+        self.since = time.monotonic()
 
 
-class Link:
-    """One Grok connection that outlives the phone's socket.
+class Hub:
+    """The door's one connection to Grok, shared by every client.
 
-    Every frame Grok sends is numbered and kept in a ring. The phone reports how many it has
-    seen when it reattaches and gets the rest. Requests Grok sent the phone (approvals) stay
-    pending until answered and are sent again on every reattach.
+    Grok 1.0.52 sends every session notification (stream chunks, approvals, prompt_complete)
+    only to its newest connection. A second connection silently took the first one's replies:
+    the phone and the Watch host starved each other, and a parked phone link swallowed the
+    stream of a chat the phone had just prompted again. The hub renumbers each client's
+    requests, routes answers back to the asker, and routes Grok's frames by chat.
     """
 
-    def __init__(self, link_id: str, registry: LinkRegistry, remote: socket.socket, leftover: bytes) -> None:
-        self.id = link_id
+    def __init__(self, registry: LinkRegistry, remote: socket.socket, leftover: bytes) -> None:
         self.registry = registry
         self.remote = remote
         self.remote_lock = threading.Lock()
-        # Held while numbering and sending a frame, so the phone receives frames in ring order.
-        self.send_lock = threading.Lock()
-        self.seq = 0
-        self.ring: collections.deque[tuple[int, bytes]] = collections.deque()
-        self.ring_bytes = 0
-        self.client: socket.socket | None = None
+        self.lock = threading.Lock()
+        self.next_id = 0
+        self.links: list[Link] = []
+        # hub request id -> (link, the client's id, kind, session)
+        self.routes: dict[str, tuple[Link | None, object, str, str]] = {}
         self.pending: dict[str, _Pending] = {}
-        self.forwarded: dict[str, tuple[Link, object]] = {}
+        self.loading: dict[str, Link] = {}
+        self.queued_loads: dict[str, list[tuple[Link, dict]]] = {}
         self.init_result: object | None = None
-        self.init_ids: set[str] = set()
-        self.loads: dict[str, str] = {}
-        self.detached_at = time.monotonic()
+        self.ready = threading.Event()
         self.closed = False
-        threading.Thread(target=self._read_upstream, args=(leftover,), daemon=True).start()
+        threading.Thread(target=self._read, args=(leftover,), daemon=True).start()
 
-    # Grok to phone
+    def initialize(self) -> bool:
+        self._forward(None, {
+            "jsonrpc": "2.0",
+            "id": "door-init",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": 1,
+                "clientCapabilities": {"fs": {"readTextFile": False, "writeTextFile": False}, "terminal": False},
+                "clientInfo": {"name": "Watch Remote door", "version": str(DOOR_VERSION)},
+            },
+        })
+        return self.ready.wait(10) and self.init_result is not None
 
-    def _read_upstream(self, leftover: bytes) -> None:
+    # Links
+
+    def add(self, link: Link) -> None:
+        with self.lock:
+            self.links.append(link)
+
+    def drop(self, link: Link) -> None:
+        with self.lock:
+            if link in self.links:
+                self.links.remove(link)
+            for session, loader in list(self.loading.items()):
+                if loader is link:
+                    del self.loading[session]
+            for key, route in list(self.routes.items()):
+                if route[0] is link:
+                    self.routes[key] = (None, route[1], route[2], route[3])
+            for session in list(self.queued_loads):
+                self.queued_loads[session] = [item for item in self.queued_loads[session] if item[0] is not link]
+                if not self.queued_loads[session]:
+                    del self.queued_loads[session]
+
+    def follow(self, link: Link, session_id: str) -> None:
+        if not session_id:
+            return
+        with self.lock:
+            link.sessions.add(session_id)
+
+    def _targets_locked(self, session_id: str) -> list[Link]:
+        if session_id:
+            following = [link for link in self.links if session_id in link.sessions]
+            if following:
+                return following
+        return list(self.links)
+
+    def pending_for(self, link: Link) -> list[_Pending]:
+        with self.lock:
+            return [item for item in self.pending.values() if item.session_id in link.sessions]
+
+    # Grok to clients
+
+    def _read(self, leftover: bytes) -> None:
         buffer = leftover
         fragments = b""
         fragment_opcode = 0
@@ -477,7 +497,7 @@ class Link:
                 fin, opcode, payload, size = parsed
                 buffer = buffer[size:]
                 if opcode == 9:
-                    self._send_upstream(_client_frame(10, payload))
+                    self._send_frame(_client_frame(10, payload))
                     continue
                 if opcode == 10:
                     continue
@@ -495,45 +515,211 @@ class Link:
                     self._from_grok(payload)
         except OSError:
             pass
-        self.close(answer_pending=False)
+        self.close()
 
     def _from_grok(self, payload: bytes) -> None:
         obj = _loads(payload)
-        forward_session = None
-        if obj is not None:
-            ident = obj.get("id")
-            method = obj.get("method")
-            if method is not None and ident is not None:
-                params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
-                with self.send_lock:
-                    self.pending[_id_key(ident)] = _Pending(ident, payload, str(params.get("sessionId") or ""))
-            elif method is None and ident is not None:
-                key = _id_key(ident)
-                if key in self.init_ids and "result" in obj:
-                    self.init_ids.discard(key)
-                    self.init_result = obj["result"]
-                forward_session = self.loads.pop(key, None)
-        self.emit(payload)
-        if forward_session:
-            self.registry.forward_pending(forward_session, self)
+        if obj is None:
+            with self.lock:
+                targets = list(self.links)
+            for link in targets:
+                link.emit(payload)
+            return
+        ident = obj.get("id")
+        method = obj.get("method")
+        if method is None:
+            if ident is not None:
+                self._answered(obj)
+            return
+        session_id = _session_of(obj)
+        if ident is not None:
+            item = _Pending(ident, payload, session_id)
+            with self.lock:
+                self.pending[_id_key(ident)] = item
+                targets = self._targets_locked(session_id)
+            for link in targets:
+                link.offer(_id_key(ident), payload)
+            return
+        with self.lock:
+            loader = self.loading.get(session_id) if method in _REPLAY_METHODS else None
+            targets = [loader] if loader is not None else self._targets_locked(session_id)
+        for link in targets:
+            link.emit(payload)
+
+    def _answered(self, obj: dict) -> None:
+        with self.lock:
+            route = self.routes.pop(_id_key(obj.get("id")), None)
+        if route is None:
+            return
+        link, original, kind, session_id = route
+        if kind == "init":
+            if "result" in obj:
+                self.init_result = obj["result"]
+            self.ready.set()
+            return
+        result = obj.get("result")
+        if kind == "new" and link is not None and isinstance(result, dict):
+            self.follow(link, str(result.get("sessionId") or ""))
+        offers: list[_Pending] = []
+        queued: tuple[Link, dict] | None = None
+        if kind == "load":
+            with self.lock:
+                if self.loading.get(session_id) is link:
+                    del self.loading[session_id]
+                waiting = self.queued_loads.get(session_id)
+                if waiting:
+                    queued = waiting.pop(0)
+                    if not waiting:
+                        del self.queued_loads[session_id]
+                offers = [item for item in self.pending.values() if item.session_id == session_id]
+        if link is not None:
+            reply = dict(obj)
+            reply["id"] = original
+            link.emit(_dumps(reply))
+            # Grok never sends an approval again. A client that loads the chat later still gets it.
+            for item in offers:
+                link.offer(_id_key(item.ident), item.payload)
+        if queued is not None:
+            self._forward(*queued)
+
+    # Clients to Grok
+
+    def from_client(self, link: Link, payload: bytes) -> None:
+        obj = _loads(payload)
+        if obj is None:
+            self._send_frame(_client_frame(1, payload))
+            return
+        ident = obj.get("id")
+        method = obj.get("method")
+        if method is None:
+            if ident is None:
+                return
+            with self.lock:
+                item = self.pending.pop(_id_key(ident), None)
+            # An answer to a request already answered (it reached two clients) is dropped.
+            if item is not None:
+                self._send_frame(_client_frame(1, payload))
+            return
+        if method == "initialize" and ident is not None:
+            link.emit(_dumps({"jsonrpc": "2.0", "id": ident, "result": self.init_result}))
+            return
+        if method in _FOLLOW_METHODS:
+            self.follow(link, _session_of(obj))
+        if ident is None:
+            _rewrite_object(obj)
+            self._send_frame(_client_frame(1, _dumps(obj)))
+            return
+        self._forward(link, obj)
+
+    def _forward(self, link: Link | None, obj: dict) -> None:
+        method = obj.get("method")
+        session_id = _session_of(obj)
+        kind = {"initialize": "init", "session/new": "new", "session/load": "load"}.get(str(method), "call")
+        with self.lock:
+            if kind == "load" and link is not None:
+                if session_id in self.loading:
+                    # Two replays of one chat would interleave on the shared connection.
+                    self.queued_loads.setdefault(session_id, []).append((link, obj))
+                    return
+                self.loading[session_id] = link
+            self.next_id += 1
+            hub_id = self.next_id
+            self.routes[_id_key(hub_id)] = (link, obj.get("id"), kind, session_id)
+        sent = dict(obj)
+        sent["id"] = hub_id
+        if isinstance(obj.get("params"), dict):
+            sent["params"] = dict(obj["params"])
+        _rewrite_object(sent)
+        self._send_frame(_client_frame(1, _dumps(sent)))
+
+    def _send_frame(self, frame: bytes) -> None:
+        with self.remote_lock:
+            try:
+                self.remote.sendall(frame)
+            except OSError:
+                pass
+
+    def cancel_orphans(self, older_than: float) -> None:
+        """An approval nobody has followed for a whole park period is cancelled, so Grok's turn ends."""
+        now = time.monotonic()
+        with self.lock:
+            followed = set().union(*(link.sessions for link in self.links)) if self.links else set()
+            stale = [
+                key for key, item in self.pending.items()
+                if item.session_id not in followed and now - item.since > older_than
+            ]
+            items = [self.pending.pop(key) for key in stale]
+        for item in items:
+            reply = {"jsonrpc": "2.0", "id": item.ident, "result": {"outcome": {"outcome": "cancelled"}}}
+            self._send_frame(_client_frame(1, _dumps(reply)))
+
+    def shutdown(self) -> bool:
+        if self.closed:
+            return False
+        self.closed = True
+        self.ready.set()
+        try:
+            self.remote.close()
+        except OSError:
+            pass
+        return True
+
+    def close(self) -> None:
+        if self.shutdown():
+            self.registry.hub_lost(self)
+
+
+class Link:
+    """One client of the hub.
+
+    A phone link (``X-WatchRemote-Link``) outlives the phone's socket: iOS drops the SSH socket
+    of a suspended app, and the frames for the phone's chats keep arriving. Every frame is
+    numbered and kept in a ring. The phone reports how many it has seen when it reattaches and
+    gets the rest, then every approval still waiting in its chats. A client without a link id
+    (the Watch host) is closed with its socket.
+    """
+
+    def __init__(self, key: str, parks: bool, registry: LinkRegistry, hub: Hub) -> None:
+        self.key = key
+        self.parks = parks
+        self.registry = registry
+        self.hub = hub
+        # Held while numbering and sending a frame, so the client receives frames in ring order.
+        self.send_lock = threading.Lock()
+        self.seq = 0
+        self.ring: collections.deque[tuple[int, bytes]] = collections.deque()
+        self.ring_bytes = 0
+        self.client: socket.socket | None = None
+        self.sessions: set[str] = set()
+        self.offered: set[str] = set()
+        self.detached_at = time.monotonic()
+        self.closed = False
 
     def emit(self, payload: bytes) -> None:
         with self.send_lock:
-            self.seq += 1
-            self.ring.append((self.seq, payload))
-            self.ring_bytes += len(payload)
-            while self.ring and (len(self.ring) > RING_FRAMES or self.ring_bytes > RING_BYTES):
-                _seq, dropped = self.ring.popleft()
-                self.ring_bytes -= len(dropped)
-            client = self.client
-            if client is None:
-                return
-            try:
-                client.sendall(_server_frame(1, payload))
-            except OSError:
-                self._detach_locked(client)
+            self._emit_locked(payload)
 
-    # Phone to Grok
+    def _emit_locked(self, payload: bytes) -> None:
+        self.seq += 1
+        self.ring.append((self.seq, payload))
+        self.ring_bytes += len(payload)
+        while self.ring and (len(self.ring) > RING_FRAMES or self.ring_bytes > RING_BYTES):
+            _seq, dropped = self.ring.popleft()
+            self.ring_bytes -= len(dropped)
+        client = self.client
+        if client is None:
+            return
+        try:
+            client.sendall(_server_frame(1, payload))
+        except OSError:
+            self._detach_locked(client)
+
+    def offer(self, key: str, payload: bytes) -> None:
+        with self.send_lock:
+            if key in self.offered:
+                return
+            self.offered.add(key)
+            self._emit_locked(payload)
 
     def serve_client(self, client: socket.socket, seen: int) -> None:
         self._attach(client, seen)
@@ -548,6 +734,7 @@ class Link:
                     try:
                         chunk = client.recv(65536)
                     except TimeoutError:
+                        # A quiet turn (a long tool, a pending approval) is not a dead link. A ping finds dead ones.
                         with self.send_lock:
                             if self.client is not client:
                                 return
@@ -560,9 +747,8 @@ class Link:
                 fin, opcode, payload, size = parsed
                 buffer = buffer[size:]
                 if opcode == 8:
-                    # An explicit close means the phone is done with this link.
-                    self.detach(client)
-                    self.close(answer_pending=True)
+                    # An explicit close means the client is done with this link.
+                    self.close()
                     return
                 if opcode == 9:
                     with self.send_lock:
@@ -579,65 +765,16 @@ class Link:
                     fragment_opcode, fragments = opcode, payload
                     continue
                 if opcode == 1:
-                    self._from_phone(payload)
+                    self.hub.from_client(self, payload)
         except OSError:
             pass
-        self.detach(client)
-
-    def _from_phone(self, payload: bytes) -> None:
-        obj = _loads(payload)
-        if obj is not None:
-            ident = obj.get("id")
-            method = obj.get("method")
-            if method is None and ident is not None:
-                if not self._answer(obj):
-                    return
-            elif method == "initialize" and ident is not None:
-                if self.init_result is not None:
-                    reply = {"jsonrpc": "2.0", "id": ident, "result": self.init_result}
-                    self.emit(json.dumps(reply, separators=(",", ":")).encode("utf-8"))
-                    return
-                self.init_ids.add(_id_key(ident))
-            elif method == "session/load" and ident is not None:
-                params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
-                session_id = str(params.get("sessionId") or "")
-                if session_id:
-                    self.loads[_id_key(ident)] = session_id
-        rewritten = _rewrite_outbound(1, payload)
-        self._send_upstream(_client_frame(1, rewritten if rewritten is not None else payload))
-
-    def _answer(self, obj: dict) -> bool:
-        """True when this answer should go to this link's Grok connection."""
-        key = _id_key(obj.get("id"))
-        with self.send_lock:
-            target = self.forwarded.pop(key, None)
-            mine = self.pending.pop(key, None)
-        if target is not None:
-            other, original = target
-            other.answer_from_elsewhere(original, obj)
-            return False
-        # An answer to a request already answered (a resend reached two places) is dropped.
-        return mine is not None
-
-    def answer_from_elsewhere(self, original: object, obj: dict) -> None:
-        with self.send_lock:
-            pending = self.pending.pop(_id_key(original), None)
-        if pending is None:
-            return
-        reply = dict(obj)
-        reply["id"] = original
-        self._send_upstream(_client_frame(1, json.dumps(reply, separators=(",", ":")).encode("utf-8")))
-
-    def _send_upstream(self, frame: bytes) -> None:
-        with self.remote_lock:
-            try:
-                self.remote.sendall(frame)
-            except OSError:
-                pass
-
-    # Attachment
+        if self.parks:
+            self.detach(client)
+        else:
+            self.close()
 
     def _attach(self, client: socket.socket, seen: int) -> None:
+        waiting = self.hub.pending_for(self)
         with self.send_lock:
             old = self.client
             self.client = client
@@ -651,8 +788,10 @@ class Link:
                 for seq, payload in list(self.ring):
                     if seq > seen:
                         client.sendall(_server_frame(1, payload))
-                resend = [item for item in self.pending.values() if not self._in_ring_after(item.payload, seen)]
-                for item in resend:
+                for item in waiting:
+                    self.offered.add(_id_key(item.ident))
+                    if self._in_ring_after(item.payload, seen):
+                        continue
                     self.seq += 1
                     self.ring.append((self.seq, item.payload))
                     self.ring_bytes += len(item.payload)
@@ -679,55 +818,71 @@ class Link:
     def attached(self) -> bool:
         return self.client is not None
 
-    def pending_for(self, session_id: str) -> list[_Pending]:
-        with self.send_lock:
-            return [item for item in self.pending.values() if item.session_id == session_id]
-
-    def close(self, answer_pending: bool) -> None:
+    def close(self) -> None:
         if self.closed:
             return
-        if answer_pending:
-            # Closing with an approval still open would leave Grok's turn waiting forever.
-            with self.send_lock:
-                waiting = list(self.pending.values())
-                self.pending.clear()
-            for item in waiting:
-                reply = {"jsonrpc": "2.0", "id": item.ident, "result": {"outcome": {"outcome": "cancelled"}}}
-                self._send_upstream(_client_frame(1, json.dumps(reply, separators=(",", ":")).encode("utf-8")))
         self.closed = True
         with self.send_lock:
             client = self.client
             self.client = None
-        for sock in (client, self.remote):
-            if sock is None:
-                continue
+        if client is not None:
             try:
-                sock.close()
+                client.close()
             except OSError:
                 pass
+        self.hub.drop(self)
         self.registry.forget(self)
 
 
 class LinkRegistry:
-    def __init__(self, park: float) -> None:
+    def __init__(self, park: float, upstream: tuple[str, int] | None = None, secret: str = "") -> None:
         self.park = park
+        self.upstream = upstream
+        self.secret = secret
         self.lock = threading.Lock()
+        self.hub_lock = threading.Lock()
+        self.hub: Hub | None = None
         self.links: dict[str, Link] = {}
-        self.forward_count = 0
+        self.unnamed = 0
 
-    def open(self, link_id: str, upstream: tuple[str, int], secret: str) -> tuple[Link | None, bool]:
-        with self.lock:
-            existing = self.links.get(link_id)
-            if existing is not None and not existing.closed:
+    def ensure_hub(self) -> Hub | None:
+        with self.hub_lock:
+            hub = self.hub
+            if hub is not None and not hub.closed:
+                return hub
+            if self.upstream is None:
+                return None
+            opened = _open_upstream(self.upstream, self.secret)
+            if opened is None:
+                return None
+            remote, leftover = opened
+            hub = Hub(self, remote, leftover)
+            if not hub.initialize():
+                hub.shutdown()
+                return None
+            self.hub = hub
+            return hub
+
+    def open(self, link_id: str | None) -> tuple[Link | None, bool]:
+        if link_id is not None:
+            with self.lock:
+                existing = self.links.get(link_id)
+            if existing is not None and not existing.closed and not existing.hub.closed:
                 return existing, True
-        opened = _open_upstream(upstream, secret)
-        if opened is None:
+        hub = self.ensure_hub()
+        if hub is None:
             return None, False
-        remote, leftover = opened
         self._make_room()
-        link = Link(link_id, self, remote, leftover)
         with self.lock:
-            self.links[link_id] = link
+            if link_id is None:
+                self.unnamed += 1
+                # Not a valid link id, so a phone can never claim it.
+                key = f"~client-{self.unnamed}"
+            else:
+                key = link_id
+            link = Link(key, link_id is not None, self, hub)
+            self.links[key] = link
+        hub.add(link)
         return link, False
 
     def _make_room(self) -> None:
@@ -735,43 +890,41 @@ class LinkRegistry:
             parked = sorted((link for link in self.links.values() if not link.attached()), key=lambda link: link.detached_at)
             extra = len(self.links) - LINK_LIMIT + 1
         for link in parked[: max(0, extra)]:
-            link.close(answer_pending=True)
+            link.close()
 
     def forget(self, link: Link) -> None:
         with self.lock:
-            if self.links.get(link.id) is link:
-                del self.links[link.id]
+            if self.links.get(link.key) is link:
+                del self.links[link.key]
+
+    def hub_lost(self, hub: Hub) -> None:
+        """Grok went away. Every client reconnects and reloads its chats from the new connection."""
+        with self.hub_lock:
+            if self.hub is hub:
+                self.hub = None
+        with self.lock:
+            links = [link for link in self.links.values() if link.hub is hub]
+        for link in links:
+            link.close()
 
     def sweep(self) -> None:
         now = time.monotonic()
         with self.lock:
             expired = [link for link in self.links.values() if not link.attached() and now - link.detached_at > self.park]
         for link in expired:
-            link.close(answer_pending=True)
-
-    def forward_pending(self, session_id: str, to: Link) -> None:
-        """A phone that came back as a new link (the app was relaunched) loaded a chat whose
-        approval is waiting on its old, parked link. Send that approval here and route the answer back."""
-        with self.lock:
-            others = [link for link in self.links.values() if link is not to and not link.attached()]
-        for other in others:
-            for item in other.pending_for(session_id):
-                obj = _loads(item.payload)
-                if obj is None:
-                    continue
-                with self.lock:
-                    self.forward_count += 1
-                    alias = f"door-{self.forward_count}"
-                obj["id"] = alias
-                with to.send_lock:
-                    to.forwarded[_id_key(alias)] = (other, item.ident)
-                to.emit(json.dumps(obj, separators=(",", ":")).encode("utf-8"))
+            link.close()
+        hub = self.hub
+        if hub is not None:
+            hub.cancel_orphans(self.park)
 
     def close_all(self) -> None:
         with self.lock:
             links = list(self.links.values())
         for link in links:
-            link.close(answer_pending=False)
+            link.close()
+        hub = self.hub
+        if hub is not None:
+            hub.close()
 
 
 class _Session:
