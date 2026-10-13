@@ -37,12 +37,56 @@ final class ByteWriter: @unchecked Sendable {
     }
 }
 
+/// One app process talking to one computer through the agent door. The door keeps Grok's
+/// connection for this link while the phone is away and resends what the phone missed, so the
+/// link id, the count of frames seen, and the request ids all outlive a single SSH channel.
+final class DoorLinkState: @unchecked Sendable {
+    let linkID = UUID().uuidString.lowercased()
+    let hostKey: String
+    private let lock = NSLock()
+    private var seenFrames = 0
+    private var nextRequestID = 1
+
+    init(hostKey: String) {
+        self.hostKey = hostKey
+    }
+
+    var seen: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return seenFrames
+    }
+
+    func noteFrame() {
+        lock.lock()
+        seenFrames += 1
+        lock.unlock()
+    }
+
+    /// The door opened a fresh Grok connection (it restarted, or never knew this link).
+    func restart() {
+        lock.lock()
+        seenFrames = 0
+        lock.unlock()
+    }
+
+    /// Ids keep counting across channels. A parked link can still answer a request from the old channel.
+    func takeID() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let id = nextRequestID
+        nextRequestID += 1
+        return id
+    }
+}
+
 /// Speaks ACP through an SSH direct-tcpip channel to `grok agent serve` on the computer's loopback.
 final class ACPPipe: @unchecked Sendable {
     private let writer: ByteWriter
+    private let link: DoorLinkState
     private let lock = NSLock()
     private var framer = WebSocketFramer()
-    private var codec = ACPCodec()
+    private let codec = ACPCodec()
     private var header = Data()
     private var upgraded = false
     private var upgradeWait: CheckedContinuation<Void, Error>?
@@ -50,8 +94,13 @@ final class ACPPipe: @unchecked Sendable {
     private let onEvent: @Sendable (ACPInbound) -> Void
     private let onDead: @Sendable () -> Void
     private var failed = false
-    private var captureReplay = false
-    private var replayBuffer: [StreamEvent] = []
+    /// Updates for a chat being loaded. Until its load result arrives they are the replayed history.
+    /// After it, they are held until the caller has merged that history, then handed back in order.
+    private var captures: [String: [StreamEvent]] = [:]
+    private var loadRequests: [Int: String] = [:]
+    private var replays: [Int: [StreamEvent]] = [:]
+    private(set) var doorVersion = 0
+    private(set) var resumed = false
 
     var isUsable: Bool {
         lock.lock()
@@ -60,8 +109,9 @@ final class ACPPipe: @unchecked Sendable {
         return usable
     }
 
-    private init(writer: ByteWriter, onEvent: @escaping @Sendable (ACPInbound) -> Void, onDead: @escaping @Sendable () -> Void) {
+    private init(writer: ByteWriter, link: DoorLinkState, onEvent: @escaping @Sendable (ACPInbound) -> Void, onDead: @escaping @Sendable () -> Void) {
         self.writer = writer
+        self.link = link
         self.onEvent = onEvent
         self.onDead = onDead
     }
@@ -69,11 +119,12 @@ final class ACPPipe: @unchecked Sendable {
     static func open(
         ssh: SSHConnection,
         secret: String,
+        link: DoorLinkState,
         onEvent: @escaping @Sendable (ACPInbound) -> Void,
         onDead: @escaping @Sendable () -> Void
     ) async throws -> ACPPipe {
         let writer = ByteWriter()
-        let pipe = ACPPipe(writer: writer, onEvent: onEvent, onDead: onDead)
+        let pipe = ACPPipe(writer: writer, link: link, onEvent: onEvent, onDead: onDead)
         let channel = try await ssh.openDirectTCP(
             host: OverlayPolicy.agentLoopback,
             port: OverlayPolicy.agentPort,
@@ -88,7 +139,8 @@ final class ACPPipe: @unchecked Sendable {
             host: "127.0.0.1:\(OverlayPolicy.agentPort)",
             path: "/ws",
             webSocketKey: key,
-            authorization: secret
+            authorization: secret,
+            extraHeaders: DoorLink.requestHeaders(linkID: link.linkID, seen: link.seen)
         )) else {
             pipe.fail(SSHClientError.disconnected("The agent connection closed."))
             throw SSHClientError.disconnected("The agent connection closed.")
@@ -110,36 +162,41 @@ final class ACPPipe: @unchecked Sendable {
         return ACPCodec.approvalsAvailable(inResultJSON: raw)
     }
 
-    func loadSessionRaw(sessionID: String, cwd: String) async throws -> String {
-        try await roundTrip(timeout: true) { $0.loadSession(sessionID: sessionID, cwd: cwd) }
-    }
-
     /// `session/load` replays the conversation as `session/update` before the result.
-    /// Those updates are returned here and are not applied as a new live turn.
+    /// Those updates are returned here and are not applied as a new live turn. Only this chat is
+    /// captured; other chats keep streaming. Call `releaseHeld(sessionID:)` after merging.
     func loadSessionCaptured(sessionID: String, cwd: String) async throws -> (raw: String, replay: [StreamEvent]) {
         lock.lock()
-        captureReplay = true
-        replayBuffer = []
+        captures[sessionID] = []
         lock.unlock()
+        var requestID = 0
         do {
-            let raw = try await loadSessionRaw(sessionID: sessionID, cwd: cwd)
+            let raw = try await roundTrip(timeout: true, onID: { id in
+                requestID = id
+                self.lock.lock()
+                self.loadRequests[id] = sessionID
+                self.lock.unlock()
+            }) { $0.loadSession(sessionID: sessionID, cwd: cwd) }
             lock.lock()
-            let replay = replayBuffer
-            replayBuffer = []
-            captureReplay = false
+            let replay = replays.removeValue(forKey: requestID) ?? []
             lock.unlock()
             return (raw, replay)
         } catch {
+            // Without a load result the captured updates are history, not news. They are dropped.
             lock.lock()
-            replayBuffer = []
-            captureReplay = false
+            loadRequests[requestID] = nil
+            replays[requestID] = nil
+            captures[sessionID] = nil
             lock.unlock()
             throw error
         }
     }
 
-    func loadSession(sessionID: String, cwd: String) async throws {
-        _ = try await loadSessionCaptured(sessionID: sessionID, cwd: cwd)
+    /// Live updates that arrived after the load result, in order. Capture for this chat ends here.
+    func releaseHeld(sessionID: String) -> [StreamEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+        return captures.removeValue(forKey: sessionID) ?? []
     }
 
     func sessionUsage(sessionID: String) async throws -> String? {
@@ -177,13 +234,12 @@ final class ACPPipe: @unchecked Sendable {
     }
 
     func cancel(sessionID: String) {
-        let text = codecCopyCancel(sessionID)
-        writer.writeAndForget(masked(text))
+        writer.writeAndForget(masked(codec.cancel(sessionID: sessionID)))
     }
 
     func respond(_ request: PermissionRequest, allow: Bool) async -> Bool {
         guard isUsable else { return false }
-        let text = codecCopyPermission(request, allow: allow)
+        let text = codec.permissionResponse(for: request, allow: allow)
         let wrote = await writer.write(masked(text))
         guard wrote else {
             fail(SSHClientError.disconnected("The approval was not written."))
@@ -192,26 +248,14 @@ final class ACPPipe: @unchecked Sendable {
         return true
     }
 
-    private func codecCopyCancel(_ sessionID: String) -> String {
-        lock.lock()
-        let text = codec.cancel(sessionID: sessionID)
-        lock.unlock()
-        return text
-    }
-
-    private func codecCopyPermission(_ request: PermissionRequest, allow: Bool) -> String {
-        lock.lock()
-        let text = codec.permissionResponse(for: request, allow: allow)
-        lock.unlock()
-        return text
-    }
-
-    private func roundTrip(timeout: Bool, _ make: (inout ACPCodec) -> (Int, String)) async throws -> String {
-        let id: Int
-        let json: String
-        lock.lock()
-        (id, json) = make(&codec)
-        lock.unlock()
+    private func roundTrip(
+        timeout: Bool,
+        onID: (Int) -> Void = { _ in },
+        _ make: (inout ACPCodec) -> (Int, String)
+    ) async throws -> String {
+        var requestCodec = ACPCodec(nextID: link.takeID())
+        let (id, json) = make(&requestCodec)
+        onID(id)
         return try await withCheckedThrowingContinuation { continuation in
             self.lock.lock()
             self.waiters[id] = continuation
@@ -282,6 +326,9 @@ final class ACPPipe: @unchecked Sendable {
                 fail(SSHClientError.disconnected("The agent port did not accept a WebSocket."))
                 return
             }
+            doorVersion = DoorLink.doorVersion(in: head)
+            resumed = DoorLink.resumed(in: head)
+            if !resumed { link.restart() }
             upgraded = true
             let waiter = upgradeWait
             upgradeWait = nil
@@ -300,7 +347,8 @@ final class ACPPipe: @unchecked Sendable {
         for frame in frames {
             switch frame.opcode {
             case .text:
-                guard let text = String(data: frame.payload, encoding: .utf8), let inbound = codecParse(text) else { continue }
+                link.noteFrame()
+                guard let text = String(data: frame.payload, encoding: .utf8), let inbound = codec.parse(text) else { continue }
                 route(inbound, raw: text)
             case .ping:
                 var mask = [UInt8](repeating: 0, count: 4)
@@ -314,28 +362,33 @@ final class ACPPipe: @unchecked Sendable {
         }
     }
 
-    private func codecParse(_ text: String) -> ACPInbound? {
-        lock.lock()
-        let inbound = codec.parse(text)
-        lock.unlock()
-        return inbound
-    }
-
     private func route(_ inbound: ACPInbound, raw: String) {
         switch inbound {
         case .result(let id, _, _):
+            endReplay(id: id)
             resume(id: id, result: .success(raw))
         case .failure(let id, _, let message):
             resume(id: id, result: .failure(SSHClientError.disconnected(message)))
-        case .update(_, let event):
+        case .update(let sessionID, let event):
             lock.lock()
-            let capture = captureReplay
-            if capture { replayBuffer.append(event) }
+            let captured = captures[sessionID] != nil
+            if captured { captures[sessionID]?.append(event) }
             lock.unlock()
-            if !capture { onEvent(inbound) }
-        case .permission, .notification:
+            if !captured { onEvent(inbound) }
+        case .permission, .activity, .notification:
             onEvent(inbound)
         }
+    }
+
+    /// The load result is the line between replayed history and live updates.
+    private func endReplay(id: String) {
+        guard let number = Int(id) else { return }
+        lock.lock()
+        if let sessionID = loadRequests.removeValue(forKey: number) {
+            replays[number] = captures[sessionID] ?? []
+            captures[sessionID] = []
+        }
+        lock.unlock()
     }
 
     private func resume(id: String, result: Result<String, Error>) {
@@ -363,16 +416,25 @@ final class ACPPipe: @unchecked Sendable {
     }
 }
 
+/// How a `session/prompt` request ended, as seen from this phone.
+enum PromptOutcome {
+    case finished(stopReason: String?, usage: String?)
+    case failed(String)
+    /// The channel dropped first. The turn keeps running on the computer, and `prompt_complete`
+    /// or a reload says how it ended.
+    case disconnected
+}
+
 @MainActor
 final class LiveLink {
     var approvalsAvailable = false
     var statusLine = "Not connected"
     private var ssh: SSHConnection?
     private var pipe: ACPPipe?
+    private var doorLink: DoorLinkState?
     private var acpReady = false
     private var closing = false
     private let onEvent: (ACPInbound) -> Void
-    private let onCLI: (String, StreamEvent) -> Void
     private let onDropped: () -> Void
     private let onAgentLost: () -> Void
 
@@ -381,6 +443,15 @@ final class LiveLink {
     /// True only while the agent WebSocket is still able to carry an approval.
     var agentIsReady: Bool { acpReady && pipe?.isUsable == true }
 
+    /// 0 for a door that cannot keep the chat while the phone is away.
+    var doorVersion: Int { pipe?.doorVersion ?? 0 }
+
+    /// The door kept this link while the phone was away and resent what it missed.
+    var resumedLink: Bool { pipe?.resumed == true }
+
+    /// Agent channels opened so far, so the owner can tell a new one from the one it knows.
+    private(set) var channelCount = 0
+
     func matches(host: SavedHost) -> Bool {
         guard let target = ssh?.target else { return false }
         return target.address == host.address && target.port == host.port && target.username == host.username
@@ -388,16 +459,15 @@ final class LiveLink {
 
     init(
         onEvent: @escaping (ACPInbound) -> Void,
-        onCLI: @escaping (String, StreamEvent) -> Void,
         onDropped: @escaping () -> Void = {},
         onAgentLost: @escaping () -> Void = {}
     ) {
         self.onEvent = onEvent
-        self.onCLI = onCLI
         self.onDropped = onDropped
         self.onAgentLost = onAgentLost
     }
 
+    /// The door link survives this, so the next connection to the same computer picks up where it left.
     func disconnect() {
         closing = true
         pipe = nil
@@ -442,6 +512,10 @@ final class LiveLink {
     ) async throws {
         disconnect()
         let target = SSHTarget(address: host.address, port: host.port, username: host.username)
+        let hostKey = "\(host.username)@\(host.address):\(host.port)"
+        if doorLink?.hostKey != hostKey {
+            doorLink = DoorLinkState(hostKey: hostKey)
+        }
         let connection = try await SSHConnection.connect(to: target, privateKey: privateKey, verifyHostKey: verify)
         ssh = connection
         connection.observeClose { [weak self] in
@@ -452,7 +526,7 @@ final class LiveLink {
     }
 
     func openAgent(secret: String?) async throws {
-        guard let connection = ssh, connection.isActive else {
+        guard let connection = ssh, connection.isActive, let doorLink else {
             throw SSHClientError.disconnected("The computer is not connected.")
         }
         guard let secret, !secret.isEmpty else {
@@ -468,7 +542,7 @@ final class LiveLink {
         pipe = nil
         acpReady = false
         do {
-            let opened = try await ACPPipe.open(ssh: connection, secret: secret, onEvent: { [onEvent] event in
+            let opened = try await ACPPipe.open(ssh: connection, secret: secret, link: doorLink, onEvent: { [onEvent] event in
                 Task { @MainActor in onEvent(event) }
             }, onDead: { [weak self] in
                 Task { @MainActor in self?.noteAgentClosed() }
@@ -476,6 +550,7 @@ final class LiveLink {
             let approvals = try await opened.initialize()
             pipe = opened
             acpReady = true
+            channelCount += 1
             approvalsAvailable = approvals
             statusLine = approvals
                 ? "SSH connected. Approvals go through the agent server."
@@ -488,20 +563,19 @@ final class LiveLink {
         }
     }
 
-    func loadSessionRaw(sessionID: String, cwd: String?) async throws -> String {
-        let loaded = try await loadSessionCaptured(sessionID: sessionID, cwd: cwd)
-        return loaded.raw
-    }
-
+    /// Updates for this chat that arrive after the load result are held until `releaseHeld`.
     func loadSessionCaptured(sessionID: String, cwd: String?) async throws -> (raw: String, replay: [StreamEvent]) {
         let pipe = try requirePipe()
-        let directory = agentCwd(cwd)
         do {
-            return try await pipe.loadSessionCaptured(sessionID: sessionID, cwd: directory)
+            return try await pipe.loadSessionCaptured(sessionID: sessionID, cwd: agentCwd(cwd))
         } catch {
             if pipe.isUsable == false { noteAgentClosed() }
             throw error
         }
+    }
+
+    func releaseHeld(sessionID: String) -> [StreamEvent] {
+        pipe?.releaseHeld(sessionID: sessionID) ?? []
     }
 
     func list(cwd: String?) async throws -> [GrokSession] {
@@ -514,50 +588,28 @@ final class LiveLink {
         }
     }
 
-    func start(localID: String, prompt: String, cwd: String?) async throws -> String {
+    func newSession(cwd: String?) async throws -> String {
         let pipe = try requirePipe()
-        let directory = agentCwd(cwd)
-        let sessionID: String
         do {
-            sessionID = try await pipe.newSession(cwd: directory)
+            return try await pipe.newSession(cwd: agentCwd(cwd))
         } catch {
             if pipe.isUsable == false { noteAgentClosed() }
             throw error
         }
-        Task { @MainActor in
-            do {
-                let raw = try await pipe.prompt(sessionID: sessionID, text: prompt)
-                self.onCLI(sessionID, .end(sessionID: sessionID, stopReason: GrokOutput.stopReason(in: raw), usage: GrokOutput.parseUsage(raw)))
-            } catch {
-                if !pipe.isUsable { self.noteAgentClosed() }
-                self.onCLI(sessionID, .error(error.localizedDescription))
-            }
-        }
-        return sessionID
     }
 
-    /// Loads the session, returns the replayed history, then sends the prompt on that session.
-    func resumePrompt(sessionID: String, prompt: String, cwd: String?) async throws -> [StreamEvent] {
-        let pipe = try requirePipe()
-        let directory = agentCwd(cwd)
-        let replay: [StreamEvent]
+    func prompt(sessionID: String, text: String) async -> PromptOutcome {
+        guard let pipe = try? requirePipe() else { return .disconnected }
         do {
-            let loaded = try await pipe.loadSessionCaptured(sessionID: sessionID, cwd: directory)
-            replay = loaded.replay
+            let raw = try await pipe.prompt(sessionID: sessionID, text: text)
+            return .finished(stopReason: GrokOutput.stopReason(in: raw), usage: GrokOutput.parseUsage(raw))
         } catch {
-            if pipe.isUsable == false { noteAgentClosed() }
-            throw error
-        }
-        Task { @MainActor in
-            do {
-                let raw = try await pipe.prompt(sessionID: sessionID, text: prompt)
-                self.onCLI(sessionID, .end(sessionID: sessionID, stopReason: GrokOutput.stopReason(in: raw), usage: GrokOutput.parseUsage(raw)))
-            } catch {
-                if !pipe.isUsable { self.noteAgentClosed() }
-                self.onCLI(sessionID, .error(error.localizedDescription))
+            guard pipe.isUsable else {
+                noteAgentClosed()
+                return .disconnected
             }
+            return .failed(error.localizedDescription)
         }
-        return replay
     }
 
     func respond(_ request: PermissionRequest, allow: Bool) async -> Bool {

@@ -335,6 +335,7 @@ struct ChatThreadView: View {
     private func sendDraft() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
+        dictation.stop()
         draft = ""
         composerFocused = false
         followLatest = true
