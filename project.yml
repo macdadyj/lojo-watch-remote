@@ -152,6 +152,8 @@ targets:
       - path: App/Tests
       - path: Fixtures/speech
         buildPhase: resources
+      - path: e2e/fixtures
+        buildPhase: resources
     dependencies:
       - package: WatchRemoteCore
         product: WatchRemoteCore

@@ -25,7 +25,13 @@ public struct WebSocketFramer {
 
     public init() {}
 
-    public static func upgradeRequest(host: String, path: String, webSocketKey: String, authorization: String? = nil) -> Data {
+    public static func upgradeRequest(
+        host: String,
+        path: String,
+        webSocketKey: String,
+        authorization: String? = nil,
+        extraHeaders: [(String, String)] = []
+    ) -> Data {
         var lines = [
             "GET \(path) HTTP/1.1",
             "Host: \(host)",
@@ -36,6 +42,9 @@ public struct WebSocketFramer {
         ]
         if let authorization, Self.isHeaderSafe(authorization) {
             lines.append("Authorization: Bearer \(authorization)")
+        }
+        for (name, value) in extraHeaders where Self.isHeaderSafe(name) && Self.isHeaderSafe(value) {
+            lines.append("\(name): \(value)")
         }
         lines.append("")
         lines.append("")

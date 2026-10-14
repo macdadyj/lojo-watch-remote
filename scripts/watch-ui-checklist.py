@@ -86,7 +86,7 @@ def main() -> int:
     need("case resume" in read("Core/Sources/WatchRemoteCore/Models.swift"), "resume command")
     store = read("App/iOS/Services/RemoteStore.swift")
     need("SessionResume.missingMessage" in store, "phone surfaces a missing session")
-    need("loadSessionRaw" in read("App/iOS/Services/LiveLink.swift"), "resume loads the session")
+    need("loadSessionCaptured" in read("App/iOS/Services/LiveLink.swift"), "resume loads the session")
     need('"_x.ai/session/list"' in read("Core/Sources/WatchRemoteCore/ACPCodec.swift"), "underscore list method")
     need("op: .resume" in read("App/Watch/DirectSession.swift"), "direct resume op")
     need("func transcribe" in read("App/Watch/DirectSession.swift"), "direct transcribe")

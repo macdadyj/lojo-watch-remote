@@ -78,11 +78,58 @@ public enum SessionResume {
             return ChatTranscript.streamingSpeaker(prefix: "You:", text, in: lines)
         case .text(let text):
             return ChatTranscript.streamingAssistant(text, in: lines)
-        case .tool(let title):
+        case .tool(let title), .toolCall(_, let title):
             return ChatTranscript.append(ChatTranscript.toolCard(title), to: lines)
-        case .thought, .toolUpdate, .usage, .end, .error, .ignored:
+        case .thought, .toolCallUpdate, .toolUpdate, .title, .turnStarted, .turnComplete, .usage, .end, .error, .ignored:
             return lines
         }
+    }
+
+    /// The computer's replay is the record of every finished turn, in order. The phone only adds
+    /// what the replay cannot know yet: the prompt it just sent and anything streamed after it.
+    ///
+    /// A longer phone copy must not win. Live tool updates and missed first prompts made the cached
+    /// copy longer than the replay while it was also out of order and missing the final answer.
+    public static func merge(local: [String], host: [String]) -> [String] {
+        keepingTrailingSpace(of: host, in: mergedLines(local: local, host: host))
+    }
+
+    /// Grok streams "…Texas. " and then "Pulling…". When a reload ends on the computer's last
+    /// line mid-answer, that line keeps its trailing space so the next live chunk is not glued on.
+    private static func keepingTrailingSpace(of host: [String], in merged: [String]) -> [String] {
+        guard let last = merged.last,
+              let raw = host.last(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              raw != last, raw.hasPrefix(last),
+              raw.trimmingCharacters(in: .whitespacesAndNewlines) == last else { return merged }
+        var copy = merged
+        copy[copy.count - 1] = raw
+        return copy
+    }
+
+    private static func mergedLines(local: [String], host: [String]) -> [String] {
+        let hostChat = chatLines(host)
+        let localChat = chatLines(local)
+        let hostPrompts = hostChat.filter { $0.hasPrefix("You:") }.map(promptKey)
+        guard !hostPrompts.isEmpty else {
+            return localChat.count > hostChat.count ? localChat : hostChat
+        }
+        var next = 0
+        var tailStart: Int?
+        for (index, line) in localChat.enumerated() where line.hasPrefix("You:") {
+            let key = promptKey(line)
+            if let found = hostPrompts[next...].firstIndex(of: key) {
+                next = found + 1
+                tailStart = nil
+            } else if tailStart == nil {
+                tailStart = index
+            }
+        }
+        guard let tailStart else { return hostChat }
+        return hostChat + localChat[tailStart...]
+    }
+
+    private static func promptKey(_ line: String) -> String {
+        ChatTranscript.spokenText(line).split(whereSeparator: \.isWhitespace).joined(separator: " ").lowercased()
     }
 
     /// Lines that name a speaker or a tool. A bare title does not.

@@ -167,7 +167,8 @@ class WatchPathTests(unittest.TestCase):
         session_id = self.started(self.watch.send("start", prompt="Read the notes file"))
         update = self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: I read notes.txt. It says hello."))
         row = next(row for row in update["sessions"] if row["id"] == session_id)
-        self.assertIn("Auto-approved: Read notes.txt", row["transcript"])
+        # The tool card is the one step for this tool. An approval note after it would be a second.
+        self.assertEqual(row["transcript"], ["You: Read the notes file", "Tool: Read notes.txt", "Grok: I read notes.txt. It says hello."])
         self.assertEqual(self.fake.state()["decisions"], [{"sessionId": session_id, "outcome": "allow-once"}])
 
     def test_per_chat_auto_approve_overrides_the_default(self) -> None:

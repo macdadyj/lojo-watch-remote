@@ -17,6 +17,7 @@ class WSConn:
     def __init__(self, sock: socket.socket) -> None:
         self.sock = sock
         self.buffer = b""
+        self.response_head = ""
 
     def send(self, opcode: int, payload: bytes) -> None:
         mask = os.urandom(4)
@@ -116,6 +117,7 @@ def connect(url: str, timeout: float = 10, headers: dict[str, str] | None = None
     if b" 101 " not in status and not status.endswith(b" 101"):
         raise SocketError("The relay did not accept the connection.")
     conn = WSConn(sock)
+    conn.response_head = header.split(b"\r\n\r\n", 1)[0].decode("latin-1")
     leftover = header.split(b"\r\n\r\n", 1)[1]
     conn.buffer = leftover
     sock.settimeout(timeout)

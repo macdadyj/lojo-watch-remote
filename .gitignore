@@ -11,3 +11,5 @@ Config/Local.xcconfig
 __pycache__/
 *.pyc
 .venv/
+.build/
+e2e/recordings/

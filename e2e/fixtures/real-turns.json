@@ -1,0 +1,5921 @@
+{
+"scenario": "turns",
+"meta": {
+"grok": "grok 1.0.52 (0920c8169e27)",
+"door": "127.0.0.1:2419",
+"prompt": "What's the weather today in Argyle Texas",
+"recordedAt": "2026-10-13T16:38:43+0000",
+"chats": {
+"turns": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"events": [
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 1,
+"method": "initialize",
+"params": {
+"protocolVersion": 1,
+"clientCapabilities": {
+"fs": {
+"readTextFile": false,
+"writeTextFile": false
+},
+"terminal": false
+},
+"clientInfo": {
+"name": "Watch Remote",
+"version": "1.0"
+}
+}
+},
+"t": 0.003
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 1,
+"result": {
+"protocolVersion": 1,
+"agentCapabilities": {
+"loadSession": true,
+"promptCapabilities": {
+"image": false,
+"audio": false,
+"embeddedContext": true
+},
+"mcpCapabilities": {
+"http": true,
+"sse": true
+},
+"sessionCapabilities": {
+"list": {},
+"resume": {},
+"close": {}
+},
+"auth": {},
+"_meta": {
+"x.ai/fs_notify": true,
+"x.ai/hooks": {
+"blockingEvents": [
+"pre_tool_use",
+"stop",
+"subagent_stop"
+],
+"decisions": [
+"deny",
+"block"
+],
+"stopSignals": [
+"continue",
+"stopReason",
+"additionalContext"
+]
+},
+"x.ai/capabilities": {
+"toolOverrides": {
+"x_keyword_search": true,
+"x_semantic_search": true,
+"x_user_search": false,
+"x_thread_fetch": false
+}
+}
+}
+},
+"authMethods": [
+{
+"id": "xai.api_key",
+"name": "xai.api_key",
+"description": "XAI_API_KEY or api_key/env_key in config.toml"
+},
+{
+"id": "grok.com",
+"name": "Grok",
+"description": "Sign in with Grok"
+}
+],
+"_meta": {
+"currentWorkingDirectory": "/tmp",
+"agentVersion": "1.0.52",
+"agentId": "b86aa879-09de-5cbc-9b85-2809fa9358ab",
+"agentInstanceId": "5c3a30f1-0852-4450-b46e-aab661512a93",
+"hostname": "host",
+"metadata": null,
+"grokShell": true,
+"defaultAuthMethodId": "xai.api_key",
+"x.ai/mcp/sdk": true,
+"x.ai/pluginDirs": true,
+"modelState": {
+"currentModelId": "scripted",
+"availableModels": [
+{
+"modelId": "grok-4.6",
+"name": "Grok 4.6",
+"description": "SpaceXAI's latest frontier model",
+"_meta": {
+"totalContextTokens": 500000,
+"agentType": "grok-build-plan",
+"supportsReasoningEffort": true,
+"reasoningEffort": "high",
+"reasoningEfforts": [
+{
+"id": "xhigh",
+"value": "xhigh",
+"label": "Extra High Effort",
+"description": "Highest effort and reasoning level",
+"default": false
+},
+{
+"id": "high",
+"value": "high",
+"label": "High Effort",
+"description": "Higher implementation quality with extensive reasoning",
+"default": true
+},
+{
+"id": "medium",
+"value": "medium",
+"label": "Medium Effort",
+"description": "Balanced effort with standard implementation and testing",
+"default": false
+},
+{
+"id": "low",
+"value": "low",
+"label": "Low Effort",
+"description": "Quick, fast implementations",
+"default": false
+}
+]
+}
+}
+]
+},
+"mcpServers": [],
+"mcpApps": false,
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"cancelRewind": true,
+"sessionRecap": true,
+"feedbackTraceOffer": false,
+"voiceMode": true
+}
+}
+},
+"t": 0.004
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 2,
+"method": "session/new",
+"params": {
+"cwd": "/work",
+"mcpServers": [],
+"_meta": {
+"yoloMode": false,
+"autoMode": false
+}
+}
+},
+"t": 0.004
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "auth",
+"sessionId": null
+}
+},
+"t": 0.016
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "resolve_workspace",
+"sessionId": null
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "folder_trust",
+"sessionId": null
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "plugin_registry",
+"sessionId": null
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "mcp_merge",
+"sessionId": null
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "persistence_init",
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "spawn_session_actor",
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "agent_build",
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 2,
+"result": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"models": {
+"currentModelId": "scripted",
+"availableModels": [
+{
+"modelId": "grok-4.6",
+"name": "Grok 4.6",
+"description": "SpaceXAI's latest frontier model",
+"_meta": {
+"totalContextTokens": 500000,
+"agentType": "grok-build-plan",
+"supportsReasoningEffort": true,
+"reasoningEffort": "high",
+"reasoningEfforts": [
+{
+"id": "xhigh",
+"value": "xhigh",
+"label": "Extra High Effort",
+"description": "Highest effort and reasoning level",
+"default": false
+},
+{
+"id": "high",
+"value": "high",
+"label": "High Effort",
+"description": "Higher implementation quality with extensive reasoning",
+"default": true
+},
+{
+"id": "medium",
+"value": "medium",
+"label": "Medium Effort",
+"description": "Balanced effort with standard implementation and testing",
+"default": false
+},
+{
+"id": "low",
+"value": "low",
+"label": "Low Effort",
+"description": "Quick, fast implementations",
+"default": false
+}
+]
+}
+}
+]
+},
+"configOptions": [
+{
+"id": "model",
+"name": "Model",
+"category": "model",
+"type": "select",
+"currentValue": "scripted",
+"options": [
+{
+"value": "grok-4.6",
+"name": "Grok 4.6"
+},
+{
+"value": "grok-4.5",
+"name": "Grok 4.5"
+},
+{
+"value": "scripted",
+"name": "Scripted"
+}
+]
+}
+],
+"_meta": {
+"currentWorkingDirectory": "/work",
+"isGitRepo": false,
+"gitRoot": null,
+"showNonGitWarning": false,
+"feedbackEnabled": true,
+"codebaseIndexed": [],
+"x.ai/sessionConfig": {
+"options": [
+{
+"id": "grok-4.6",
+"category": "model",
+"label": "Grok 4.6",
+"selected": false
+},
+{
+"id": "grok-4.5",
+"category": "model",
+"label": "Grok 4.5",
+"selected": false
+},
+{
+"id": "scripted",
+"category": "model",
+"label": "Scripted",
+"selected": true
+}
+]
+},
+"x.ai/sessionDetail": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"kind": "build",
+"cwd": "/work",
+"currentModelId": "scripted"
+}
+}
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "git_discovery",
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "finalize_response",
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "tool_overrides",
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/mcp_initialized",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"mcpToolCount": 0,
+"elapsedMs": 0
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/setup",
+"params": {
+"method": "session/new",
+"phase": "response_ready",
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 1324,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1868",
+"agentTimestampMs": 1791909523319,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 0.067
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 1324,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1869",
+"agentTimestampMs": 1791909523320,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 0.068
+},
+{
+"k": "ui",
+"a": "prompt",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"text": "What's the weather today in Argyle Texas",
+"t": 0.068
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 3,
+"method": "session/prompt",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"prompt": [
+{
+"type": "text",
+"text": "What's the weather today in Argyle Texas"
+}
+]
+}
+},
+"t": 0.068
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/sessions/changed",
+"params": {
+"upserted": [
+{
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": null,
+"cwd": "/work",
+"isWorktree": false,
+"modelId": "scripted",
+"yolo": false,
+"activity": "working",
+"resident": true,
+"lastChangeUnixMs": 1791909523330,
+"origin": {
+"kind": "local"
+}
+}
+],
+"removed": []
+}
+},
+"t": 0.07
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/queue/changed",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"entries": [
+{
+"id": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"version": 0,
+"kind": "prompt",
+"text": "What's the weather today in Argyle Texas",
+"position": 0
+}
+]
+}
+},
+"t": 0.111
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/queue/changed",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"entries": [],
+"runningPromptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"runningText": "What's the weather today in Argyle Texas",
+"runningKind": "prompt"
+}
+},
+"t": 0.111
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "session_summary_generated",
+"session_summary": "What's the weather today in Argyle Texas"
+}
+}
+},
+"t": 0.111
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "session_info_update",
+"title": "What's the weather today in Argyle Texas"
+}
+}
+},
+"t": 0.111
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "I'll check that for you: What's the weather today in Argyle Texas. "
+}
+},
+"_meta": {
+"totalTokens": 1340,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1872",
+"agentTimestampMs": 1791909523708,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909523708,
+"turnStartMs": 1791909523331,
+"updateType": "AgentMessageChunk",
+"chunkId": 1
+}
+}
+},
+"t": 0.448
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "Pulling a few readings first."
+}
+},
+"_meta": {
+"totalTokens": 1340,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1873",
+"agentTimestampMs": 1791909523758,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909523708,
+"turnStartMs": 1791909523331,
+"updateType": "AgentMessageChunk",
+"chunkId": 2
+}
+}
+},
+"t": 0.498
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_delta_chunk",
+"tool_call_id": "call_1791909523808",
+"tool_index": 0,
+"name": "run_terminal_command",
+"arguments_delta": "{\"command\": \"sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt\", \"description\": \"Reading 1\"}"
+}
+}
+},
+"t": 0.55
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1874",
+"agentTimestampMs": 1791909523809,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909523708,
+"turnStartMs": 1791909523331,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 0.55
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "response_completed",
+"usage": {
+"input_tokens": 100,
+"output_tokens": 20,
+"cache_read_input_tokens": 0,
+"cache_creation_input_tokens": 0,
+"reasoning_tokens": 0
+}
+}
+}
+},
+"t": 0.55
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call",
+"toolCallId": "call_1791909523808",
+"title": "run_terminal_command",
+"rawInput": {
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1"
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1875",
+"agentTimestampMs": 1791909523809,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909523708,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCall",
+"updateParams": {
+"toolCallId": "call_1791909523808",
+"title": "run_terminal_command",
+"kind": "Other",
+"status": "Pending"
+}
+}
+}
+},
+"t": 0.55
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "pending_interaction",
+"tool_call_id": "call_1791909523808",
+"kind": "permission"
+}
+}
+},
+"t": 0.55
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909523808",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "Reading 1"
+}
+}
+],
+"locations": [],
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1"
+}
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1876",
+"agentTimestampMs": 1791909523809,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909523708,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909523808",
+"status": null
+}
+}
+}
+},
+"t": 0.55
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 0,
+"method": "session/request_permission",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"toolCall": {
+"toolCallId": "call_1791909523808",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1"
+}
+},
+"x.ai/requestingSessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"options": [
+{
+"optionId": "always-allow",
+"name": "Yes, and don't ask again for bash commands",
+"kind": "allow_always"
+},
+{
+"optionId": "allow-once",
+"name": "Yes, proceed",
+"kind": "allow_once"
+},
+{
+"optionId": "reject-once",
+"name": "No, and tell Grok what to do differently",
+"kind": "reject_once"
+},
+{
+"optionId": "reject-always",
+"name": "No, and don't ask again for this command",
+"kind": "reject_always"
+}
+]
+}
+},
+"t": 0.55
+},
+{
+"k": "ui",
+"a": "autoApproved",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": "Execute `sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"t": 0.55
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 0,
+"result": {
+"outcome": {
+"outcome": "selected",
+"optionId": "allow-once"
+}
+}
+},
+"t": 0.55
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "interaction_resolved",
+"tool_call_id": "call_1791909523808"
+}
+}
+},
+"t": 0.551
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909523808",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": ""
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [],
+"output_for_prompt": "",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 0
+}
+}
+}
+},
+"t": 0.596
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909523808",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 1 of 3 for Whats the weather today in Argyle Texas\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+49,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+87,
+104,
+97,
+116,
+115,
+32,
+116,
+104,
+101,
+32,
+119,
+101,
+97,
+116,
+104,
+101,
+114,
+32,
+116,
+111,
+100,
+97,
+121,
+32,
+105,
+110,
+32,
+65,
+114,
+103,
+121,
+108,
+101,
+32,
+84,
+101,
+120,
+97,
+115,
+10
+],
+"output_for_prompt": "reading 1 of 3 for Whats the weather today in Argyle Texas\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 59
+}
+}
+}
+},
+"t": 1.593
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909523808",
+"status": "completed",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 1 of 3 for Whats the weather today in Argyle Texas\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+49,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+87,
+104,
+97,
+116,
+115,
+32,
+116,
+104,
+101,
+32,
+119,
+101,
+97,
+116,
+104,
+101,
+114,
+32,
+116,
+111,
+100,
+97,
+121,
+32,
+105,
+110,
+32,
+65,
+114,
+103,
+121,
+108,
+101,
+32,
+84,
+101,
+120,
+97,
+115,
+10
+],
+"output_for_prompt": "exit: 0\nreading 1 of 3 for Whats the weather today in Argyle Texas\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": "Reading 1",
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 59
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1877",
+"agentTimestampMs": 1791909524854,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909523708,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909523808",
+"status": "Completed"
+}
+}
+}
+},
+"t": 1.594
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_delta_chunk",
+"tool_call_id": "call_1791909524857",
+"tool_index": 0,
+"name": "run_terminal_command",
+"arguments_delta": "{\"command\": \"sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt\", \"description\": \"Reading 2\"}"
+}
+}
+},
+"t": 1.598
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1880",
+"agentTimestampMs": 1791909524858,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909524857,
+"turnStartMs": 1791909523331,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 1.598
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "response_completed",
+"usage": {
+"input_tokens": 100,
+"output_tokens": 20,
+"cache_read_input_tokens": 0,
+"cache_creation_input_tokens": 0,
+"reasoning_tokens": 0
+}
+}
+}
+},
+"t": 1.598
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call",
+"toolCallId": "call_1791909524857",
+"title": "run_terminal_command",
+"rawInput": {
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2"
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1881",
+"agentTimestampMs": 1791909524858,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909524857,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCall",
+"updateParams": {
+"toolCallId": "call_1791909524857",
+"title": "run_terminal_command",
+"kind": "Other",
+"status": "Pending"
+}
+}
+}
+},
+"t": 1.598
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "pending_interaction",
+"tool_call_id": "call_1791909524857",
+"kind": "permission"
+}
+}
+},
+"t": 1.598
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909524857",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "Reading 2"
+}
+}
+],
+"locations": [],
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2"
+}
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1882",
+"agentTimestampMs": 1791909524858,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909524857,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909524857",
+"status": null
+}
+}
+}
+},
+"t": 1.599
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 1,
+"method": "session/request_permission",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"toolCall": {
+"toolCallId": "call_1791909524857",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2"
+}
+},
+"x.ai/requestingSessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"options": [
+{
+"optionId": "always-allow",
+"name": "Yes, and don't ask again for bash commands",
+"kind": "allow_always"
+},
+{
+"optionId": "allow-once",
+"name": "Yes, proceed",
+"kind": "allow_once"
+},
+{
+"optionId": "reject-once",
+"name": "No, and tell Grok what to do differently",
+"kind": "reject_once"
+},
+{
+"optionId": "reject-always",
+"name": "No, and don't ask again for this command",
+"kind": "reject_always"
+}
+]
+}
+},
+"t": 1.599
+},
+{
+"k": "ui",
+"a": "autoApproved",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": "Execute `sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"t": 1.599
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 1,
+"result": {
+"outcome": {
+"outcome": "selected",
+"optionId": "allow-once"
+}
+}
+},
+"t": 1.599
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "interaction_resolved",
+"tool_call_id": "call_1791909524857"
+}
+}
+},
+"t": 1.6
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909524857",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": ""
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [],
+"output_for_prompt": "",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 0
+}
+}
+}
+},
+"t": 1.643
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909524857",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 2 of 3 for Whats the weather today in Argyle Texas\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+50,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+87,
+104,
+97,
+116,
+115,
+32,
+116,
+104,
+101,
+32,
+119,
+101,
+97,
+116,
+104,
+101,
+114,
+32,
+116,
+111,
+100,
+97,
+121,
+32,
+105,
+110,
+32,
+65,
+114,
+103,
+121,
+108,
+101,
+32,
+84,
+101,
+120,
+97,
+115,
+10
+],
+"output_for_prompt": "reading 2 of 3 for Whats the weather today in Argyle Texas\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 59
+}
+}
+}
+},
+"t": 2.648
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909524857",
+"status": "completed",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 2 of 3 for Whats the weather today in Argyle Texas\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+50,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+87,
+104,
+97,
+116,
+115,
+32,
+116,
+104,
+101,
+32,
+119,
+101,
+97,
+116,
+104,
+101,
+114,
+32,
+116,
+111,
+100,
+97,
+121,
+32,
+105,
+110,
+32,
+65,
+114,
+103,
+121,
+108,
+101,
+32,
+84,
+101,
+120,
+97,
+115,
+10
+],
+"output_for_prompt": "exit: 0\nreading 2 of 3 for Whats the weather today in Argyle Texas\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": "Reading 2",
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 59
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1883",
+"agentTimestampMs": 1791909525908,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909524857,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909524857",
+"status": "Completed"
+}
+}
+}
+},
+"t": 2.648
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_delta_chunk",
+"tool_call_id": "call_1791909525911",
+"tool_index": 0,
+"name": "run_terminal_command",
+"arguments_delta": "{\"command\": \"sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt\", \"description\": \"Reading 3\"}"
+}
+}
+},
+"t": 2.652
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1886",
+"agentTimestampMs": 1791909525912,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909525911,
+"turnStartMs": 1791909523331,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 2.652
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "response_completed",
+"usage": {
+"input_tokens": 100,
+"output_tokens": 20,
+"cache_read_input_tokens": 0,
+"cache_creation_input_tokens": 0,
+"reasoning_tokens": 0
+}
+}
+}
+},
+"t": 2.652
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call",
+"toolCallId": "call_1791909525911",
+"title": "run_terminal_command",
+"rawInput": {
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3"
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1887",
+"agentTimestampMs": 1791909525912,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909525911,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCall",
+"updateParams": {
+"toolCallId": "call_1791909525911",
+"title": "run_terminal_command",
+"kind": "Other",
+"status": "Pending"
+}
+}
+}
+},
+"t": 2.652
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "pending_interaction",
+"tool_call_id": "call_1791909525911",
+"kind": "permission"
+}
+}
+},
+"t": 2.652
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909525911",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "Reading 3"
+}
+}
+],
+"locations": [],
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3"
+}
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1888",
+"agentTimestampMs": 1791909525912,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909525911,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909525911",
+"status": null
+}
+}
+}
+},
+"t": 2.652
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 2,
+"method": "session/request_permission",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"toolCall": {
+"toolCallId": "call_1791909525911",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3"
+}
+},
+"x.ai/requestingSessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"options": [
+{
+"optionId": "always-allow",
+"name": "Yes, and don't ask again for bash commands",
+"kind": "allow_always"
+},
+{
+"optionId": "allow-once",
+"name": "Yes, proceed",
+"kind": "allow_once"
+},
+{
+"optionId": "reject-once",
+"name": "No, and tell Grok what to do differently",
+"kind": "reject_once"
+},
+{
+"optionId": "reject-always",
+"name": "No, and don't ask again for this command",
+"kind": "reject_always"
+}
+]
+}
+},
+"t": 2.653
+},
+{
+"k": "ui",
+"a": "autoApproved",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": "Execute `sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"t": 2.653
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 2,
+"result": {
+"outcome": {
+"outcome": "selected",
+"optionId": "allow-once"
+}
+}
+},
+"t": 2.653
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "interaction_resolved",
+"tool_call_id": "call_1791909525911"
+}
+}
+},
+"t": 2.654
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909525911",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": ""
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [],
+"output_for_prompt": "",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 0
+}
+}
+}
+},
+"t": 2.699
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909525911",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 3 of 3 for Whats the weather today in Argyle Texas\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+51,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+87,
+104,
+97,
+116,
+115,
+32,
+116,
+104,
+101,
+32,
+119,
+101,
+97,
+116,
+104,
+101,
+114,
+32,
+116,
+111,
+100,
+97,
+121,
+32,
+105,
+110,
+32,
+65,
+114,
+103,
+121,
+108,
+101,
+32,
+84,
+101,
+120,
+97,
+115,
+10
+],
+"output_for_prompt": "reading 3 of 3 for Whats the weather today in Argyle Texas\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 59
+}
+}
+}
+},
+"t": 3.702
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909525911",
+"status": "completed",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 3 of 3 for Whats the weather today in Argyle Texas\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+51,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+87,
+104,
+97,
+116,
+115,
+32,
+116,
+104,
+101,
+32,
+119,
+101,
+97,
+116,
+104,
+101,
+114,
+32,
+116,
+111,
+100,
+97,
+121,
+32,
+105,
+110,
+32,
+65,
+114,
+103,
+121,
+108,
+101,
+32,
+84,
+101,
+120,
+97,
+115,
+10
+],
+"output_for_prompt": "exit: 0\nreading 3 of 3 for Whats the weather today in Argyle Texas\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": "Reading 3",
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 59
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1889",
+"agentTimestampMs": 1791909526962,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909525911,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909525911",
+"status": "Completed"
+}
+}
+}
+},
+"t": 3.702
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "Final answer for: What's the weather today in Argyle Texas. "
+}
+},
+"_meta": {
+"totalTokens": 136,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1892",
+"agentTimestampMs": 1791909526965,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909526965,
+"turnStartMs": 1791909523331,
+"updateType": "AgentMessageChunk",
+"chunkId": 1
+}
+}
+},
+"t": 3.705
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "Today it is 74°F and sunny "
+}
+},
+"_meta": {
+"totalTokens": 136,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1893",
+"agentTimestampMs": 1791909527015,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909526965,
+"turnStartMs": 1791909523331,
+"updateType": "AgentMessageChunk",
+"chunkId": 2
+}
+}
+},
+"t": 3.756
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "with a light south wind."
+}
+},
+"_meta": {
+"totalTokens": 136,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1894",
+"agentTimestampMs": 1791909527065,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909526965,
+"turnStartMs": 1791909523331,
+"updateType": "AgentMessageChunk",
+"chunkId": 3
+}
+}
+},
+"t": 3.806
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1895",
+"agentTimestampMs": 1791909527116,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909526965,
+"turnStartMs": 1791909523331,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 3.857
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "response_completed",
+"usage": {
+"input_tokens": 100,
+"output_tokens": 20,
+"cache_read_input_tokens": 0,
+"cache_creation_input_tokens": 0,
+"reasoning_tokens": 0
+}
+}
+}
+},
+"t": 3.857
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/queue/changed",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"entries": []
+}
+},
+"t": 3.899
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "turn_completed",
+"prompt_id": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"stop_reason": "end_turn",
+"usage": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262,
+"modelUsage": {
+"scripted": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262
+}
+},
+"numTurns": 4
+},
+"elapsed_ms": 3827
+},
+"_meta": {
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1898",
+"agentTimestampMs": 1791909527158
+}
+}
+},
+"t": 3.899
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/prompt_complete",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"stopReason": "end_turn",
+"agentResult": null
+}
+},
+"t": 3.899
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/sessions/changed",
+"params": {
+"upserted": [
+{
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": null,
+"cwd": "/work",
+"isWorktree": false,
+"modelId": "scripted",
+"yolo": false,
+"activity": "idle",
+"resident": true,
+"lastChangeUnixMs": 1791909527159,
+"origin": {
+"kind": "local"
+}
+}
+],
+"removed": []
+}
+},
+"t": 3.899
+},
+{
+"k": "check",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"transcript": [
+"You: What's the weather today in Argyle Texas",
+"Grok: I'll check that for you: What's the weather today in Argyle Texas. Pulling a few readings first.",
+"Tool: Execute `sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"Tool: Execute `sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"Tool: Execute `sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"Grok: Final answer for: What's the weather today in Argyle Texas. Today it is 74°F and sunny with a light south wind."
+],
+"first": "You: What's the weather today in Argyle Texas",
+"t": 3.9
+},
+{
+"k": "ui",
+"a": "prompt",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"text": "And what about tomorrow there?",
+"t": 3.9
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 4,
+"method": "session/load",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"cwd": "/work",
+"mcpServers": []
+}
+},
+"t": 3.9
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 3,
+"result": {
+"stopReason": "end_turn",
+"_meta": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"requestId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"totalTokens": 120,
+"modelId": "scripted",
+"inputTokens": 100,
+"outputTokens": 20,
+"cachedReadTokens": 0,
+"reasoningTokens": 0,
+"usage": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262,
+"modelUsage": {
+"scripted": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262
+}
+},
+"numTurns": 4
+}
+}
+}
+},
+"t": 3.901
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "user_message_chunk",
+"content": {
+"type": "text",
+"text": "What's the weather today in Argyle Texas"
+},
+"_meta": {
+"modelId": "scripted",
+"promptIndex": 0
+}
+},
+"_meta": {
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1870",
+"agentTimestampMs": 1791909523332,
+"isReplay": true
+}
+}
+},
+"t": 3.947
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "I'll check that for you: What's the weather today in Argyle Texas. Pulling a few readings first."
+}
+},
+"_meta": {
+"totalTokens": 1340,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1873",
+"agentTimestampMs": 1791909523758,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909523708,
+"turnStartMs": 1791909523331,
+"updateType": "AgentMessageChunk",
+"chunkId": 2,
+"isReplay": true
+}
+}
+},
+"t": 3.947
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call",
+"toolCallId": "call_1791909523808",
+"title": "Execute `sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"kind": "execute",
+"status": "completed",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 1 of 3 for Whats the weather today in Argyle Texas\n"
+}
+}
+],
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1",
+"is_background": false
+},
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+49,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+87,
+104,
+97,
+116,
+115,
+32,
+116,
+104,
+101,
+32,
+119,
+101,
+97,
+116,
+104,
+101,
+114,
+32,
+116,
+111,
+100,
+97,
+121,
+32,
+105,
+110,
+32,
+65,
+114,
+103,
+121,
+108,
+101,
+32,
+84,
+101,
+120,
+97,
+115,
+10
+],
+"output_for_prompt": "exit: 0\nreading 1 of 3 for Whats the weather today in Argyle Texas\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": "Reading 1",
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 59
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1877",
+"agentTimestampMs": 1791909524854,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909523708,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909523808",
+"status": "Completed"
+},
+"isReplay": true
+}
+}
+},
+"t": 3.948
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call",
+"toolCallId": "call_1791909524857",
+"title": "Execute `sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"kind": "execute",
+"status": "completed",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 2 of 3 for Whats the weather today in Argyle Texas\n"
+}
+}
+],
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2",
+"is_background": false
+},
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+50,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+87,
+104,
+97,
+116,
+115,
+32,
+116,
+104,
+101,
+32,
+119,
+101,
+97,
+116,
+104,
+101,
+114,
+32,
+116,
+111,
+100,
+97,
+121,
+32,
+105,
+110,
+32,
+65,
+114,
+103,
+121,
+108,
+101,
+32,
+84,
+101,
+120,
+97,
+115,
+10
+],
+"output_for_prompt": "exit: 0\nreading 2 of 3 for Whats the weather today in Argyle Texas\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": "Reading 2",
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 59
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1883",
+"agentTimestampMs": 1791909525908,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909524857,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909524857",
+"status": "Completed"
+},
+"isReplay": true
+}
+}
+},
+"t": 3.948
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call",
+"toolCallId": "call_1791909525911",
+"title": "Execute `sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"kind": "execute",
+"status": "completed",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 3 of 3 for Whats the weather today in Argyle Texas\n"
+}
+}
+],
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3",
+"is_background": false
+},
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+51,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+87,
+104,
+97,
+116,
+115,
+32,
+116,
+104,
+101,
+32,
+119,
+101,
+97,
+116,
+104,
+101,
+114,
+32,
+116,
+111,
+100,
+97,
+121,
+32,
+105,
+110,
+32,
+65,
+114,
+103,
+121,
+108,
+101,
+32,
+84,
+101,
+120,
+97,
+115,
+10
+],
+"output_for_prompt": "exit: 0\nreading 3 of 3 for Whats the weather today in Argyle Texas\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": "Reading 3",
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 59
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1889",
+"agentTimestampMs": 1791909526962,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909525911,
+"turnStartMs": 1791909523331,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909525911",
+"status": "Completed"
+},
+"isReplay": true
+}
+}
+},
+"t": 3.948
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "Final answer for: What's the weather today in Argyle Texas. Today it is 74°F and sunny with a light south wind."
+}
+},
+"_meta": {
+"totalTokens": 136,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1894",
+"agentTimestampMs": 1791909527065,
+"promptId": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"streamStartMs": 1791909526965,
+"turnStartMs": 1791909523331,
+"updateType": "AgentMessageChunk",
+"chunkId": 3,
+"isReplay": true
+}
+}
+},
+"t": 3.948
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "turn_completed",
+"prompt_id": "6d1eb368-914a-4284-86aa-fdcf1296d6d8",
+"stop_reason": "end_turn",
+"usage": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262,
+"modelUsage": {
+"scripted": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262
+}
+},
+"numTurns": 4
+},
+"elapsed_ms": 3827
+},
+"_meta": {
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1898",
+"agentTimestampMs": 1791909527158,
+"isReplay": true
+}
+}
+},
+"t": 3.948
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "background_tasks",
+"tasks": []
+},
+"_meta": {
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1900",
+"agentTimestampMs": 1791909527171
+}
+}
+},
+"t": 3.948
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "model_changed",
+"model_id": "scripted"
+}
+}
+},
+"t": 3.948
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 4,
+"result": {
+"models": {
+"currentModelId": "scripted",
+"availableModels": [
+{
+"modelId": "grok-4.6",
+"name": "Grok 4.6",
+"description": "SpaceXAI's latest frontier model",
+"_meta": {
+"totalContextTokens": 500000,
+"agentType": "grok-build-plan",
+"supportsReasoningEffort": true,
+"reasoningEffort": "high",
+"reasoningEfforts": [
+{
+"id": "xhigh",
+"value": "xhigh",
+"label": "Extra High Effort",
+"description": "Highest effort and reasoning level",
+"default": false
+},
+{
+"id": "high",
+"value": "high",
+"label": "High Effort",
+"description": "Higher implementation quality with extensive reasoning",
+"default": true
+},
+{
+"id": "medium",
+"value": "medium",
+"label": "Medium Effort",
+"description": "Balanced effort with standard implementation and testing",
+"default": false
+},
+{
+"id": "low",
+"value": "low",
+"label": "Low Effort",
+"description": "Quick, fast implementations",
+"default": false
+}
+]
+}
+}
+]
+},
+"configOptions": [
+{
+"id": "model",
+"name": "Model",
+"category": "model",
+"type": "select",
+"currentValue": "scripted",
+"options": [
+{
+"value": "grok-4.6",
+"name": "Grok 4.6"
+},
+{
+"value": "grok-4.5",
+"name": "Grok 4.5"
+},
+{
+"value": "scripted",
+"name": "Scripted"
+}
+]
+}
+],
+"_meta": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"codebaseIndexed": [],
+"x.ai/sessionConfig": {
+"options": [
+{
+"id": "grok-4.6",
+"category": "model",
+"label": "Grok 4.6",
+"selected": false
+},
+{
+"id": "grok-4.5",
+"category": "model",
+"label": "Grok 4.5",
+"selected": false
+},
+{
+"id": "scripted",
+"category": "model",
+"label": "Scripted",
+"selected": true
+}
+]
+},
+"x.ai/sessionDetail": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"kind": "build",
+"cwd": "/work",
+"currentModelId": "scripted",
+"title": "What's the weather today in Argyle Texas"
+}
+}
+}
+},
+"t": 3.948
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1901",
+"agentTimestampMs": 1791909527173,
+"streamStartMs": 1791909526965,
+"turnStartMs": 1791909523331,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 3.948
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 5,
+"method": "session/prompt",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"prompt": [
+{
+"type": "text",
+"text": "And what about tomorrow there?"
+}
+]
+}
+},
+"t": 3.948
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/sessions/changed",
+"params": {
+"upserted": [
+{
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": null,
+"cwd": "/work",
+"isWorktree": false,
+"modelId": "scripted",
+"yolo": false,
+"activity": "working",
+"resident": true,
+"lastChangeUnixMs": 1791909527210,
+"origin": {
+"kind": "local"
+}
+}
+],
+"removed": []
+}
+},
+"t": 3.95
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/queue/changed",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"entries": [
+{
+"id": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"version": 0,
+"kind": "prompt",
+"text": "And what about tomorrow there?",
+"position": 0
+}
+]
+}
+},
+"t": 3.992
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/queue/changed",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"entries": [],
+"runningPromptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"runningText": "And what about tomorrow there?",
+"runningKind": "prompt"
+}
+},
+"t": 3.992
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "I'll check that for you: And what about tomorrow there?. "
+}
+},
+"_meta": {
+"totalTokens": 134,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1904",
+"agentTimestampMs": 1791909527226,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909527226,
+"turnStartMs": 1791909527211,
+"updateType": "AgentMessageChunk",
+"chunkId": 1
+}
+}
+},
+"t": 3.992
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "Pulling a few readings first."
+}
+},
+"_meta": {
+"totalTokens": 134,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1905",
+"agentTimestampMs": 1791909527276,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909527226,
+"turnStartMs": 1791909527211,
+"updateType": "AgentMessageChunk",
+"chunkId": 2
+}
+}
+},
+"t": 4.017
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_delta_chunk",
+"tool_call_id": "call_1791909527326",
+"tool_index": 0,
+"name": "run_terminal_command",
+"arguments_delta": "{\"command\": \"sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt\", \"description\": \"Reading 1\"}"
+}
+}
+},
+"t": 4.068
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1906",
+"agentTimestampMs": 1791909527327,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909527226,
+"turnStartMs": 1791909527211,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 4.068
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "response_completed",
+"usage": {
+"input_tokens": 100,
+"output_tokens": 20,
+"cache_read_input_tokens": 0,
+"cache_creation_input_tokens": 0,
+"reasoning_tokens": 0
+}
+}
+}
+},
+"t": 4.068
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call",
+"toolCallId": "call_1791909527326",
+"title": "run_terminal_command",
+"rawInput": {
+"command": "sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1"
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1907",
+"agentTimestampMs": 1791909527327,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909527226,
+"turnStartMs": 1791909527211,
+"updateType": "ToolCall",
+"updateParams": {
+"toolCallId": "call_1791909527326",
+"title": "run_terminal_command",
+"kind": "Other",
+"status": "Pending"
+}
+}
+}
+},
+"t": 4.068
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "pending_interaction",
+"tool_call_id": "call_1791909527326",
+"kind": "permission"
+}
+}
+},
+"t": 4.068
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909527326",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "Reading 1"
+}
+}
+],
+"locations": [],
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1"
+}
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1908",
+"agentTimestampMs": 1791909527327,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909527226,
+"turnStartMs": 1791909527211,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909527326",
+"status": null
+}
+}
+}
+},
+"t": 4.068
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 3,
+"method": "session/request_permission",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"toolCall": {
+"toolCallId": "call_1791909527326",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 1"
+}
+},
+"x.ai/requestingSessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"options": [
+{
+"optionId": "always-allow",
+"name": "Yes, and don't ask again for bash commands",
+"kind": "allow_always"
+},
+{
+"optionId": "allow-once",
+"name": "Yes, proceed",
+"kind": "allow_once"
+},
+{
+"optionId": "reject-once",
+"name": "No, and tell Grok what to do differently",
+"kind": "reject_once"
+},
+{
+"optionId": "reject-always",
+"name": "No, and don't ask again for this command",
+"kind": "reject_always"
+}
+]
+}
+},
+"t": 4.068
+},
+{
+"k": "ui",
+"a": "autoApproved",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": "Execute `sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"t": 4.068
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 3,
+"result": {
+"outcome": {
+"outcome": "selected",
+"optionId": "allow-once"
+}
+}
+},
+"t": 4.068
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "interaction_resolved",
+"tool_call_id": "call_1791909527326"
+}
+}
+},
+"t": 4.069
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909527326",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": ""
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [],
+"output_for_prompt": "",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 0
+}
+}
+}
+},
+"t": 4.111
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909527326",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 1 of 3 for And what about tomorrow there\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+49,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+65,
+110,
+100,
+32,
+119,
+104,
+97,
+116,
+32,
+97,
+98,
+111,
+117,
+116,
+32,
+116,
+111,
+109,
+111,
+114,
+114,
+111,
+119,
+32,
+116,
+104,
+101,
+114,
+101,
+10
+],
+"output_for_prompt": "reading 1 of 3 for And what about tomorrow there\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 49
+}
+}
+}
+},
+"t": 5.117
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909527326",
+"status": "completed",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 1 of 3 for And what about tomorrow there\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+49,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+65,
+110,
+100,
+32,
+119,
+104,
+97,
+116,
+32,
+97,
+98,
+111,
+117,
+116,
+32,
+116,
+111,
+109,
+111,
+114,
+114,
+111,
+119,
+32,
+116,
+104,
+101,
+114,
+101,
+10
+],
+"output_for_prompt": "exit: 0\nreading 1 of 3 for And what about tomorrow there\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": "Reading 1",
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 49
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1909",
+"agentTimestampMs": 1791909528377,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909527226,
+"turnStartMs": 1791909527211,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909527326",
+"status": "Completed"
+}
+}
+}
+},
+"t": 5.117
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_delta_chunk",
+"tool_call_id": "call_1791909528380",
+"tool_index": 0,
+"name": "run_terminal_command",
+"arguments_delta": "{\"command\": \"sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt\", \"description\": \"Reading 2\"}"
+}
+}
+},
+"t": 5.121
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1912",
+"agentTimestampMs": 1791909528381,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909528380,
+"turnStartMs": 1791909527211,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 5.121
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "response_completed",
+"usage": {
+"input_tokens": 100,
+"output_tokens": 20,
+"cache_read_input_tokens": 0,
+"cache_creation_input_tokens": 0,
+"reasoning_tokens": 0
+}
+}
+}
+},
+"t": 5.121
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call",
+"toolCallId": "call_1791909528380",
+"title": "run_terminal_command",
+"rawInput": {
+"command": "sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2"
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1913",
+"agentTimestampMs": 1791909528381,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909528380,
+"turnStartMs": 1791909527211,
+"updateType": "ToolCall",
+"updateParams": {
+"toolCallId": "call_1791909528380",
+"title": "run_terminal_command",
+"kind": "Other",
+"status": "Pending"
+}
+}
+}
+},
+"t": 5.121
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "pending_interaction",
+"tool_call_id": "call_1791909528380",
+"kind": "permission"
+}
+}
+},
+"t": 5.121
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909528380",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "Reading 2"
+}
+}
+],
+"locations": [],
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2"
+}
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1914",
+"agentTimestampMs": 1791909528381,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909528380,
+"turnStartMs": 1791909527211,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909528380",
+"status": null
+}
+}
+}
+},
+"t": 5.122
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 4,
+"method": "session/request_permission",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"toolCall": {
+"toolCallId": "call_1791909528380",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 2"
+}
+},
+"x.ai/requestingSessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"options": [
+{
+"optionId": "always-allow",
+"name": "Yes, and don't ask again for bash commands",
+"kind": "allow_always"
+},
+{
+"optionId": "allow-once",
+"name": "Yes, proceed",
+"kind": "allow_once"
+},
+{
+"optionId": "reject-once",
+"name": "No, and tell Grok what to do differently",
+"kind": "reject_once"
+},
+{
+"optionId": "reject-always",
+"name": "No, and don't ask again for this command",
+"kind": "reject_always"
+}
+]
+}
+},
+"t": 5.122
+},
+{
+"k": "ui",
+"a": "autoApproved",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": "Execute `sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"t": 5.122
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 4,
+"result": {
+"outcome": {
+"outcome": "selected",
+"optionId": "allow-once"
+}
+}
+},
+"t": 5.122
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "interaction_resolved",
+"tool_call_id": "call_1791909528380"
+}
+}
+},
+"t": 5.122
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909528380",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": ""
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [],
+"output_for_prompt": "",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 0
+}
+}
+}
+},
+"t": 5.167
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909528380",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 2 of 3 for And what about tomorrow there\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+50,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+65,
+110,
+100,
+32,
+119,
+104,
+97,
+116,
+32,
+97,
+98,
+111,
+117,
+116,
+32,
+116,
+111,
+109,
+111,
+114,
+114,
+111,
+119,
+32,
+116,
+104,
+101,
+114,
+101,
+10
+],
+"output_for_prompt": "reading 2 of 3 for And what about tomorrow there\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 49
+}
+}
+}
+},
+"t": 6.17
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909528380",
+"status": "completed",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 2 of 3 for And what about tomorrow there\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+50,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+65,
+110,
+100,
+32,
+119,
+104,
+97,
+116,
+32,
+97,
+98,
+111,
+117,
+116,
+32,
+116,
+111,
+109,
+111,
+114,
+114,
+111,
+119,
+32,
+116,
+104,
+101,
+114,
+101,
+10
+],
+"output_for_prompt": "exit: 0\nreading 2 of 3 for And what about tomorrow there\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": "Reading 2",
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 49
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1915",
+"agentTimestampMs": 1791909529430,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909528380,
+"turnStartMs": 1791909527211,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909528380",
+"status": "Completed"
+}
+}
+}
+},
+"t": 6.171
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_delta_chunk",
+"tool_call_id": "call_1791909529433",
+"tool_index": 0,
+"name": "run_terminal_command",
+"arguments_delta": "{\"command\": \"sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt\", \"description\": \"Reading 3\"}"
+}
+}
+},
+"t": 6.174
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1918",
+"agentTimestampMs": 1791909529434,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909529434,
+"turnStartMs": 1791909527211,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 6.175
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "response_completed",
+"usage": {
+"input_tokens": 100,
+"output_tokens": 20,
+"cache_read_input_tokens": 0,
+"cache_creation_input_tokens": 0,
+"reasoning_tokens": 0
+}
+}
+}
+},
+"t": 6.175
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call",
+"toolCallId": "call_1791909529433",
+"title": "run_terminal_command",
+"rawInput": {
+"command": "sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3"
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1919",
+"agentTimestampMs": 1791909529435,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909529434,
+"turnStartMs": 1791909527211,
+"updateType": "ToolCall",
+"updateParams": {
+"toolCallId": "call_1791909529433",
+"title": "run_terminal_command",
+"kind": "Other",
+"status": "Pending"
+}
+}
+}
+},
+"t": 6.175
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "pending_interaction",
+"tool_call_id": "call_1791909529433",
+"kind": "permission"
+}
+}
+},
+"t": 6.175
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909529433",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "Reading 3"
+}
+}
+],
+"locations": [],
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3"
+}
+}
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1920",
+"agentTimestampMs": 1791909529435,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909529434,
+"turnStartMs": 1791909527211,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909529433",
+"status": null
+}
+}
+}
+},
+"t": 6.175
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 5,
+"method": "session/request_permission",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"toolCall": {
+"toolCallId": "call_1791909529433",
+"kind": "execute",
+"title": "Execute `sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"rawInput": {
+"variant": "Bash",
+"command": "sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3",
+"is_background": false
+},
+"_meta": {
+"x.ai/tool": {
+"version": 1,
+"name": "run_terminal_command",
+"kind": "execute",
+"namespace": "grok_build",
+"label": "Run Command",
+"read_only": false,
+"input": {
+"command": "sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"description": "Reading 3"
+}
+},
+"x.ai/requestingSessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676"
+}
+},
+"options": [
+{
+"optionId": "always-allow",
+"name": "Yes, and don't ask again for bash commands",
+"kind": "allow_always"
+},
+{
+"optionId": "allow-once",
+"name": "Yes, proceed",
+"kind": "allow_once"
+},
+{
+"optionId": "reject-once",
+"name": "No, and tell Grok what to do differently",
+"kind": "reject_once"
+},
+{
+"optionId": "reject-always",
+"name": "No, and don't ask again for this command",
+"kind": "reject_always"
+}
+]
+}
+},
+"t": 6.175
+},
+{
+"k": "ui",
+"a": "autoApproved",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": "Execute `sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"t": 6.175
+},
+{
+"k": "out",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 5,
+"result": {
+"outcome": {
+"outcome": "selected",
+"optionId": "allow-once"
+}
+}
+},
+"t": 6.175
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "interaction_resolved",
+"tool_call_id": "call_1791909529433"
+}
+}
+},
+"t": 6.177
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909529433",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": ""
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [],
+"output_for_prompt": "",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 0
+}
+}
+}
+},
+"t": 6.223
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909529433",
+"status": "in_progress",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 3 of 3 for And what about tomorrow there\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+51,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+65,
+110,
+100,
+32,
+119,
+104,
+97,
+116,
+32,
+97,
+98,
+111,
+117,
+116,
+32,
+116,
+111,
+109,
+111,
+114,
+114,
+111,
+119,
+32,
+116,
+104,
+101,
+114,
+101,
+10
+],
+"output_for_prompt": "reading 3 of 3 for And what about tomorrow there\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": null,
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 49
+}
+}
+}
+},
+"t": 7.223
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "tool_call_update",
+"toolCallId": "call_1791909529433",
+"status": "completed",
+"content": [
+{
+"type": "content",
+"content": {
+"type": "text",
+"text": "reading 3 of 3 for And what about tomorrow there\n"
+}
+}
+],
+"rawOutput": {
+"type": "Bash",
+"output": [
+114,
+101,
+97,
+100,
+105,
+110,
+103,
+32,
+51,
+32,
+111,
+102,
+32,
+51,
+32,
+102,
+111,
+114,
+32,
+65,
+110,
+100,
+32,
+119,
+104,
+97,
+116,
+32,
+97,
+98,
+111,
+117,
+116,
+32,
+116,
+111,
+109,
+111,
+114,
+114,
+111,
+119,
+32,
+116,
+104,
+101,
+114,
+101,
+10
+],
+"output_for_prompt": "exit: 0\nreading 3 of 3 for And what about tomorrow there\n",
+"exit_code": 0,
+"command": "sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt",
+"truncated": false,
+"signal": null,
+"timed_out": false,
+"description": "Reading 3",
+"current_dir": "/work",
+"output_file": "~/.grok/sessions/chat/terminal/call.log",
+"total_bytes": 49
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1921",
+"agentTimestampMs": 1791909530483,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909529434,
+"turnStartMs": 1791909527211,
+"updateType": "ToolCallUpdate",
+"updateParams": {
+"toolCallId": "call_1791909529433",
+"status": "Completed"
+}
+}
+}
+},
+"t": 7.224
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "Final answer for: And what about tomorrow there?. "
+}
+},
+"_meta": {
+"totalTokens": 134,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1924",
+"agentTimestampMs": 1791909530487,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909530487,
+"turnStartMs": 1791909527211,
+"updateType": "AgentMessageChunk",
+"chunkId": 1
+}
+}
+},
+"t": 7.227
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "Today it is 74°F and sunny "
+}
+},
+"_meta": {
+"totalTokens": 134,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1925",
+"agentTimestampMs": 1791909530537,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909530487,
+"turnStartMs": 1791909527211,
+"updateType": "AgentMessageChunk",
+"chunkId": 2
+}
+}
+},
+"t": 7.277
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "agent_message_chunk",
+"content": {
+"type": "text",
+"text": "with a light south wind."
+}
+},
+"_meta": {
+"totalTokens": 134,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1926",
+"agentTimestampMs": 1791909530587,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909530487,
+"turnStartMs": 1791909527211,
+"updateType": "AgentMessageChunk",
+"chunkId": 3
+}
+}
+},
+"t": 7.328
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "session/update",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "available_commands_update",
+"availableCommands": [
+{
+"name": "compact",
+"description": "Compress conversation history to save context window",
+"input": null
+},
+{
+"name": "always-approve",
+"description": "Toggle always-approve mode (skip all permission prompts)",
+"input": {
+"hint": "on|off"
+}
+}
+],
+"_meta": {
+"tools": [
+"run_terminal_command",
+"read_file",
+"search_replace",
+"list_dir",
+"grep",
+"kill_command_or_subagent",
+"todo_write",
+"get_command_or_subagent_output",
+"spawn_subagent",
+"scheduler_create",
+"scheduler_delete",
+"scheduler_list",
+"monitor",
+"search_tool",
+"use_tool",
+"workflow",
+"enter_plan_mode",
+"exit_plan_mode",
+"ask_user_question",
+"send_feedback",
+"image_gen",
+"image_edit",
+"image_to_video",
+"reference_to_video",
+"write"
+]
+}
+},
+"_meta": {
+"totalTokens": 120,
+"requestTrimmedTokens": 0,
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1927",
+"agentTimestampMs": 1791909530638,
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"streamStartMs": 1791909530487,
+"turnStartMs": 1791909527211,
+"updateType": "AvailableCommandsUpdate",
+"updateParams": {
+"commandsCount": 9
+}
+}
+}
+},
+"t": 7.378
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "response_completed",
+"usage": {
+"input_tokens": 100,
+"output_tokens": 20,
+"cache_read_input_tokens": 0,
+"cache_creation_input_tokens": 0,
+"reasoning_tokens": 0
+}
+}
+}
+},
+"t": 7.379
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/queue/changed",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"entries": []
+}
+},
+"t": 7.42
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session_notification",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"update": {
+"sessionUpdate": "turn_completed",
+"prompt_id": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"stop_reason": "end_turn",
+"usage": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262,
+"modelUsage": {
+"scripted": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262
+}
+},
+"numTurns": 4
+},
+"elapsed_ms": 3468
+},
+"_meta": {
+"eventId": "01a13621-6f43-7f20-a2b5-5cd1593a6676-1930",
+"agentTimestampMs": 1791909530679
+}
+}
+},
+"t": 7.42
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/session/prompt_complete",
+"params": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"stopReason": "end_turn",
+"agentResult": null
+}
+},
+"t": 7.42
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"method": "_x.ai/sessions/changed",
+"params": {
+"upserted": [
+{
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"title": null,
+"cwd": "/work",
+"isWorktree": false,
+"modelId": "scripted",
+"yolo": false,
+"activity": "idle",
+"resident": true,
+"lastChangeUnixMs": 1791909530680,
+"origin": {
+"kind": "local"
+}
+}
+],
+"removed": []
+}
+},
+"t": 7.42
+},
+{
+"k": "check",
+"s": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"transcript": [
+"You: What's the weather today in Argyle Texas",
+"Grok: I'll check that for you: What's the weather today in Argyle Texas. Pulling a few readings first.",
+"Tool: Execute `sleep 1; echo 'reading 1 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"Tool: Execute `sleep 1; echo 'reading 2 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"Tool: Execute `sleep 1; echo 'reading 3 of 3 for Whats the weather today in Argyle Texas' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"Grok: Final answer for: What's the weather today in Argyle Texas. Today it is 74°F and sunny with a light south wind.",
+"You: And what about tomorrow there?",
+"Grok: I'll check that for you: And what about tomorrow there?. Pulling a few readings first.",
+"Tool: Execute `sleep 1; echo 'reading 1 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"Tool: Execute `sleep 1; echo 'reading 2 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"Tool: Execute `sleep 1; echo 'reading 3 of 3 for And what about tomorrow there' | tee -a /tmp/watchremote-e2e-readings.txt`",
+"Grok: Final answer for: And what about tomorrow there?. Today it is 74°F and sunny with a light south wind."
+],
+"first": "You: What's the weather today in Argyle Texas",
+"t": 7.42
+},
+{
+"k": "in",
+"c": "924cae75#1",
+"f": {
+"jsonrpc": "2.0",
+"id": 5,
+"result": {
+"stopReason": "end_turn",
+"_meta": {
+"sessionId": "01a13621-6f43-7f20-a2b5-5cd1593a6676",
+"requestId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"promptId": "90031a92-8cb5-4d36-9d39-70aa5f2e4b71",
+"totalTokens": 120,
+"modelId": "scripted",
+"inputTokens": 100,
+"outputTokens": 20,
+"cachedReadTokens": 0,
+"reasoningTokens": 0,
+"usage": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262,
+"modelUsage": {
+"scripted": {
+"inputTokens": 400,
+"outputTokens": 80,
+"totalTokens": 480,
+"cachedReadTokens": 0,
+"cacheCreationTokens": 0,
+"reasoningTokens": 0,
+"modelCalls": 4,
+"apiDurationMs": 262
+}
+},
+"numTurns": 4
+}
+}
+}
+},
+"t": 7.421
+}
+]
+}

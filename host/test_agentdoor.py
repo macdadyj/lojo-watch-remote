@@ -17,6 +17,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agentdoor  # noqa: E402
+import fake_grok  # noqa: E402
+import miniws  # noqa: E402
 import outbound  # noqa: E402
 
 
@@ -238,6 +240,194 @@ class AgentDoorTests(unittest.TestCase):
                 worker.join(timeout=3)
                 upstream_listener.close()
                 os.environ.pop("GROK_AGENT_SECRET", None)
+
+    def test_the_phone_and_the_watch_host_each_get_their_own_chat(self) -> None:
+        """Grok streams only to its newest connection; through the door neither client starves."""
+        grok = fake_grok.FakeGrok(SECRET, chunk_delay=0.01, newest_only=True)
+        upstream_port = grok.listen(0)
+        port = self._port()
+        stop = threading.Event()
+        ready = threading.Event()
+        worker = threading.Thread(
+            target=agentdoor.serve,
+            args=(SECRET, "127.0.0.1", port, ("127.0.0.1", upstream_port), ready, stop, "grok"),
+            daemon=True,
+        )
+        worker.start()
+        self.assertTrue(ready.wait(5))
+
+        def connect(link: str | None) -> miniws.WSConn:
+            headers = {"Authorization": "Bearer " + SECRET}
+            if link:
+                headers["X-WatchRemote-Link"] = link
+            return miniws.connect(f"ws://127.0.0.1:{port}/ws", timeout=5, headers=headers)
+
+        frames: dict[str, list[dict]] = {"phone": [], "host": []}
+
+        def read(name: str, conn: miniws.WSConn, until) -> dict:
+            while True:
+                _opcode, payload = conn.recv()
+                body = json.loads(payload)
+                frames[name].append(body)
+                if until(body):
+                    return body
+
+        def call(name: str, conn: miniws.WSConn, ident: int, method: str, params: dict) -> dict:
+            conn.send_text(json.dumps({"jsonrpc": "2.0", "id": ident, "method": method, "params": params}))
+            return read(name, conn, lambda body: body.get("id") == ident and "method" not in body)
+
+        def text_of(name: str, session_id: str) -> str:
+            return "".join(
+                body["params"]["update"]["content"]["text"]
+                for body in frames[name]
+                if body.get("method") == "session/update"
+                and body["params"].get("sessionId") == session_id
+                and body["params"]["update"].get("sessionUpdate") == "agent_message_chunk"
+            )
+
+        try:
+            phone = connect("phone-link-0002")
+            call("phone", phone, 1, "initialize", {})
+            chat_a = call("phone", phone, 2, "session/new", {"cwd": "/tmp", "mcpServers": []})["result"]["sessionId"]
+            phone.send_text(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {
+                "sessionId": chat_a, "prompt": [{"type": "text", "text": "Read the notes file"}],
+            }}))
+            asked = read("phone", phone, lambda body: body.get("method") == "session/request_permission")
+
+            host = connect(None)
+            self.assertNotIn("X-WatchRemote-Resumed", host.response_head)
+            # The host's ids collide with the phone's on purpose.
+            call("host", host, 1, "initialize", {})
+            call("host", host, 2, "session/load", {"sessionId": "session-seed", "cwd": "/tmp", "mcpServers": []})
+            chat_b = call("host", host, 3, "session/new", {"cwd": "/tmp", "mcpServers": []})["result"]["sessionId"]
+            done_b = call("host", host, 4, "session/prompt", {"sessionId": chat_b, "prompt": [{"type": "text", "text": "Hello"}]})
+            self.assertEqual(done_b["result"]["stopReason"], "end_turn")
+            self.assertEqual(text_of("host", chat_b), "I can hear you.")
+
+            phone.send_text(json.dumps({"jsonrpc": "2.0", "id": asked["id"], "result": {
+                "outcome": {"outcome": "selected", "optionId": "allow-once"},
+            }}))
+            done_a = read("phone", phone, lambda body: body.get("id") == 3 and "method" not in body)
+            self.assertEqual(done_a["result"]["stopReason"], "end_turn")
+            self.assertEqual(text_of("phone", chat_a), "I read notes.txt. It says hello.")
+
+            phone_sessions = {body.get("params", {}).get("sessionId") for body in frames["phone"] if "method" in body}
+            host_sessions = {body.get("params", {}).get("sessionId") for body in frames["host"] if "method" in body}
+            self.assertEqual(phone_sessions, {chat_a}, "the phone got another client's chat or the host's load replay")
+            self.assertNotIn(chat_a, host_sessions)
+            self.assertIn("session-seed", host_sessions)
+            phone.close()
+            host.close()
+            state = grok.state()
+            self.assertEqual(state["decisions"], [{"sessionId": chat_a, "outcome": "allow-once"}])
+            self.assertEqual(state["connections"], 1)
+        finally:
+            stop.set()
+            worker.join(timeout=5)
+            grok.close()
+
+    def test_an_approval_grok_settled_is_not_resent(self) -> None:
+        door_side, grok_side = socket.socketpair()
+        registry = agentdoor.LinkRegistry(60)
+        hub = agentdoor.Hub(registry, door_side, b"")
+        link = agentdoor.Link("phone-link-0003", True, registry, hub)
+        hub.add(link)
+        hub.follow(link, "s1")
+
+        def frame(body: dict) -> bytes:
+            return json.dumps(body).encode("utf-8")
+
+        def ask(ident: int, tool: str) -> None:
+            hub._from_grok(frame({"jsonrpc": "2.0", "id": ident, "method": "session/request_permission", "params": {
+                "sessionId": "s1", "toolCall": {"toolCallId": tool, "title": "Run"}, "options": [],
+            }}))
+
+        try:
+            ask(0, "call-a")
+            ask(1, "call-b")
+            self.assertEqual(len(hub.pending_for(link)), 2)
+            # Real Grok 1.0.52 shapes: interaction_resolved names the tool call, prompt_complete the turn.
+            hub._from_grok(frame({"jsonrpc": "2.0", "method": "_x.ai/session_notification", "params": {
+                "sessionId": "s1", "update": {"sessionUpdate": "interaction_resolved", "tool_call_id": "call-a"},
+            }}))
+            self.assertEqual([item.tool_call_id for item in hub.pending_for(link)], ["call-b"])
+            hub._from_grok(frame({"jsonrpc": "2.0", "method": "_x.ai/session/prompt_complete", "params": {
+                "sessionId": "s1", "promptId": "p1", "stopReason": "cancelled",
+            }}))
+            self.assertEqual(hub.pending_for(link), [])
+            self.assertEqual(sum(1 for _seq, payload in link.ring if b"request_permission" in payload), 2)
+        finally:
+            hub.shutdown()
+            grok_side.close()
+
+    def test_a_parked_link_keeps_grok_and_resends_the_unanswered_approval(self) -> None:
+        grok = fake_grok.FakeGrok(SECRET, chunk_delay=0.01, newest_only=True)
+        upstream_port = grok.listen(0)
+        port = self._port()
+        stop = threading.Event()
+        ready = threading.Event()
+        worker = threading.Thread(
+            target=agentdoor.serve,
+            args=(SECRET, "127.0.0.1", port, ("127.0.0.1", upstream_port), ready, stop, "grok"),
+            daemon=True,
+        )
+        worker.start()
+        self.assertTrue(ready.wait(5))
+        link = "phone-link-0001"
+        seen = 0
+
+        def attach() -> miniws.WSConn:
+            return miniws.connect(f"ws://127.0.0.1:{port}/ws", timeout=5, headers={
+                "Authorization": "Bearer " + SECRET,
+                "X-WatchRemote-Link": link,
+                "X-WatchRemote-Seen": str(seen),
+            })
+
+        def read(conn: miniws.WSConn, until) -> dict:
+            nonlocal seen
+            while True:
+                _opcode, payload = conn.recv()
+                seen += 1
+                body = json.loads(payload)
+                if until(body):
+                    return body
+
+        try:
+            first = attach()
+            self.assertIn("X-WatchRemote-Door: 3", first.response_head)
+            self.assertIn("X-WatchRemote-Resumed: no", first.response_head)
+            first.send_text(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}))
+            read(first, lambda body: body.get("id") == 1)
+            first.send_text(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": "/tmp", "mcpServers": []}}))
+            session_id = read(first, lambda body: body.get("id") == 2)["result"]["sessionId"]
+            first.send_text(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {
+                "sessionId": session_id, "prompt": [{"type": "text", "text": "Read the notes file"}],
+            }}))
+            asked = read(first, lambda body: body.get("method") == "session/request_permission")
+            # What iOS does to a suspended app: the socket is gone, with no close frame.
+            first.sock.shutdown(socket.SHUT_RDWR)
+            first.close()
+            time.sleep(0.3)
+
+            again = attach()
+            self.assertIn("X-WatchRemote-Resumed: yes", again.response_head)
+            again.send_text(json.dumps({"jsonrpc": "2.0", "id": 4, "method": "initialize", "params": {}}))
+            resent = read(again, lambda body: body.get("method") == "session/request_permission")
+            self.assertEqual(resent["id"], asked["id"])
+            read(again, lambda body: body.get("id") == 4)
+            again.send_text(json.dumps({"jsonrpc": "2.0", "id": resent["id"], "result": {
+                "outcome": {"outcome": "selected", "optionId": "allow-once"},
+            }}))
+            done = read(again, lambda body: body.get("id") == 3)
+            self.assertEqual(done["result"]["stopReason"], "end_turn")
+            again.close()
+            state = grok.state()
+            self.assertEqual(state["decisions"], [{"sessionId": session_id, "outcome": "allow-once"}])
+            self.assertEqual(state["connections"], 1, "the door opened a second Grok connection")
+        finally:
+            stop.set()
+            worker.join(timeout=5)
+            grok.close()
 
     def _assert_query_refused(self, port: int) -> None:
         sock = socket.create_connection(("127.0.0.1", port), timeout=3)

@@ -222,6 +222,11 @@ def watch_rows(rows: list, focus: set[str] | None = None, budget: int = WATCH_BU
         lines = copy.get("transcript")
         if isinstance(lines, list):
             keep = FOCUS_LINES if str(copy.get("id")) in focus else OTHER_LINES
+            # The Watch shows these lines as the chat. Cutting the latest prompt off left its
+            # answer with no question above it, and the Watch put the prompt back below it.
+            prompts = [index for index, line in enumerate(lines) if str(line).startswith("You:")]
+            if prompts:
+                keep = min(FOCUS_LINES, max(keep, len(lines) - prompts[-1]))
             copy["transcript"] = [clip_line(line) for line in lines[-keep:]]
         copy.pop("lines", None)
         out.append(copy)
@@ -549,9 +554,11 @@ class ACPAgent:
         self.permissions: dict[str, dict] = {}
         self.pending_push = False
         self.push_n = 0
-        self.capture_replay = False
+        # Only the chat being loaded is captured. Live chunks of other chats keep streaming to their rows.
+        self.capture_session: str | None = None
         self.replay_lines: list[str] = []
         self.awaiting_prompt: dict[int, str] = {}
+        self.turns: dict[str, TurnTracker] = {}
         self.loaded: set[str] = set()
         self.urgent = False
         self.last_push = 0.0
@@ -632,7 +639,7 @@ class ACPAgent:
             return list(stored)
         directory = str(match.get("cwd") or Path.home())
         self.replay_lines = []
-        self.capture_replay = True
+        self.capture_session = session_id
         try:
             loaded = self.request("session/load", {
                 "sessionId": session_id,
@@ -640,9 +647,10 @@ class ACPAgent:
                 "mcpServers": [],
             })
         finally:
-            self.capture_replay = False
+            self.capture_session = None
         self.loaded.add(session_id)
-        chosen = best_transcript(self.replay_lines, transcript_lines(loaded.get("result")), stored)
+        host = self.replay_lines or transcript_lines(loaded.get("result"))
+        chosen = merge_transcript(stored, host)
         if chosen:
             match["lines"] = chosen
             return chosen
@@ -762,6 +770,15 @@ class ACPAgent:
             self._remember_text(obj)
             self.pending_push = True
             return
+        if method == "_x.ai/session/prompt_complete":
+            self._turn_complete(obj)
+            return
+        if method == "_x.ai/queue/changed":
+            params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+            running = params.get("runningPromptId")
+            if isinstance(running, str) and running and isinstance(params.get("sessionId"), str):
+                self.turns.setdefault(params["sessionId"], TurnTracker()).started(running)
+            return
         if "id" in obj and ("result" in obj or "error" in obj):
             ident = obj["id"]
             if isinstance(ident, int):
@@ -776,6 +793,7 @@ class ACPAgent:
             "prompt": [{"type": "text", "text": prompt}],
         })
         self.awaiting_prompt[ident] = session_id
+        self.turns.setdefault(session_id, TurnTracker()).sent()
         for row in self.rows:
             if row.get("id") == session_id:
                 row["lines"] = fold_speaker(list(row.get("lines") or []), "You:", prompt)
@@ -784,6 +802,9 @@ class ACPAgent:
         session_id = self.awaiting_prompt.pop(ident, None)
         if session_id is None:
             return
+        if session_id in self.awaiting_prompt.values():
+            return
+        self.turns.setdefault(session_id, TurnTracker()).answered()
         failed = "error" in obj
         message = "The agent reported an error."
         if failed:
@@ -806,6 +827,33 @@ class ACPAgent:
         self.pending_push = True
         self.urgent = True
 
+    def _turn_complete(self, obj: dict) -> None:
+        """Grok tells every connection with the chat loaded that a turn ended, including a turn
+        whose `session/prompt` went out on a connection that has since been replaced."""
+        params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
+        session_id = str(params.get("sessionId") or "")
+        if not session_id:
+            return
+        if not self.turns.setdefault(session_id, TurnTracker()).completed(str(params.get("promptId") or "")):
+            return
+        for ident, waiting in list(self.awaiting_prompt.items()):
+            if waiting == session_id:
+                self.awaiting_prompt.pop(ident, None)
+        cancelled = params.get("stopReason") == "cancelled"
+        for row in self.rows:
+            if row.get("id") != session_id or row.get("status") not in {"running", "needsApproval"}:
+                continue
+            row["status"] = "stopped" if cancelled else "idle"
+            row.pop("permission", None)
+            lines = row.get("lines") or []
+            grok = next((str(line) for line in reversed(lines) if str(line).startswith("Grok:")), "")
+            if grok:
+                row["summary"] = clip(grok.split(":", 1)[-1].strip())
+        for key in [key for key in self.permissions if key.startswith(session_id + ":")]:
+            self.permissions.pop(key, None)
+        self.pending_push = True
+        self.urgent = True
+
     def _remember_permission(self, obj: dict) -> None:
         params = obj.get("params") if isinstance(obj.get("params"), dict) else {}
         session_id = str(params.get("sessionId") or "")
@@ -813,8 +861,8 @@ class ACPAgent:
         number = isinstance(rpc, int)
         rpc_text = str(rpc)
         options = params.get("options") if isinstance(params.get("options"), list) else []
-        allow = option_id(options, "allow")
-        deny = option_id(options, "reject")
+        allow = option_id(options, "allow_once", "allow")
+        deny = option_id(options, "reject_once", "reject")
         tool = params.get("toolCall") if isinstance(params.get("toolCall"), dict) else {}
         title = params.get("title") or tool.get("title") or "Approve this action"
         detail = params.get("description") or ""
@@ -824,7 +872,7 @@ class ACPAgent:
             self.decide(session_id, permission_id, True)
             for row in self.rows:
                 if row.get("id") == session_id:
-                    row["lines"] = list(row.get("lines") or []) + [f"Auto-approved: {clip(str(title), 120)}"]
+                    row["lines"] = note_auto_approval(list(row.get("lines") or []), str(title))
                     row["summary"] = clip(f"Auto-approved: {title}")
             return
         permission = {
@@ -866,9 +914,10 @@ class ACPAgent:
         session_id = str(params.get("sessionId") or "")
         update = params.get("update") if isinstance(params.get("update"), dict) else {}
         kind = str(update.get("sessionUpdate") or "")
+        capturing = self.capture_session is not None and session_id == self.capture_session
         if kind == "tool_call":
             title = clip(str(update.get("title") or "Tool"), 120)
-            if self.capture_replay:
+            if capturing:
                 self.replay_lines.append(f"Tool: {title}")
                 return
             for row in self.rows:
@@ -889,7 +938,7 @@ class ACPAgent:
             text = content
         if not text:
             return
-        if self.capture_replay:
+        if capturing:
             # session/load replays the whole history; it must not be appended to the live row again.
             self.replay_lines = fold_speaker(self.replay_lines, prefix, text)
             return
@@ -912,7 +961,7 @@ class ACPAgent:
             self.decide(session_id, permission_id, True)
             for row in self.rows:
                 if row.get("id") == session_id:
-                    row["lines"] = list(row.get("lines") or []) + [f"Auto-approved: {clip(title, 120)}"]
+                    row["lines"] = note_auto_approval(list(row.get("lines") or []), title)
             self.pending_push = True
             self.urgent = True
 
@@ -925,17 +974,101 @@ class ACPAgent:
             row["permission"] = matches[0]["permission"]
 
 
-def option_id(options: list, needle: str) -> str | None:
-    for option in options:
-        if not isinstance(option, dict):
+def option_id(options: list, exact: str, needle: str | None = None) -> str | None:
+    """Grok lists "always allow" first, and that grant covers every later bash command in the
+    folder. Prefer the option whose kind is exactly `exact` (allow_once, reject_once)."""
+    rows = [option for option in options if isinstance(option, dict) and isinstance(option.get("optionId"), str)]
+    for option in rows:
+        if str(option.get("kind") or "").lower() == exact:
+            return option["optionId"]
+    word = needle or exact
+    matches = [
+        option for option in rows
+        if word in str(option.get("kind") or "").lower() or word in str(option.get("name") or "").lower()
+    ]
+    for option in matches:
+        if "always" not in (str(option.get("kind") or "") + str(option.get("name") or "")).lower():
+            return option["optionId"]
+    return matches[0]["optionId"] if matches else None
+
+
+class TurnTracker:
+    """When a chat's turn is over. Mirrors TurnTracker in Core/Sources/WatchRemoteCore/ChatFold.swift.
+
+    Grok sends `prompt_complete` before the `session/prompt` result, and to every connection with the
+    chat loaded, so a completion for an earlier prompt must not end one still queued behind it."""
+
+    def __init__(self) -> None:
+        self.unstarted = 0
+        self.running: str | None = None
+
+    def sent(self) -> None:
+        self.unstarted += 1
+
+    def started(self, prompt_id: str) -> None:
+        if self.running == prompt_id:
+            return
+        self.running = prompt_id
+        self.unstarted = max(0, self.unstarted - 1)
+
+    def completed(self, prompt_id: str) -> bool:
+        if self.unstarted:
+            return False
+        if self.running is not None and prompt_id and self.running != prompt_id:
+            return False
+        self.running = None
+        return True
+
+    def answered(self) -> None:
+        self.unstarted = 0
+        self.running = None
+
+
+def note_auto_approval(lines: list, title: str) -> list:
+    """The tool card for this approval is already the step; a note after it would count twice."""
+    if lines and str(lines[-1]).startswith("Tool:"):
+        return lines
+    return lines + [f"Auto-approved: {clip(title, 120)}"]
+
+
+def merge_transcript(local: list, host: list) -> list[str]:
+    """The computer's replay is the record of finished turns, in order. Local lines only add the
+    prompt just sent and what streamed after it. Mirrors SessionResume.merge in the app."""
+    def chat(lines: list) -> list[str]:
+        cleaned = [str(line).strip() for line in lines if str(line).strip()]
+        if not any(line.startswith(("You:", "Grok:", "Tool:", "Auto-approved:")) for line in cleaned):
+            return []
+        return cleaned
+
+    def key(line: str) -> str:
+        return " ".join(line[4:].split()).lower()
+
+    merged = _merged_lines(chat(local), chat(host), key)
+    # Grok streams "…Texas. " then "Pulling…": a reload mid-answer keeps that trailing space.
+    raw = next((str(line) for line in reversed(host) if str(line).strip()), None)
+    if merged and raw is not None and raw != merged[-1] and raw.startswith(merged[-1]) and raw.strip() == merged[-1]:
+        return merged[:-1] + [raw]
+    return merged
+
+
+def _merged_lines(local_chat: list[str], host_chat: list[str], key) -> list[str]:
+    prompts = [key(line) for line in host_chat if line.startswith("You:")]
+    if not prompts:
+        return local_chat if len(local_chat) > len(host_chat) else host_chat
+    following = 0
+    tail_start: int | None = None
+    for index, line in enumerate(local_chat):
+        if not line.startswith("You:"):
             continue
-        kind = str(option.get("kind") or "").lower()
-        name = str(option.get("name") or "").lower()
-        if needle in kind or needle in name:
-            value = option.get("optionId")
-            if isinstance(value, str):
-                return value
-    return None
+        wanted = key(line)
+        if wanted in prompts[following:]:
+            following = prompts.index(wanted, following) + 1
+            tail_start = None
+        elif tail_start is None:
+            tail_start = index
+    if tail_start is None:
+        return host_chat
+    return host_chat + local_chat[tail_start:]
 
 
 def transcript_lines(result: object) -> list[str]:
@@ -954,8 +1087,9 @@ def fold_speaker(lines: list[str], prefix: str, text: str) -> list[str]:
     if lines and lines[-1].startswith(prefix):
         lines[-1] = (lines[-1] + text)[:8000]
         return lines
-    body = " ".join(text.split())
-    if not body:
+    # Only leading space goes: a first chunk ending "Texas. " must not glue onto "Today".
+    body = text.lstrip()
+    if not body.strip():
         return lines
     lines.append(f"{prefix} {body}")
     return lines

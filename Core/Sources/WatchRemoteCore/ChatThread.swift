@@ -162,6 +162,12 @@ public enum ChatTranscript {
         return name.isEmpty ? "\(autoApprovedPrefix) tool" : "\(autoApprovedPrefix) \(name)"
     }
 
+    /// The tool card for this approval is already the step, so a note after it would count twice.
+    public static func notingAutoApproval(_ title: String, in lines: [String]) -> [String] {
+        if let last = lines.last, isToolCard(last) { return lines }
+        return append(autoApproved(title), to: lines)
+    }
+
     public static func toolCard(_ title: String) -> String {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return "\(toolPrefix) \(name.isEmpty ? "tool" : name)"
@@ -203,9 +209,10 @@ public enum ChatTranscript {
     /// Short label for a tool row. The raw command stays in the expanded detail.
     public static func toolSummary(_ title: String) -> String {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let folded = name.lowercased()
+        let folded = name.lowercased().replacingOccurrences(of: "_", with: " ")
         if name.isEmpty || folded == "tool" { return "Used a tool" }
         if folded.contains("web search") || folded.contains("search the web") { return "Searched the web" }
+        if folded.contains("terminal") { return "Ran a command" }
         if folded.contains("grep") || folded.contains("glob") || folded.contains("search files") { return "Searched files" }
         if folded.contains("curl") || folded.contains("execute") || folded.contains("python")
             || folded.contains("bash") || folded.contains("shell") || folded.hasPrefix("ran ") {
@@ -219,9 +226,10 @@ public enum ChatTranscript {
     /// What a tool request would do, in a few words, for the approval card and the spoken allow.
     public static func approvalAction(_ title: String) -> String {
         let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let folded = name.lowercased()
+        let folded = name.lowercased().replacingOccurrences(of: "_", with: " ")
         if name.isEmpty || folded == "tool" { return "Use a tool" }
         if folded.contains("web search") || folded.contains("search the web") { return "Search the web" }
+        if folded.contains("terminal") { return "Run a command" }
         if folded.contains("grep") || folded.contains("glob") || folded.contains("search files") { return "Search files" }
         if folded.contains("curl") || folded.contains("execute") || folded.contains("python")
             || folded.contains("bash") || folded.contains("shell") || folded.contains("`") || folded.contains("|")
@@ -320,7 +328,8 @@ public enum ChatTranscript {
             copy[copy.count - 1] = String((last + chunk).prefix(8000))
             return copy
         }
-        let trimmed = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Only leading space goes. A first chunk of "Texas. " must still be followed by a space.
+        let trimmed = String(chunk.drop { $0.isWhitespace || $0.isNewline })
         guard !trimmed.isEmpty else { return lines }
         copy.append("\(prefix) \(trimmed)")
         return copy

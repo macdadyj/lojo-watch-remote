@@ -27,6 +27,14 @@ KEY = bytes([0x11]) * 32
 TOKEN = "roomtokenvalue0001"
 
 
+class _Sink:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    def send_text(self, text: str) -> None:
+        self.sent.append(text)
+
+
 class HandleTests(unittest.TestCase):
     def test_session_rows_unwrap_grok_extension_result(self) -> None:
         rows = outbound.sessions_from({
@@ -183,6 +191,69 @@ class HandleTests(unittest.TestCase):
         pushed = agent.take_update()
         assert pushed is not None
         self.assertEqual(pushed["sessions"][0]["transcript"][-1], "Grok: I can hear you.")
+
+    def test_prompt_complete_ends_only_the_turn_it_names(self) -> None:
+        agent = outbound.ACPAgent("secret")
+        agent.conn = _Sink()
+        agent.rows = [{"id": "s", "title": "T", "summary": "", "status": "running", "lines": ["You: first"]}]
+        agent._arm_prompt("s", "first")
+        agent._ingest(json.dumps({"jsonrpc": "2.0", "method": "_x.ai/queue/changed", "params": {
+            "sessionId": "s", "entries": [], "runningPromptId": "p1", "runningText": "first",
+        }}))
+        agent._arm_prompt("s", "second")
+        agent.permissions["s:3"] = {"rpc": "3", "number": True, "allow": "a", "deny": "d", "permission": {}}
+        agent._ingest(json.dumps({"jsonrpc": "2.0", "method": "_x.ai/session/prompt_complete", "params": {
+            "sessionId": "s", "promptId": "p1", "stopReason": "end_turn",
+        }}))
+        self.assertEqual(agent.rows[0]["status"], "running", "the queued second prompt was marked done")
+        agent._ingest(json.dumps({"jsonrpc": "2.0", "method": "_x.ai/queue/changed", "params": {
+            "sessionId": "s", "entries": [], "runningPromptId": "p2", "runningText": "second",
+        }}))
+        agent._ingest(json.dumps({"jsonrpc": "2.0", "method": "_x.ai/session/prompt_complete", "params": {
+            "sessionId": "s", "promptId": "p2", "stopReason": "end_turn",
+        }}))
+        self.assertEqual(agent.rows[0]["status"], "idle")
+        self.assertEqual(agent.awaiting_prompt, {})
+        self.assertNotIn("s:3", agent.permissions)
+
+    def test_merge_transcript_keeps_the_computer_order_and_the_unsent_tail(self) -> None:
+        stale = ["Grok: tomorrow will be windy", "You: weather today in Argyle"]
+        host = ["You: weather today in Argyle", "Tool: Execute `curl wttr.in`", "Grok: 74 and sunny in Argyle"]
+        self.assertEqual(outbound.merge_transcript(stale, host), host)
+        pending = host[:1] + ["Grok: 74 and sunny in Argyle", "You: and tomorrow?"]
+        self.assertEqual(outbound.merge_transcript(pending, host), host + ["You: and tomorrow?"])
+        self.assertEqual(outbound.merge_transcript(["You: hi", "Grok: hello"], []), ["You: hi", "Grok: hello"])
+
+    def test_a_reload_mid_answer_keeps_the_space_before_the_next_chunk(self) -> None:
+        # Real Grok 1.0.52: the replay of a running turn ends "Texas. ", the next live chunk is "Pulling".
+        host = outbound.fold_speaker(["You: weather in Argyle Texas"], "Grok:", "I'll check: Argyle Texas. ")
+        merged = outbound.merge_transcript(["You: weather in Argyle Texas"], host)
+        lines = outbound.fold_speaker(merged, "Grok:", "Pulling a few readings first.")
+        self.assertEqual(lines[-1], "Grok: I'll check: Argyle Texas. Pulling a few readings first.")
+
+    def test_a_finished_chat_reaches_the_watch_with_its_prompt(self) -> None:
+        lines = ["You: weather in Argyle", "Tool: a", "Tool: b", "Tool: c"]
+        lines = outbound.fold_speaker(lines, "Grok:", "Final answer for Argyle Texas. ")
+        lines = outbound.fold_speaker(lines, "Grok:", "Today it is 74°F.")
+        self.assertEqual(lines[-1], "Grok: Final answer for Argyle Texas. Today it is 74°F.")
+        row = outbound.watch_rows([{"id": "s", "title": "T", "status": "idle", "lines": lines}])[0]
+        self.assertEqual(row["transcript"], lines)
+        older = [f"Grok: old {index}" for index in range(60)] + lines
+        trimmed = outbound.watch_rows([{"id": "s", "title": "T", "status": "idle", "lines": older}])[0]
+        self.assertEqual(trimmed["transcript"][0], "You: weather in Argyle")
+
+    def test_approvals_answer_once_and_note_once(self) -> None:
+        options = [
+            {"optionId": "always", "name": "Always allow", "kind": "allow_always"},
+            {"optionId": "once", "name": "Allow", "kind": "allow_once"},
+            {"optionId": "no", "name": "Reject", "kind": "reject_once"},
+        ]
+        self.assertEqual(outbound.option_id(options, "allow_once", "allow"), "once")
+        self.assertEqual(outbound.option_id(options, "reject_once", "reject"), "no")
+        self.assertEqual(outbound.option_id(options[:1], "allow_once", "allow"), "always")
+        carded = ["You: go", "Tool: Execute `ls`"]
+        self.assertEqual(outbound.note_auto_approval(carded, "Execute `ls`"), carded)
+        self.assertEqual(outbound.note_auto_approval(["You: go"], "Edit"), ["You: go", "Auto-approved: Edit"])
 
     def test_transcribe_returns_text_and_empty_audio_errors(self) -> None:
         agent = outbound.MemoryAgent()

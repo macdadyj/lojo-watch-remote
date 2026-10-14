@@ -963,6 +963,17 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(VoiceListenPolicy.name(.presentDictation), "presentDictation")
     }
 
+    func testAReloadMidAnswerKeepsTheSpaceBeforeTheNextLiveChunk() {
+        // Real Grok 1.0.52: the replay of a running turn ends "Texas. ", the next live chunk is "Pulling".
+        let host = ChatFold.replay([.user("weather in Argyle Texas"), .text("I'll check: Argyle Texas. ")])
+        var fold = ChatFold(live: true)
+        let merged = SessionResume.merge(local: ["You: weather in Argyle Texas"], host: host)
+        let lines = fold.apply(.text("Pulling a few readings first."), to: merged)
+        XCTAssertEqual(lines, ["You: weather in Argyle Texas", "Grok: I'll check: Argyle Texas. Pulling a few readings first."])
+        let finished = SessionResume.merge(local: [], host: ["You: hi", "Grok: Done. "])
+        XCTAssertEqual(SessionResume.chatLines(finished), ["You: hi", "Grok: Done."])
+    }
+
     func testSessionResumeReadsLoadTranscriptAndNamesAMissingChat() {
         let json = """
         {"jsonrpc":"2.0","id":3,"result":{"sessionId":"abc","messages":[{"role":"user","content":"note the route"},{"role":"assistant","content":[{"type":"text","text":"noted"}]}]}}

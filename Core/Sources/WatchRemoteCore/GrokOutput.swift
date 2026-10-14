@@ -165,7 +165,16 @@ public enum StreamEvent: Equatable, Sendable {
     case text(String)
     case thought(String)
     case tool(title: String)
+    /// ACP `tool_call`. One id is one step, however many updates follow it.
+    case toolCall(id: String, title: String)
+    /// ACP `tool_call_update`. Grok sends several per tool, most without a title.
+    case toolCallUpdate(id: String, title: String?, status: String?)
     case toolUpdate(status: String)
+    case title(String)
+    /// `_x.ai/queue/changed` naming the prompt Grok is running now.
+    case turnStarted(promptID: String)
+    /// `_x.ai/session/prompt_complete`. Sent to every connection with the chat loaded.
+    case turnComplete(promptID: String, stopReason: String)
     case usage(summary: String?)
     case end(sessionID: String?, stopReason: String, usage: String?)
     case error(String)

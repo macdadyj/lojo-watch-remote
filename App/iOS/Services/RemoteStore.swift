@@ -180,6 +180,12 @@ final class RemoteStore: ObservableObject {
     private var streamLost = false
     private var demoDue: [String: DemoReply] = [:]
     private var autoApprovedPermissionIDs = Set<String>()
+    /// Per chat: which turn is running, and where each tool's card sits in the transcript.
+    private var turns: [String: TurnTracker] = [:]
+    private var folds: [String: ChatFold] = [:]
+    private var resuming = Set<String>()
+    /// Bumped by `LiveLink` each time an agent channel opens, so a fresh one can reload running chats.
+    private var seenAgentChannel = 0
     @Published var hasAgentSecret = false
     @Published var hasRelayToken = false
     @Published var hasRelayPin = false
@@ -235,7 +241,6 @@ final class RemoteStore: ObservableObject {
         hasRelayPin = keys.secret(account: "relay-pin") != nil
         live = LiveLink(
             onEvent: { [weak self] event in self?.apply(event) },
-            onCLI: { [weak self] id, event in self?.applyCLI(id: id, event: event) },
             onDropped: { [weak self] in
                 guard let self, self.mode == .ssh, !self.userDisconnected else { return }
                 self.streamLost = true
@@ -973,8 +978,7 @@ final class RemoteStore: ObservableObject {
                 sessionID: sessionID
             )
             let cached = local?.transcript ?? []
-            let chosen = SessionResume.choose(local: cached, loaded: lines, replayed: [])
-            let merged = SessionResume.keeping(sessions.first { $0.id == sessionID }?.transcript ?? cached, onto: chosen)
+            let merged = SessionResume.merge(local: sessions.first { $0.id == sessionID }?.transcript ?? cached, host: lines)
             if sessions.contains(where: { $0.id == sessionID }) {
                 update(sessionID) { session in
                     if !merged.isEmpty { session.transcript = merged }
@@ -1095,6 +1099,8 @@ final class RemoteStore: ObservableObject {
             publish()
             return
         }
+        guard resuming.insert(sessionID).inserted else { return }
+        defer { resuming.remove(sessionID) }
         let cached = sessions.first(where: { $0.id == sessionID })?.transcript ?? []
         do {
             try await ensureSSH()
@@ -1110,25 +1116,34 @@ final class RemoteStore: ObservableObject {
                 publish()
                 return
             }
-            let loaded = try await live.loadSessionCaptured(sessionID: sessionID, cwd: known.cwd ?? cwd)
-            let merged = mergedTranscript(sessionID, cached: cached, raw: loaded.raw, replay: loaded.replay)
-            if sessions.contains(where: { $0.id == sessionID }) {
-                update(sessionID) { session in
-                    session.title = known.title.isEmpty ? session.title : known.title
-                    if !known.summary.isEmpty, session.summary == "Sending." || session.summary.isEmpty {
-                        session.summary = known.summary
-                    }
-                    if session.summary != "Sending." {
-                        session.status = known.status
-                    }
-                    session.cwd = known.cwd ?? session.cwd
-                    if !merged.isEmpty { session.transcript = merged }
-                }
-            } else {
+            if !sessions.contains(where: { $0.id == sessionID }) {
                 var copy = known
-                copy.transcript = merged
+                copy.transcript = cached
                 sessions.insert(copy, at: 0)
             }
+            let loaded = try await live.loadSessionCaptured(sessionID: sessionID, cwd: known.cwd ?? cwd)
+            let merged = mergedTranscript(sessionID, raw: loaded.raw, replay: loaded.replay)
+            let running = ACPCodec.runningPromptID(inLoadResultJSON: loaded.raw)
+            let sending = sessions.first { $0.id == sessionID }?.summary == "Sending."
+            if !sending {
+                turns[sessionID, default: TurnTracker()].loaded(runningPromptID: running)
+            }
+            update(sessionID) { session in
+                session.title = known.title.isEmpty ? session.title : known.title
+                if !known.summary.isEmpty, session.summary == "Sending." || session.summary.isEmpty {
+                    session.summary = known.summary
+                }
+                session.cwd = known.cwd ?? session.cwd
+                if !merged.isEmpty { session.transcript = merged }
+                guard !sending else { return }
+                if running == nil {
+                    session.permission = nil
+                    session.status = session.status == .stopped || session.status == .failed ? session.status : .idle
+                } else if session.permission == nil {
+                    session.status = .running
+                }
+            }
+            adoptHeld(sessionID, from: live)
             if merged.isEmpty || sendingFailed(sessionID) {
                 setResumeNotice(sessionID, merged.isEmpty ? SessionResume.unavailableMessage : (resumeNotice(for: sessionID) ?? SessionResume.unavailableMessage))
             } else {
@@ -1161,6 +1176,7 @@ final class RemoteStore: ObservableObject {
             return
         }
         rememberOutgoing(sessionID, prompt: prompt)
+        let generation = turns[sessionID, default: TurnTracker()].sent()
         do {
             try await ensureSSH()
             let listed = try await live.list(cwd: cwd.isEmpty ? nil : cwd)
@@ -1175,16 +1191,14 @@ final class RemoteStore: ObservableObject {
                 rememberOutgoing(sessionID, prompt: prompt)
             }
             publish()
-            let replay = try await live.resumePrompt(sessionID: sessionID, prompt: prompt, cwd: known.cwd ?? cwd)
-            let merged = mergedTranscript(sessionID, cached: sessions.first { $0.id == sessionID }?.transcript ?? [], raw: "", replay: replay)
-            if !merged.isEmpty {
-                update(sessionID) { session in
-                    session.transcript = merged
-                    if session.summary == "Sending." {
-                        session.status = .running
-                    }
-                }
+            let loaded = try await live.loadSessionCaptured(sessionID: sessionID, cwd: known.cwd ?? cwd)
+            let merged = mergedTranscript(sessionID, raw: loaded.raw, replay: loaded.replay)
+            update(sessionID) { session in
+                if !merged.isEmpty { session.transcript = merged }
+                session.status = .running
             }
+            adoptHeld(sessionID, from: live)
+            sendPrompt(sessionID, text: prompt, generation: generation)
             approvalsAvailable = live.approvalsAvailable
             statusLine = live.statusLine
             link = .connected
@@ -1203,17 +1217,19 @@ final class RemoteStore: ObservableObject {
         publish()
     }
 
-    private func mergedTranscript(_ sessionID: String, cached: [String], raw: String, replay: [StreamEvent]) -> [String] {
-        let replayed = replay.reduce(into: [String]()) { lines, event in
-            lines = SessionResume.folding(event, into: lines)
+    /// The computer's copy sets the order. Lines it has not seen yet (a prompt still on its way) stay at the end.
+    private func mergedTranscript(_ sessionID: String, raw: String, replay: [StreamEvent]) -> [String] {
+        let host = replay.isEmpty ? SessionResume.transcriptLines(inLoadJSON: raw) : ChatFold.replay(replay)
+        let local = sessions.first(where: { $0.id == sessionID })?.transcript ?? []
+        return SessionResume.merge(local: local, host: host)
+    }
+
+    /// Live updates held while the load was merged. Card positions changed with the transcript.
+    private func adoptHeld(_ sessionID: String, from live: LiveLink) {
+        folds[sessionID] = ChatFold(live: true)
+        for event in live.releaseHeld(sessionID: sessionID) {
+            applyStream(sessionID: sessionID, event: event)
         }
-        let latest = sessions.first(where: { $0.id == sessionID })?.transcript ?? cached
-        let chosen = SessionResume.choose(
-            local: latest.count >= cached.count ? latest : cached,
-            loaded: SessionResume.transcriptLines(inLoadJSON: raw),
-            replayed: replayed
-        )
-        return SessionResume.keeping(latest, onto: chosen)
     }
 
     private func rememberOutgoing(_ sessionID: String, prompt: String) {
@@ -1272,14 +1288,27 @@ final class RemoteStore: ObservableObject {
         guard let live else { return }
         let localID = "local-\(UUID().uuidString.lowercased())"
         let title = prompt.split(whereSeparator: \.isWhitespace).prefix(6).joined(separator: " ")
-        sessions.insert(GrokSession(id: localID, title: title, summary: "Starting.", status: .running, cwd: cwd), at: 0)
+        sessions.insert(GrokSession(
+            id: localID,
+            title: title,
+            summary: "Starting.",
+            status: .running,
+            cwd: cwd,
+            transcript: ChatTranscript.append("You: \(prompt)", to: [])
+        ), at: 0)
         publish()
         do {
             try await ensureSSH()
-            let remoteID = try await live.start(localID: localID, prompt: prompt, cwd: cwd.isEmpty ? nil : cwd)
-            if remoteID != localID {
-                update(localID) { $0.id = remoteID }
+            let remoteID = try await live.newSession(cwd: cwd.isEmpty ? nil : cwd)
+            update(localID) { $0.id = remoteID }
+            if selectedSessionID == localID {
+                selectedSessionID = remoteID
             }
+            folds[remoteID] = ChatFold(live: true)
+            var tracker = TurnTracker()
+            let generation = tracker.sent()
+            turns[remoteID] = tracker
+            sendPrompt(remoteID, text: prompt, generation: generation)
             approvalsAvailable = live.approvalsAvailable
             statusLine = live.statusLine
             link = .connected
@@ -1389,6 +1418,7 @@ final class RemoteStore: ObservableObject {
             link = .connected
             approvalsAvailable = live.approvalsAvailable
             statusLine = live.statusLine
+            noteAgentChannel(live)
             return
         }
         link = .connecting
@@ -1407,6 +1437,22 @@ final class RemoteStore: ObservableObject {
         link = .connected
         approvalsAvailable = live.approvalsAvailable
         statusLine = live.statusLine
+        noteAgentChannel(live)
+    }
+
+    /// A channel the door did not resume starts with no chats loaded, so Grok will not tell it how a
+    /// running turn ends. Loading each unsettled chat subscribes this channel and reads its state.
+    private func noteAgentChannel(_ live: LiveLink) {
+        guard live.agentIsReady, live.channelCount != seenAgentChannel else { return }
+        seenAgentChannel = live.channelCount
+        guard !live.resumedLink else { return }
+        let unsettled = sessions
+            .filter { $0.status == .running || $0.status == .needsApproval }
+            .filter { !$0.id.hasPrefix("local-") && $0.summary != "Sending." }
+            .map(\.id)
+        for id in unsettled {
+            Task { await self.resumeSSH(id) }
+        }
     }
 
     private func verify(_ key: PresentedHostKey) async -> Bool {
@@ -1511,60 +1557,106 @@ final class RemoteStore: ObservableObject {
                 session.permission = request
                 session.summary = request.title
             }
+            // Ids restart on a new agent connection, and the door resends a request whose answer
+            // never reached it. Either way this one is unanswered.
+            autoApprovedPermissionIDs.remove(request.id)
             publish()
             considerAutoApprove(sessionID: request.sessionID, request: request)
+        case .activity(let rows):
+            for row in rows where row.working {
+                update(row.sessionID) { session in
+                    if session.status == .idle || session.status == .stopped || session.status == .failed {
+                        session.status = .running
+                    }
+                }
+            }
         case .result, .failure, .notification:
             break
         }
         publish()
     }
 
-    private func applyCLI(id: String, event: StreamEvent) {
-        if case .end(let sessionID, _, _) = event, let sessionID, sessionID != id {
-            update(id) { $0.id = sessionID }
-            applyStream(sessionID: sessionID, event: event)
-        } else {
-            applyStream(sessionID: id, event: event)
-        }
-        publish()
-    }
-
     private func applyStream(sessionID: String, event: StreamEvent) {
+        guard sessions.contains(where: { $0.id == sessionID }) else { return }
+        var fold = folds[sessionID] ?? ChatFold(live: true)
+        var tracker = turns[sessionID] ?? TurnTracker()
         update(sessionID) { session in
             switch event {
-            case .user(let text):
-                session.transcript = ChatTranscript.mergingUserEcho(text, into: session.transcript ?? [])
-                session.status = .running
-            case .text(let text):
-                session.transcript = ChatTranscript.streamingAssistant(text, in: session.transcript ?? [])
+            case .user, .text:
+                session.transcript = fold.apply(event, to: session.transcript ?? [])
                 session.summary = PhoneSnapshot.clip(
                     ChatTranscript.lastMessage(summary: session.summary, transcript: session.transcript),
                     limit: 280
                 )
-                session.status = .running
-            case .thought:
-                break
-            case .tool(let title):
-                session.transcript = ChatTranscript.append(ChatTranscript.toolCard(title), to: session.transcript ?? [])
+                if session.status != .needsApproval { session.status = .running }
+            case .tool(let title), .toolCall(_, let title):
+                session.transcript = fold.apply(event, to: session.transcript ?? [])
                 session.summary = "Using \(title)."
-                session.status = .running
-            case .toolUpdate:
+                if session.status != .needsApproval { session.status = .running }
+            case .toolCallUpdate(_, let title, _):
+                session.transcript = fold.apply(event, to: session.transcript ?? [])
+                if let title { session.summary = "Using \(title)." }
+            case .thought, .toolUpdate, .ignored:
                 break
+            case .title(let title):
+                session.title = title
+            case .turnStarted(let promptID):
+                tracker.started(promptID)
+                if session.status != .needsApproval { session.status = .running }
+            case .turnComplete(let promptID, let reason):
+                if tracker.completed(promptID) {
+                    finishTurn(&session, stopReason: reason, usage: nil)
+                }
             case .usage(let summary):
                 if let summary, !summary.isEmpty { session.summary = summary }
             case .end(_, let reason, let usage):
-                session.permission = nil
-                session.status = reason == "cancelled" ? .stopped : .idle
-                session.updatedAt = Date()
-                if let usage, !usage.isEmpty { session.summary = usage }
+                finishTurn(&session, stopReason: reason, usage: usage)
             case .error(let message):
                 session.status = .failed
                 session.summary = message
                 setResumeNotice(sessionID, SessionResume.unavailableMessage)
-            case .ignored:
-                break
             }
         }
+        folds[sessionID] = fold
+        turns[sessionID] = tracker
+    }
+
+    private func finishTurn(_ session: inout GrokSession, stopReason: String?, usage: String?) {
+        session.permission = nil
+        session.status = stopReason == "cancelled" ? .stopped : .idle
+        session.updatedAt = Date()
+        if session.summary == "Sending." || session.summary == "Starting." {
+            session.summary = ChatTranscript.lastMessage(summary: "", transcript: session.transcript)
+        }
+        if let usage, !usage.isEmpty { session.summary = usage }
+    }
+
+    /// The prompt goes out after its line is on screen and the chat is loaded on this connection.
+    private func sendPrompt(_ sessionID: String, text: String, generation: Int) {
+        guard let live else { return }
+        Task { @MainActor in
+            let outcome = await live.prompt(sessionID: sessionID, text: text)
+            self.settlePrompt(sessionID, generation: generation, outcome: outcome)
+        }
+    }
+
+    private func settlePrompt(_ sessionID: String, generation: Int, outcome: PromptOutcome) {
+        switch outcome {
+        case .finished(let reason, let usage):
+            guard turns[sessionID]?.answered(generation: generation) == true else { return }
+            update(sessionID) { finishTurn(&$0, stopReason: reason, usage: usage) }
+        case .failed(let message):
+            guard turns[sessionID]?.answered(generation: generation) == true else { return }
+            update(sessionID) { session in
+                session.permission = nil
+                session.status = .failed
+                session.summary = message
+            }
+            setResumeNotice(sessionID, SessionResume.unavailableMessage)
+        case .disconnected:
+            return
+        }
+        publish()
     }
 
     private func update(_ id: String, _ body: (inout GrokSession) -> Void) {
@@ -1714,6 +1806,13 @@ final class RemoteStore: ObservableObject {
                 if copy.autoApprove == nil {
                     copy.autoApprove = local.autoApprove
                 }
+                // The list does not report a running turn or a pending approval. The stream and the
+                // load do, so a heartbeat must not reset them.
+                if local.status == .running || local.status == .needsApproval {
+                    copy.status = local.status
+                    copy.permission = local.permission
+                    copy.summary = local.summary
+                }
             }
             return copy
         }
@@ -1733,13 +1832,12 @@ final class RemoteStore: ObservableObject {
         let preference = ApprovalPreference(globalAutoApprove: autoApproveTools, sessionOverride: session?.autoApprove)
         guard preference.autoApproves else { return }
         guard autoApprovedPermissionIDs.insert(request.id).inserted else { return }
-        let line = ChatTranscript.autoApproved(request.title)
-        if mode == .demo {
-            engine.noteLine(sessionID: sessionID, line: line)
+        let before = session?.transcript ?? []
+        let noted = ChatTranscript.notingAutoApproval(request.title, in: before)
+        if mode == .demo, noted.count > before.count {
+            engine.noteLine(sessionID: sessionID, line: ChatTranscript.autoApproved(request.title))
         }
-        update(sessionID) { item in
-            item.transcript = ChatTranscript.append(line, to: item.transcript ?? [])
-        }
+        update(sessionID) { $0.transcript = noted }
         allow(sessionID)
     }
 

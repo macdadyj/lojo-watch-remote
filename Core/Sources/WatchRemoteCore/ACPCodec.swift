@@ -6,7 +6,19 @@ public enum ACPInbound: Equatable, Sendable {
     case failure(id: String, isNumber: Bool, message: String)
     case update(sessionID: String, event: StreamEvent)
     case permission(PermissionRequest)
+    case activity([SessionActivity])
     case notification(method: String)
+}
+
+/// One row of Grok's `_x.ai/sessions/changed`: whether a chat is working right now.
+public struct SessionActivity: Equatable, Sendable {
+    public var sessionID: String
+    public var working: Bool
+
+    public init(sessionID: String, working: Bool) {
+        self.sessionID = sessionID
+        self.working = working
+    }
 }
 
 public enum ACPValue: Equatable, Sendable {
@@ -173,9 +185,40 @@ public struct ACPCodec: Sendable {
         case "session/request_permission":
             let (id, isNumber) = rpcID(object["id"])
             return .permission(permission(id: id, isNumber: isNumber, params: params))
+        case "_x.ai/session/prompt_complete":
+            // Sent to every connection that has the chat loaded, so a client that reconnected
+            // mid-turn still learns the turn ended. The `session/prompt` result only reaches the sender.
+            let sessionID = params["sessionId"] as? String ?? ""
+            let reason = params["stopReason"] as? String ?? "end_turn"
+            let promptID = params["promptId"] as? String ?? ""
+            return .update(sessionID: sessionID, event: .turnComplete(promptID: promptID, stopReason: reason.isEmpty ? "end_turn" : reason))
+        case "_x.ai/queue/changed":
+            guard let sessionID = params["sessionId"] as? String,
+                  let running = params["runningPromptId"] as? String, !running.isEmpty else {
+                return .notification(method: method)
+            }
+            return .update(sessionID: sessionID, event: .turnStarted(promptID: running))
+        case "_x.ai/sessions/changed":
+            let rows = params["upserted"] as? [[String: Any]] ?? []
+            let activity = rows.compactMap { row -> SessionActivity? in
+                guard let id = row["sessionId"] as? String, !id.isEmpty, let state = row["activity"] as? String else { return nil }
+                return SessionActivity(sessionID: id, working: state == "working")
+            }
+            return activity.isEmpty ? .notification(method: method) : .activity(activity)
         default:
             return .notification(method: method)
         }
+    }
+
+    /// `session/load` on a chat whose turn is still running names that turn here.
+    public static func runningPromptID(inLoadResultJSON text: String) -> String? {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = object["result"] as? [String: Any],
+              let meta = result["_meta"] as? [String: Any],
+              let running = meta["x.ai/runningPromptId"] as? String,
+              !running.isEmpty else { return nil }
+        return running
     }
 
     private func updateEvent(_ value: Any?) -> StreamEvent {
@@ -191,9 +234,22 @@ public struct ACPCodec: Sendable {
             return .text(text)
         case "agent_thought_chunk", "agent_thought":
             return .thought(text)
-        case "tool_call", "tool_call_update":
+        case "tool_call":
             let title = update["title"] as? String ?? "Tool"
+            if let id = update["toolCallId"] as? String, !id.isEmpty {
+                return .toolCall(id: id, title: title)
+            }
             return .tool(title: title)
+        case "tool_call_update":
+            let title = (update["title"] as? String).flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+            let status = update["status"] as? String
+            if let id = update["toolCallId"] as? String, !id.isEmpty {
+                return .toolCallUpdate(id: id, title: title, status: status)
+            }
+            return .toolUpdate(status: status ?? "")
+        case "session_info_update":
+            let title = (update["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return title.isEmpty ? .ignored : .title(title)
         case "plan":
             return .ignored
         default:
@@ -219,8 +275,8 @@ public struct ACPCodec: Sendable {
         let title = params["title"] as? String ?? tool?["title"] as? String ?? "Approve this action"
         let detail = params["description"] as? String ?? tool?["rawInput"].map { String(describing: $0) } ?? ""
         let options = params["options"] as? [[String: Any]] ?? []
-        let allow = options.first { optionKind($0).contains("allow") }?["optionId"] as? String
-        let deny = options.first { optionKind($0).contains("reject") }?["optionId"] as? String
+        let allow = Self.optionID(options, once: "allow_once", fallback: "allow")
+        let deny = Self.optionID(options, once: "reject_once", fallback: "reject")
         return PermissionRequest(
             id: "\(sessionID):\(id)",
             sessionID: sessionID,
@@ -233,7 +289,20 @@ public struct ACPCodec: Sendable {
         )
     }
 
-    private func optionKind(_ option: [String: Any]) -> String {
+    /// Grok lists "always allow" first, and that grant is saved for every later bash command in the
+    /// folder. One tap or one auto-approval answers this request only.
+    private static func optionID(_ options: [[String: Any]], once: String, fallback: String) -> String? {
+        if let exact = options.first(where: { ($0["kind"] as? String)?.lowercased() == once }) {
+            return exact["optionId"] as? String
+        }
+        let fallbackOption = options.first { option in
+            let words = optionKind(option)
+            return words.contains(fallback) && !words.contains("always")
+        } ?? options.first { optionKind($0).contains(fallback) }
+        return fallbackOption?["optionId"] as? String
+    }
+
+    private static func optionKind(_ option: [String: Any]) -> String {
         let kind = (option["kind"] as? String ?? "").lowercased()
         let name = (option["name"] as? String ?? "").lowercased()
         return kind + " " + name

@@ -86,9 +86,12 @@ def wants_tool(prompt: str) -> bool:
 
 
 class FakeGrok:
-    def __init__(self, secret: str, chunk_delay: float = 0.05) -> None:
+    def __init__(self, secret: str, chunk_delay: float = 0.05, newest_only: bool = False) -> None:
         self.secret = secret
         self.chunk_delay = chunk_delay
+        # Grok 1.0.52 sends stream chunks and approvals only to its newest connection.
+        self.newest_only = newest_only
+        self.newest: Peer | None = None
         self.slow_seconds = SLOW_SECONDS
         self.lock = threading.Lock()
         self.sessions: dict[str, dict] = {}
@@ -176,9 +179,10 @@ class FakeGrok:
         except OSError:
             return
         self.clients.append(client)
+        peer = Peer(client)
         with self.lock:
             self.connections += 1
-        peer = Peer(client)
+            self.newest = peer
         try:
             while True:
                 opcode, payload = peer.recv()
@@ -307,10 +311,11 @@ class FakeGrok:
         if session is None:
             peer.error(ident, "Session not found")
             return
+        stream = self._stream_peer(peer)
         if wants_tool(text):
             title = "Read notes.txt"
-            peer.update(session_id, {"sessionUpdate": "tool_call", "toolCallId": "call-1", "title": title, "status": "pending"})
-            outcome = peer.ask(session_id, title)
+            stream.update(session_id, {"sessionUpdate": "tool_call", "toolCallId": "call-1", "title": title, "status": "pending"})
+            outcome = stream.ask(session_id, title)
             with self.lock:
                 self.decisions.append({"sessionId": session_id, "outcome": outcome})
             if outcome != "allow-once":
@@ -327,12 +332,16 @@ class FakeGrok:
             if not piece.strip():
                 continue
             time.sleep(self.chunk_delay)
-            peer.update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": piece}})
+            self._stream_peer(peer).update(session_id, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": piece}})
         with self.lock:
             session["history"].append(("agent", answer))
             session["status"] = "idle"
             session["summary"] = answer
         peer.result(ident, {"stopReason": "end_turn"})
+
+    def _stream_peer(self, peer: "Peer") -> "Peer":
+        with self.lock:
+            return self.newest if self.newest_only and self.newest is not None else peer
 
 
 class Peer:
