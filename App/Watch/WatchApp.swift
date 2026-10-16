@@ -155,7 +155,20 @@ final class WatchModel: ObservableObject {
             hasRelayPairing: direct.hasPairing,
             relayHostOnline: direct.hostReachable,
             phoneReachable: reachable,
-            phoneActivated: phoneActivated
+            phoneActivated: phoneActivated,
+            watchHasNetwork: !direct.networkDown
+        )
+    }
+
+    /// "No network", "Reconnecting…", or "Computer offline" while the iPhone is not carrying turns.
+    var connectionNotice: String? {
+        WatchRouting.notice(
+            hasRelayPairing: direct.hasPairing,
+            relayUp: direct.phase == .up,
+            relayTrouble: direct.inTrouble,
+            relayHostOnline: direct.hostOnline,
+            phoneReachable: reachable,
+            noNetwork: direct.networkDown
         )
     }
 
@@ -874,13 +887,13 @@ final class WatchModel: ObservableObject {
                 autoApproveTools: approval.value
             )
             next.sessions = WatchRouting.mergeSessions(relay: direct.sessions, phone: realPhone?.sessions ?? [])
-            if direct.phase == .up && direct.hostOnline != false {
+            if direct.phase == .up && direct.hostOnline != false && !direct.networkDown {
                 next.link = .connected
                 next.banner = nil
                 next.approvalsAvailable = direct.approvalsAvailable || (realPhone?.approvalsAvailable ?? false)
             } else if reachable, let realPhone {
                 next.link = realPhone.link
-            } else if direct.phase == .up {
+            } else if direct.networkDown || direct.phase == .up {
                 next.link = .offline
             } else {
                 next.link = .connecting
@@ -909,13 +922,7 @@ final class WatchModel: ObservableObject {
 
     private func applyConnectionNotice() {
         guard forcedScreen == nil, !uiTest else { return }
-        let notice = WatchRouting.notice(
-            hasRelayPairing: direct.hasPairing,
-            relayUp: direct.phase == .up,
-            relayTrouble: direct.inTrouble,
-            relayHostOnline: direct.hostOnline,
-            phoneReachable: reachable
-        )
+        let notice = connectionNotice
         if let notice {
             if banner == nil || isConnectionNotice(banner) {
                 banner = notice
@@ -926,7 +933,7 @@ final class WatchModel: ObservableObject {
     }
 
     private func isConnectionNotice(_ text: String?) -> Bool {
-        text == RelayUserNotice.reconnectingText || text == RelayUserNotice.computerOfflineText
+        RelayUserNotice.isConnectionNotice(text)
     }
 
     /// A chat the relay knows goes through the relay. Others follow the general path.

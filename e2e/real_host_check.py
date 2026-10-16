@@ -51,7 +51,9 @@ DEFAULT_PROMPT = "What's the weather today in Argyle Texas"
 DEFAULT_SECOND = "And what about tomorrow there?"
 DEFAULT_OTHER = "What's the weather today in Amarillo Texas"
 # "Texas.Pulling": a chunk boundary lost its space (a reload trimmed the line it streamed onto).
+# The same shape sits inside a forecast link: MapClick.php?CityName matches at "p?Ci".
 GLUED_SENTENCE = re.compile(r"[a-z][.!?][A-Z][a-z]")
+_TOKEN_BREAKS = frozenset(" \t\r\n<>()[]\"'`")
 SCENARIOS = ["turns", "reopen", "background", "relaunch", "crossing", "watch", "together"]
 
 
@@ -169,6 +171,32 @@ def expect(condition: bool, message: str) -> None:
         raise CheckFailed(message)
 
 
+def glued_join(line: str) -> re.Match[str] | None:
+    """A missing space after sentence punctuation. The same characters inside a URL are not a join.
+
+    MapClick.php?CityName matches at "p?Ci" because "?" starts a query. "Texas.Pulling" and
+    "up?City" still match. A URL earlier in the line does not hide a later join.
+    """
+    for match in GLUED_SENTENCE.finditer(line):
+        if _url_token(line, match.start()):
+            continue
+        return match
+    return None
+
+
+def _url_token(line: str, index: int) -> bool:
+    start = index
+    while start > 0 and line[start - 1] not in _TOKEN_BREAKS:
+        start -= 1
+    end = index + 1
+    while end < len(line) and line[end] not in _TOKEN_BREAKS:
+        end += 1
+    token = line[start:end]
+    if "://" in token or token.startswith("www."):
+        return True
+    return re.search(r"\.(?:php|html|aspx|asp|cgi)\?", token, re.IGNORECASE) is not None
+
+
 def wait_idle(model: phone.PhoneModel, session_id: str, timeout: float, what: str) -> float:
     started = time.monotonic()
     ok = model.wait(lambda: model.chat(session_id).status in {"idle", "stopped", "failed"}, timeout)
@@ -203,7 +231,7 @@ def check_turn(model: phone.PhoneModel, session_id: str, prompt: str, words: lis
         expect(word.lower() not in text.lower(), f"{what}: the reply mentions {word!r}, which belongs to another chat: {text[:300]!r}")
     expect(not any(line == "Tool: Tool" for line in lines), f"{what}: a title-less tool update became its own step: {lines}")
     for line in replies:
-        glued = GLUED_SENTENCE.search(line)
+        glued = glued_join(line)
         expect(glued is None, f"{what}: two streamed chunks were glued together at {glued.group(0) if glued else ''!r}: {line[:300]!r}")
     return final
 
@@ -452,7 +480,7 @@ class WatchSide:
 
 
 def scenario_watch(ctx: Context, recording: Recording) -> str:
-    """The Watch path: the deployed relay, this computer's outbound service, the same door and Grok."""
+    """Watch-alone: the deployed relay and this computer, with no iPhone in the path."""
     args = ctx.args
     side = WatchSide(ctx, recording)
     session_id = side.start(args.prompt)
@@ -463,7 +491,8 @@ def scenario_watch(ctx: Context, recording: Recording) -> str:
     prompts = [line for line in restored_lines if line.startswith("You:")]
     expect(prompts[-2:] == [f"You: {args.prompt}", f"You: {args.second}"], f"reopening on the Watch shows {prompts}")
     expect(restored_lines[-1].startswith("Grok:"), f"reopening on the Watch does not end with the answer: {restored_lines[-3:]}")
-    return f"Watch chat {short(session_id)}: both answers through {side.base}, reopen in order"
+    expect(side.watch.http_version == 11, "the Watch client did not poll over HTTP/1.1")
+    return f"Watch-alone chat {short(session_id)}: prompt then Grok reply in order, no phone, reopen in order"
 
 
 def scenario_together(ctx: Context, recording: Recording) -> str:
@@ -502,6 +531,8 @@ RUNNERS = {
     "relaunch": scenario_relaunch,
     "crossing": scenario_crossing,
     "watch": scenario_watch,
+    # Same phone-free path. Kept out of SCENARIOS so a full run does not ask Grok twice.
+    "watch-alone": scenario_watch,
     "together": scenario_together,
 }
 
@@ -527,7 +558,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--other-expect", default="Amarillo")
     parser.add_argument("--timeout", type=float, default=120.0, help="Seconds a final answer may take.")
     parser.add_argument("--away", type=float, default=40.0, help="Seconds the phone sleeps in the background scenario.")
-    parser.add_argument("--only", default=",".join(SCENARIOS), help="Comma-separated scenarios: " + ", ".join(SCENARIOS))
+    parser.add_argument(
+        "--only",
+        default=",".join(SCENARIOS),
+        help="Comma-separated scenarios: " + ", ".join(SCENARIOS) + ". watch-alone is the phone-free watch scenario.",
+    )
     parser.add_argument("--out", default=str(HERE / "recordings" / time.strftime("%Y%m%d-%H%M%S")))
     parser.add_argument("--allow-skip", action="store_true", help="A skipped scenario (no relay pairing) does not fail the run.")
     args = parser.parse_args(argv)

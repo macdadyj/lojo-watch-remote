@@ -13,9 +13,13 @@ public enum WatchTurnPath: Equatable, Sendable {
 public enum WatchRouting {
     /// The relay goes first whenever the Watch has a pairing. iOS suspends the iPhone app in
     /// the background, so a reply that depends on it can stall halfway. The iPhone is used
-    /// when there is no relay pairing, or when the relay says the computer is not connected.
-    public static func path(hasRelayPairing: Bool, relayHostOnline: Bool?, phoneReachable: Bool, phoneActivated: Bool) -> WatchTurnPath {
+    /// when there is no relay pairing, when the relay says the computer is not connected,
+    /// or when the Watch itself has no network and the iPhone is reachable.
+    public static func path(hasRelayPairing: Bool, relayHostOnline: Bool?, phoneReachable: Bool, phoneActivated: Bool, watchHasNetwork: Bool = true) -> WatchTurnPath {
         if hasRelayPairing {
+            if !watchHasNetwork && phoneReachable {
+                return .phone
+            }
             if relayHostOnline == false && phoneReachable {
                 return .phone
             }
@@ -97,10 +101,14 @@ public enum WatchRouting {
     }
 
     /// The sentence the Watch shows about the link, or nil when the turn path is healthy.
-    /// "Reconnecting…" means the relay itself is unreachable; "Computer offline" means the relay
-    /// answers but the computer is not in the room. Either one is moot while the iPhone carries turns.
-    public static func notice(hasRelayPairing: Bool, relayUp: Bool, relayTrouble: Bool, relayHostOnline: Bool?, phoneReachable: Bool) -> String? {
+    /// "No network" means the Watch's own radio has no path. "Reconnecting…" means the radio is up
+    /// and the relay is not answering. "Computer offline" means the relay answers but the computer
+    /// is not in the room. Any of these is moot while the iPhone carries turns.
+    public static func notice(hasRelayPairing: Bool, relayUp: Bool, relayTrouble: Bool, relayHostOnline: Bool?, phoneReachable: Bool, noNetwork: Bool = false) -> String? {
         guard hasRelayPairing, !phoneReachable else { return nil }
+        if noNetwork {
+            return RelayUserNotice.noNetworkText
+        }
         if !relayUp {
             return relayTrouble ? RelayUserNotice.reconnectingText : nil
         }

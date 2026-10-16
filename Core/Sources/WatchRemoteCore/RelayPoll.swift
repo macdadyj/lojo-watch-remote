@@ -8,6 +8,11 @@ import Foundation
 /// later poll acks them with `after`, so a reply is not lost when a poll dies.
 public enum RelayPoll {
     public static let maxWaitMilliseconds = 25_000
+    /// How long the Watch asks the relay to hold one poll. Shorter than `maxWaitMilliseconds`:
+    /// a silent poll this long still returns, and a longer one is dropped on the Watch's own radio.
+    public static let watchWaitMilliseconds = 8_000
+    /// Seconds before another poll after the Watch itself has no network. This is not relay backoff.
+    public static let noNetworkRetrySeconds = 1.0
     public static let maxFramesPerRequest = 16
     /// Failed polls in a row before the Watch says it is reconnecting. The first poll after a
     /// wrist raise often dies with the suspended request, and that is not worth a banner.
@@ -115,6 +120,60 @@ public enum RelayPoll {
     }
 
     public static let relayOutdatedText = "This relay needs an update for the Watch. Redeploy it from the repo."
+
+    /// Seconds the Watch waits for one poll to finish, including the relay's hold.
+    public static func watchTimeoutSeconds(waitMilliseconds: Int) -> Double {
+        Double(waitMilliseconds) / 1000 + 12
+    }
+
+    /// Why one poll failed. "No network" means the Watch's own radio has no path.
+    /// That is separate from the relay answering that the computer is offline.
+    public enum WatchPollFailure: Equatable, Sendable {
+        case notConnectedToInternet
+        case dataNotAllowed
+        case timedOut
+        case networkConnectionLost
+        case cannotReachHost
+        case tls
+        case transportSecurity
+        case other
+    }
+
+    public enum WatchPollFault: Equatable, Sendable {
+        case noNetwork
+        case relayUnreachable
+    }
+
+    public static func fault(_ failure: WatchPollFailure, waitedForConnectivity: Bool) -> WatchPollFault {
+        switch failure {
+        case .notConnectedToInternet, .dataNotAllowed:
+            return .noNetwork
+        case .timedOut:
+            return waitedForConnectivity ? .noNetwork : .relayUnreachable
+        case .networkConnectionLost, .cannotReachHost, .tls, .transportSecurity, .other:
+            return .relayUnreachable
+        }
+    }
+
+    public static func detail(_ failure: WatchPollFailure, waitedForConnectivity: Bool) -> String {
+        if fault(failure, waitedForConnectivity: waitedForConnectivity) == .noNetwork {
+            return "The Watch has no network."
+        }
+        switch failure {
+        case .timedOut:
+            return "The relay did not answer in time."
+        case .networkConnectionLost:
+            return "The relay connection dropped."
+        case .cannotReachHost:
+            return "The relay could not be reached."
+        case .tls:
+            return "The relay's certificate was refused."
+        case .transportSecurity:
+            return "App Transport Security blocked the relay address."
+        case .notConnectedToInternet, .dataNotAllowed, .other:
+            return "The relay connection failed."
+        }
+    }
 
     /// Seconds before the next attempt after `failures` failures in a row.
     public static func backoff(failures: Int, outcome: Outcome) -> Double {

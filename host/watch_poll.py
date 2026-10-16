@@ -7,17 +7,22 @@ Used by the host tests and by the transport harness self-check.
 from __future__ import annotations
 
 import base64
+import http.client
+import io
 import json
 import time
 import urllib.error
-import urllib.request
+from email.message import Message
 from typing import Callable
+from urllib.parse import urlsplit
 
 import outbound
 import relaybox
 
 
 class HttpWatch:
+    """Watch stand-in. Speaks HTTP/1.1 on a new connection per poll, with no phone in the path."""
+
     def __init__(self, base_url: str, token: str, key: bytes, on_message: Callable[[dict], None] | None = None) -> None:
         self.on_message = on_message
         self.url = base_url.rstrip("/") + "/v1/watch"
@@ -28,6 +33,7 @@ class HttpWatch:
         self.counter = 0
         self.replay = relaybox.ReplayWindow()
         self.host_online = False
+        self.http_version = 0
         self.inbox: list[dict] = []
         self.next_id = 0
 
@@ -38,14 +44,8 @@ class HttpWatch:
             sealed = relaybox.seal(relaybox.encode_message(message), self.key, relaybox.WATCH_TO_HOST, self.counter)
             frames.append(base64.b64encode(sealed).decode("ascii"))
         body = json.dumps({"send": frames, "after": self.after, "epoch": self.epoch, "wait": wait_ms}).encode("utf-8")
-        request = urllib.request.Request(
-            self.url,
-            data=body,
-            method="POST",
-            headers={"authorization": f"Bearer {self.token}", "content-type": "application/json"},
-        )
-        with urllib.request.urlopen(request, timeout=wait_ms / 1000 + 10) as response:
-            reply = json.loads(response.read().decode("utf-8"))
+        raw = self._post(body, timeout=wait_ms / 1000 + 10)
+        reply = json.loads(raw.decode("utf-8"))
         if reply.get("epoch") != self.epoch:
             # A new epoch restarts sequence numbers at 1. Keeping the old cursor would ack them unseen.
             self.epoch = str(reply.get("epoch") or "")
@@ -64,6 +64,44 @@ class HttpWatch:
                 self.on_message(message)
         self.inbox.extend(opened)
         return opened
+
+    def _post(self, body: bytes, timeout: float) -> bytes:
+        parts = urlsplit(self.url)
+        if parts.scheme == "https":
+            connection: http.client.HTTPConnection = http.client.HTTPSConnection(parts.hostname, parts.port or 443, timeout=timeout)
+        elif parts.scheme == "http":
+            connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=timeout)
+        else:
+            raise RuntimeError("Watch poll address is not http or https")
+        path = parts.path or "/"
+        if parts.query:
+            path = f"{path}?{parts.query}"
+        try:
+            connection.request(
+                "POST",
+                path,
+                body=body,
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Content-Type": "application/json",
+                    "Content-Length": str(len(body)),
+                    "Connection": "close",
+                },
+            )
+            response = connection.getresponse()
+            raw = response.read()
+            version = response.version
+            status = response.status
+            reason = response.reason
+        finally:
+            connection.close()
+        if version != 11:
+            major, minor = divmod(version, 10)
+            raise RuntimeError(f"Watch poll got HTTP/{major}.{minor}; this path is HTTP/1.1")
+        self.http_version = version
+        if status >= 400:
+            raise urllib.error.HTTPError(self.url, status, reason, Message(), io.BytesIO(raw))
+        return raw
 
     def send(self, op: str, **fields: object) -> str:
         self.next_id += 1

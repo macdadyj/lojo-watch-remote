@@ -83,6 +83,7 @@ enum DirectKeychain {
 ///
 /// A real Apple Watch denies WebSockets to ordinary apps (TN3135), so every frame goes in a
 /// plain HTTPS request. Commands queue while the link comes up instead of being dropped.
+/// Each poll uses a new `WatchPollTransport` so a cached HTTP/3 upgrade is not reused.
 @MainActor
 final class DirectSession: ObservableObject {
     enum Phase: Equatable {
@@ -97,6 +98,8 @@ final class DirectSession: ObservableObject {
     @Published private(set) var approvalsAvailable = false
     /// What the relay last said about the computer. Nil until the first poll answers.
     @Published private(set) var hostOnline: Bool?
+    /// The Watch's own radio has no path. This is not the computer being offline.
+    @Published private(set) var networkDown = false
     @Published private(set) var lastError = ""
     var onChange: (() -> Void)?
     var onBanner: ((String?) -> Void)?
@@ -122,21 +125,13 @@ final class DirectSession: ObservableObject {
     private var next = 0
     private var generation = 0
     private var loop: Task<Void, Never>?
-    private var inflight: URLSessionDataTask?
     private var inflightWaits = false
     private var kicked = false
     private var failures = 0
     private var displayOff = false
     private var giveUp = false
-    private lazy var http: URLSession = {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = Double(RelayPoll.maxWaitMilliseconds) / 1000 + 15
-        configuration.timeoutIntervalForResource = 120
-        configuration.waitsForConnectivity = false
-        configuration.httpCookieStorage = nil
-        configuration.urlCache = nil
-        return URLSession(configuration: configuration)
-    }()
+    private var inflight: WatchPollTransport?
+    private var pollToken = 0
 
     var hasPairing: Bool { pairing != nil }
     var label: String { pairing?.label ?? "" }
@@ -156,6 +151,9 @@ final class DirectSession: ObservableObject {
     }
 
     var phaseLabel: String {
+        if networkDown {
+            return "no network"
+        }
         switch phase {
         case .idle:
             return "idle"
@@ -329,9 +327,17 @@ final class DirectSession: ObservableObject {
                 return
             }
             let batch = Array(outbox.prefix(RelayPoll.maxFramesPerRequest))
-            let wait = batch.isEmpty && phase == .up ? RelayPoll.maxWaitMilliseconds : 0
+            let wait = batch.isEmpty && phase == .up && !networkDown ? RelayPoll.watchWaitMilliseconds : 0
             let result = await post(batch, wait: wait)
             guard generation == current else { return }
+            if displayOff {
+                if case .answered(let response) = result {
+                    outbox.removeFirst(min(batch.count, outbox.count))
+                    noteAnswered(response)
+                }
+                quietPause()
+                return
+            }
             switch result {
             case .answered(let response):
                 outbox.removeFirst(min(batch.count, outbox.count))
@@ -339,6 +345,7 @@ final class DirectSession: ObservableObject {
             case .kicked:
                 continue
             case .refused(let outcome):
+                networkDown = false
                 failures += 1
                 switch outcome {
                 case .pairingRejected:
@@ -355,10 +362,14 @@ final class DirectSession: ObservableObject {
                 }
                 await pause(RelayPoll.backoff(failures: failures, outcome: outcome), current)
             case .unreachable(let text):
+                networkDown = false
                 failures += 1
                 lastError = text
                 noteTrouble()
                 await pause(RelayPoll.backoff(failures: failures, outcome: .retry), current)
+            case .noNetwork(let text):
+                noteNoNetwork(poll: pollToken, text: text)
+                await pause(RelayPoll.noNetworkRetrySeconds, current)
             }
         }
     }
@@ -367,6 +378,7 @@ final class DirectSession: ObservableObject {
         case answered(RelayPoll.Response)
         case refused(RelayPoll.Outcome)
         case unreachable(String)
+        case noNetwork(String)
         case kicked
     }
 
@@ -384,29 +396,42 @@ final class DirectSession: ObservableObject {
         request.httpBody = data
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(pairing.token)", forHTTPHeaderField: "Authorization")
-        request.timeoutInterval = Double(wait) / 1000 + 15
+        let timeout = RelayPoll.watchTimeoutSeconds(waitMilliseconds: wait)
+        request.timeoutInterval = timeout
         kicked = false
         inflightWaits = wait > 0
-        let (payload, response, error): (Data?, URLResponse?, Error?) = await withCheckedContinuation { continuation in
-            let task = http.dataTask(with: request) { payload, response, error in
-                continuation.resume(returning: (payload, response, error))
+        pollToken += 1
+        let token = pollToken
+        let transport = WatchPollTransport()
+        transport.onWaiting = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.pollToken == token, self.inflight != nil else { return }
+                self.noteNoNetwork(poll: token, text: "The Watch has no network.")
             }
-            inflight = task
-            task.resume()
         }
+        inflight = transport
+        let outcome = await transport.post(request, timeout: timeout)
         inflight = nil
         inflightWaits = false
+        transport.invalidate()
         if kicked {
             kicked = false
             return .kicked
         }
-        if let error {
-            return .unreachable(Self.describe(error))
+        if let error = outcome.error {
+            let failure: RelayPoll.WatchPollFailure = outcome.watchdogFired ? .timedOut : Self.failure(for: error)
+            let detail = RelayPoll.detail(failure, waitedForConnectivity: outcome.waitedForConnectivity)
+            switch RelayPoll.fault(failure, waitedForConnectivity: outcome.waitedForConnectivity) {
+            case .noNetwork:
+                return .noNetwork(detail)
+            case .relayUnreachable:
+                return .unreachable(detail)
+            }
         }
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        let outcome = RelayPoll.outcome(status: status)
-        guard outcome == .ok else { return .refused(outcome) }
-        guard let payload, let decoded = RelayPoll.decode(payload), decoded.ok else {
+        let status = outcome.response?.statusCode ?? 0
+        let httpOutcome = RelayPoll.outcome(status: status)
+        guard httpOutcome == .ok else { return .refused(httpOutcome) }
+        guard let decoded = RelayPoll.decode(outcome.data), decoded.ok else {
             return .refused(.retry)
         }
         return .answered(decoded)
@@ -414,9 +439,11 @@ final class DirectSession: ObservableObject {
 
     private func noteAnswered(_ response: RelayPoll.Response) {
         failures = 0
+        let recovered = networkDown
+        networkDown = false
         let wasUp = phase == .up
         let host = response.host
-        if !wasUp || hostOnline != host {
+        if !wasUp || hostOnline != host || recovered {
             phase = .up
             hostOnline = host
             lastError = host == false ? "The computer is not connected to the relay." : ""
@@ -439,6 +466,21 @@ final class DirectSession: ObservableObject {
         phase = .connecting
         onBanner?(RelayUserNotice.reconnectingText)
         onChange?()
+    }
+
+    /// The Watch cannot reach any network. Do not count this as the computer being offline.
+    private func noteNoNetwork(poll token: Int, text: String) {
+        guard token == pollToken, !displayOff else { return }
+        let changed = !networkDown || lastError != text
+        networkDown = true
+        lastError = text
+        if phase == .idle {
+            phase = .connecting
+        }
+        onBanner?(RelayUserNotice.noNetworkText)
+        if changed {
+            onChange?()
+        }
     }
 
     private func pause(_ seconds: Double, _ current: Int) async {
@@ -557,21 +599,25 @@ final class DirectSession: ObservableObject {
         return "w\(next)"
     }
 
-    private static func describe(_ error: Error) -> String {
-        let code = (error as? URLError)?.code
-        switch code {
-        case .some(.notConnectedToInternet), .some(.networkConnectionLost):
-            return "The Watch has no network."
+    private static func failure(for error: Error) -> RelayPoll.WatchPollFailure {
+        switch (error as? URLError)?.code {
+        case .some(.notConnectedToInternet):
+            return .notConnectedToInternet
+        case .some(.dataNotAllowed):
+            return .dataNotAllowed
         case .some(.timedOut):
-            return "The relay did not answer in time."
+            return .timedOut
+        case .some(.networkConnectionLost):
+            return .networkConnectionLost
         case .some(.cannotFindHost), .some(.cannotConnectToHost), .some(.dnsLookupFailed):
-            return "The relay could not be reached."
-        case .some(.secureConnectionFailed), .some(.serverCertificateUntrusted), .some(.serverCertificateHasBadDate):
-            return "The relay's certificate was refused."
+            return .cannotReachHost
+        case .some(.secureConnectionFailed), .some(.serverCertificateUntrusted), .some(.serverCertificateHasBadDate),
+             .some(.serverCertificateHasUnknownRoot), .some(.clientCertificateRejected):
+            return .tls
         case .some(.appTransportSecurityRequiresSecureConnection):
-            return "App Transport Security blocked the relay address."
+            return .transportSecurity
         default:
-            return "The relay connection failed."
+            return .other
         }
     }
 }

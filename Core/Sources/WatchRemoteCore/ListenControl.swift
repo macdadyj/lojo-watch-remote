@@ -70,7 +70,13 @@ public enum RelayUserNotice: Equatable, Sendable {
     public static let pairingRejectedText = "This relay did not accept this pairing."
     public static let reconnectingText = "Reconnecting…"
     public static let computerOfflineText = "Computer offline"
+    /// The Watch's own radio has no path. The relay has not said the computer is offline.
+    public static let noNetworkText = "No network"
     public static let repairText = "Pair again on iPhone."
+
+    public static func isConnectionNotice(_ text: String?) -> Bool {
+        text == reconnectingText || text == computerOfflineText || text == noNetworkText
+    }
 
     public static func classify(_ fault: RelaySocketFault) -> RelayUserNotice {
         switch fault {

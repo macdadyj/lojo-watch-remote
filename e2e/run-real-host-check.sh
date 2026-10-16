@@ -3,6 +3,10 @@
 #
 #   e2e/run-real-host-check.sh            install this checkout's host code, restart, run every scenario
 #   e2e/run-real-host-check.sh --no-install [real_host_check.py options]
+#   e2e/run-real-host-check.sh --only watch-alone
+#
+# watch and watch-alone are the same phone-free path: a Watch client polls the paired relay,
+# sends a prompt, and checks that the reply comes back after the prompt. No iPhone is involved.
 #
 # Installs host/agentdoor.py, outbound.py, relaybox.py, miniws.py, watch-remote-agent, and
 # watch-remote-outbound into ~/.local/bin (the old copies go to a dated backup folder), restarts
