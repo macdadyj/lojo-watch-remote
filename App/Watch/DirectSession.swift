@@ -439,10 +439,11 @@ final class DirectSession: ObservableObject {
 
     private func noteAnswered(_ response: RelayPoll.Response) {
         failures = 0
+        let recovered = networkDown
         networkDown = false
         let wasUp = phase == .up
         let host = response.host
-        if !wasUp || hostOnline != host {
+        if !wasUp || hostOnline != host || recovered {
             phase = .up
             hostOnline = host
             lastError = host == false ? "The computer is not connected to the relay." : ""
