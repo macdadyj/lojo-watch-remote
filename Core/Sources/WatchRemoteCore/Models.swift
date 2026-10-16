@@ -143,8 +143,12 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
     public var activeComputerID: String
     /// The active computer has a direct relay pairing the Watch can use on its own.
     public var directReady: Bool
-    /// Phone setting. Off until the user turns it on. Older snapshots omit it.
+    /// Phone setting. Older snapshots omit it and mean on.
     public var autoApproveTools: Bool
+    /// The iPhone can log in over SSH. False until its key exists and the computer has authorized it.
+    public var sshReady: Bool
+    /// OpenSSH public key the Watch forwards to the computer. Nil until the iPhone has one.
+    public var phonePublicKey: String?
 
     public init(
         mode: ConnectionMode,
@@ -156,7 +160,9 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         computers: [ComputerSummary] = [],
         activeComputerID: String = "",
         directReady: Bool = false,
-        autoApproveTools: Bool = true
+        autoApproveTools: Bool = true,
+        sshReady: Bool = true,
+        phonePublicKey: String? = nil
     ) {
         self.mode = mode
         self.link = link
@@ -168,6 +174,8 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         self.activeComputerID = activeComputerID
         self.directReady = directReady
         self.autoApproveTools = autoApproveTools
+        self.sshReady = sshReady
+        self.phonePublicKey = phonePublicKey
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -181,6 +189,8 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         case activeComputerID
         case directReady
         case autoApproveTools
+        case sshReady
+        case phonePublicKey
     }
 
     public init(from decoder: Decoder) throws {
@@ -195,6 +205,8 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         activeComputerID = try container.decodeIfPresent(String.self, forKey: .activeComputerID) ?? ""
         directReady = try container.decodeIfPresent(Bool.self, forKey: .directReady) ?? false
         autoApproveTools = try container.decodeIfPresent(Bool.self, forKey: .autoApproveTools) ?? true
+        sshReady = try container.decodeIfPresent(Bool.self, forKey: .sshReady) ?? true
+        phonePublicKey = try container.decodeIfPresent(String.self, forKey: .phonePublicKey)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -209,6 +221,8 @@ public struct PhoneSnapshot: Codable, Equatable, Sendable {
         try container.encode(activeComputerID, forKey: .activeComputerID)
         try container.encode(directReady, forKey: .directReady)
         try container.encode(autoApproveTools, forKey: .autoApproveTools)
+        try container.encode(sshReady, forKey: .sshReady)
+        try container.encodeIfPresent(phonePublicKey, forKey: .phonePublicKey)
     }
 
     /// WatchConnectivity application context is small. Keep the payload short.

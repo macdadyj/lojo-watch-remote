@@ -156,7 +156,8 @@ final class WatchModel: ObservableObject {
             relayHostOnline: direct.hostReachable,
             phoneReachable: reachable,
             phoneActivated: phoneActivated,
-            watchHasNetwork: !direct.networkDown
+            watchHasNetwork: !direct.networkDown,
+            phoneCanSSH: phoneSnapshot?.sshReady != false
         )
     }
 
@@ -811,7 +812,14 @@ final class WatchModel: ObservableObject {
             }
         }
         if let incoming {
-            phoneSnapshot = incoming
+            var cleaned = incoming
+            if let banner = cleaned.banner, ChatTranscript.isStatusNoise(banner) {
+                cleaned.banner = nil
+            }
+            phoneSnapshot = cleaned
+            if let key = cleaned.phonePublicKey {
+                direct.authorize(key)
+            }
             if approval.notePhone(incoming.autoApproveTools) {
                 direct.autoApproveDefault = approval.value
                 syncApprovalPreference()
@@ -939,7 +947,7 @@ final class WatchModel: ObservableObject {
     /// A chat the relay knows goes through the relay. Others follow the general path.
     private func route(for sessionID: String?) -> WatchTurnPath {
         let path = turnPath
-        guard path == .relay, let sessionID, direct.phase == .up, phoneSnapshot != nil, reachable else { return path }
+        guard path == .relay, let sessionID, direct.phase == .up, phoneSnapshot?.sshReady != false, phoneSnapshot != nil, reachable else { return path }
         if direct.sessions.contains(where: { $0.id == sessionID }) {
             return .relay
         }

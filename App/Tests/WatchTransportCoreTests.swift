@@ -249,6 +249,11 @@ final class WatchTransportCoreTests: XCTestCase {
             .relay,
             "with the phone away the Watch keeps polling until its own radio is back"
         )
+        XCTAssertEqual(
+            WatchRouting.path(hasRelayPairing: true, relayHostOnline: false, phoneReachable: true, phoneActivated: true, phoneCanSSH: false),
+            .relay,
+            "a phone with no key yet does not take the turn off the relay"
+        )
     }
 
     func testATimeoutWhileWaitingForRadioIsNoNetwork() {

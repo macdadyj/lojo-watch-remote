@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import miniws  # noqa: E402
+import pairing  # noqa: E402
 import relaybox  # noqa: E402
 
 
@@ -472,6 +473,13 @@ def _transcript_stdout(completed: object, empty: str) -> str:
     return stdout
 
 
+def authorized_keys_path() -> Path:
+    raw = os.environ.get("WATCHREMOTE_AUTHORIZED_KEYS", "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / ".ssh" / "authorized_keys"
+
+
 def handle(agent: object, message: dict) -> dict:
     op = message.get("op")
     ident = str(message.get("id") or "")
@@ -486,6 +494,15 @@ def handle(agent: object, message: dict) -> dict:
     try:
         if op == "ping":
             return {"op": "pong", "id": ident}
+        if op == "authorize":
+            text = str(message.get("publicKey") or "").strip()
+            if not text:
+                return {"op": "error", "id": ident, "message": "That key could not be authorized."}
+            try:
+                pairing.authorize_key(text, authorized_keys_path())
+            except (pairing.PairingError, OSError):
+                return {"op": "error", "id": ident, "message": "That key could not be authorized."}
+            return {"op": "ok", "id": ident}
         if op == "list":
             focus = getattr(agent, "watch_focus", None)
             return {

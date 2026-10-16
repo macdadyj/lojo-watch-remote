@@ -194,6 +194,7 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         case restored
         case transcribe
         case transcript
+        case authorize
     }
 
     public var op: Op
@@ -211,6 +212,8 @@ public struct DirectMessage: Codable, Equatable, Sendable {
     public var audio: String?
     /// The Watch's auto-approve choice: this chat's on `start`, `resume`, or a `ping` with a session, the default otherwise.
     public var autoApprove: Bool?
+    /// OpenSSH public key on an `authorize` request. The computer adds it for local forwarding.
+    public var publicKey: String?
 
     public init(
         op: Op,
@@ -224,7 +227,8 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         message: String? = nil,
         lines: [String]? = nil,
         audio: String? = nil,
-        autoApprove: Bool? = nil
+        autoApprove: Bool? = nil,
+        publicKey: String? = nil
     ) {
         self.op = op
         self.id = id
@@ -238,6 +242,7 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         self.lines = lines
         self.audio = audio
         self.autoApprove = autoApprove
+        self.publicKey = publicKey
     }
 
     public static func encode(_ message: DirectMessage) -> Data? {
