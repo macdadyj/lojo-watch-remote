@@ -223,5 +223,45 @@ final class WatchTransportCoreTests: XCTestCase {
         )
         XCTAssertNil(WatchRouting.notice(hasRelayPairing: true, relayUp: true, relayTrouble: false, relayHostOnline: false, phoneReachable: true))
         XCTAssertNil(WatchRouting.notice(hasRelayPairing: true, relayUp: true, relayTrouble: false, relayHostOnline: true, phoneReachable: false))
+        XCTAssertEqual(
+            WatchRouting.notice(hasRelayPairing: true, relayUp: true, relayTrouble: false, relayHostOnline: false, phoneReachable: false, noNetwork: true),
+            RelayUserNotice.noNetworkText,
+            "no radio is not the computer being offline"
+        )
+        XCTAssertEqual(
+            WatchRouting.notice(hasRelayPairing: true, relayUp: false, relayTrouble: true, relayHostOnline: nil, phoneReachable: false, noNetwork: true),
+            RelayUserNotice.noNetworkText
+        )
+        XCTAssertNil(WatchRouting.notice(hasRelayPairing: true, relayUp: false, relayTrouble: true, relayHostOnline: nil, phoneReachable: true, noNetwork: true))
+        XCTAssertNotEqual(RelayUserNotice.noNetworkText, RelayUserNotice.computerOfflineText)
+        XCTAssertNotEqual(RelayUserNotice.noNetworkText, RelayUserNotice.reconnectingText)
+        XCTAssertTrue(RelayUserNotice.isConnectionNotice(RelayUserNotice.noNetworkText))
+        XCTAssertFalse(RelayUserNotice.isConnectionNotice("The computer could not do that."))
+    }
+
+    func testNoNetworkSendsTurnsThroughThePhoneWhenItIsReachable() {
+        XCTAssertEqual(
+            WatchRouting.path(hasRelayPairing: true, relayHostOnline: true, phoneReachable: true, phoneActivated: true, watchHasNetwork: false),
+            .phone
+        )
+        XCTAssertEqual(
+            WatchRouting.path(hasRelayPairing: true, relayHostOnline: true, phoneReachable: false, phoneActivated: false, watchHasNetwork: false),
+            .relay,
+            "with the phone away the Watch keeps polling until its own radio is back"
+        )
+    }
+
+    func testATimeoutWhileWaitingForRadioIsNoNetwork() {
+        XCTAssertEqual(RelayPoll.fault(.notConnectedToInternet, waitedForConnectivity: false), .noNetwork)
+        XCTAssertEqual(RelayPoll.fault(.dataNotAllowed, waitedForConnectivity: false), .noNetwork)
+        XCTAssertEqual(RelayPoll.fault(.timedOut, waitedForConnectivity: true), .noNetwork)
+        XCTAssertEqual(RelayPoll.fault(.timedOut, waitedForConnectivity: false), .relayUnreachable)
+        XCTAssertEqual(RelayPoll.fault(.networkConnectionLost, waitedForConnectivity: true), .relayUnreachable)
+        XCTAssertEqual(RelayPoll.detail(.timedOut, waitedForConnectivity: true), "The Watch has no network.")
+        XCTAssertEqual(RelayPoll.detail(.timedOut, waitedForConnectivity: false), "The relay did not answer in time.")
+        XCTAssertEqual(RelayPoll.detail(.networkConnectionLost, waitedForConnectivity: false), "The relay connection dropped.")
+        XCTAssertLessThan(RelayPoll.watchWaitMilliseconds, RelayPoll.maxWaitMilliseconds)
+        XCTAssertEqual(RelayPoll.watchTimeoutSeconds(waitMilliseconds: RelayPoll.watchWaitMilliseconds), 20)
+        XCTAssertEqual(RelayPoll.noNetworkRetrySeconds, 1)
     }
 }

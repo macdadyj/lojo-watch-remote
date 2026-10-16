@@ -234,6 +234,9 @@ struct WatchListView: View {
     }
 
     private var headerTitle: String {
+        if let notice = model.connectionNotice {
+            return notice
+        }
         if model.pathTitle == "Pair on iPhone first" { return "Pair on iPhone first" }
         if phoneAway && model.pathTitle != "direct" { return LinkState.phoneAway.title }
         if model.reachable, model.snapshot.link == .connecting, !model.snapshot.sessions.isEmpty {
@@ -243,7 +246,15 @@ struct WatchListView: View {
     }
 
     private var headerMark: SessionStatus {
-        if phoneAway { return .unknown }
+        if model.connectionNotice == RelayUserNotice.noNetworkText || model.connectionNotice == RelayUserNotice.computerOfflineText {
+            return .failed
+        }
+        if model.connectionNotice == RelayUserNotice.reconnectingText {
+            return .unknown
+        }
+        if phoneAway && model.pathTitle != "direct" {
+            return .unknown
+        }
         switch model.snapshot.link {
         case .demo, .connected:
             return .idle
@@ -263,6 +274,9 @@ struct WatchListView: View {
         case .connecting:
             return "Connecting to the computer."
         case .offline:
+            if model.pathTitle == "direct" {
+                return "The computer is not connected to the relay."
+            }
             return "Not connected. Open the iPhone app and check the computer."
         case .needsPairing:
             return "Pair on iPhone first."

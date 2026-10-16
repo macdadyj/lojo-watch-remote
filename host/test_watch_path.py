@@ -105,6 +105,7 @@ class WatchPathTests(unittest.TestCase):
                 break
             time.sleep(0.1)
         self.assertTrue(self.watch.host_online, "host never joined the room")
+        self.assertEqual(self.watch.http_version, 11, "the Watch client must poll over HTTP/1.1")
 
     def tearDown(self) -> None:
         self.running = False

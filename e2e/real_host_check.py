@@ -452,7 +452,7 @@ class WatchSide:
 
 
 def scenario_watch(ctx: Context, recording: Recording) -> str:
-    """The Watch path: the deployed relay, this computer's outbound service, the same door and Grok."""
+    """Watch-alone: the deployed relay and this computer, with no iPhone in the path."""
     args = ctx.args
     side = WatchSide(ctx, recording)
     session_id = side.start(args.prompt)
@@ -463,7 +463,8 @@ def scenario_watch(ctx: Context, recording: Recording) -> str:
     prompts = [line for line in restored_lines if line.startswith("You:")]
     expect(prompts[-2:] == [f"You: {args.prompt}", f"You: {args.second}"], f"reopening on the Watch shows {prompts}")
     expect(restored_lines[-1].startswith("Grok:"), f"reopening on the Watch does not end with the answer: {restored_lines[-3:]}")
-    return f"Watch chat {short(session_id)}: both answers through {side.base}, reopen in order"
+    expect(side.watch.http_version == 11, "the Watch client did not poll over HTTP/1.1")
+    return f"Watch-alone chat {short(session_id)}: prompt then Grok reply in order, no phone, reopen in order"
 
 
 def scenario_together(ctx: Context, recording: Recording) -> str:
@@ -502,6 +503,8 @@ RUNNERS = {
     "relaunch": scenario_relaunch,
     "crossing": scenario_crossing,
     "watch": scenario_watch,
+    # Same phone-free path. Kept out of SCENARIOS so a full run does not ask Grok twice.
+    "watch-alone": scenario_watch,
     "together": scenario_together,
 }
 
@@ -527,7 +530,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--other-expect", default="Amarillo")
     parser.add_argument("--timeout", type=float, default=120.0, help="Seconds a final answer may take.")
     parser.add_argument("--away", type=float, default=40.0, help="Seconds the phone sleeps in the background scenario.")
-    parser.add_argument("--only", default=",".join(SCENARIOS), help="Comma-separated scenarios: " + ", ".join(SCENARIOS))
+    parser.add_argument(
+        "--only",
+        default=",".join(SCENARIOS),
+        help="Comma-separated scenarios: " + ", ".join(SCENARIOS) + ". watch-alone is the phone-free watch scenario.",
+    )
     parser.add_argument("--out", default=str(HERE / "recordings" / time.strftime("%Y%m%d-%H%M%S")))
     parser.add_argument("--allow-skip", action="store_true", help="A skipped scenario (no relay pairing) does not fail the run.")
     args = parser.parse_args(argv)
