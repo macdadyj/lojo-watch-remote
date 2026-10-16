@@ -43,6 +43,7 @@ jobs:
           python3 host/test_outbound.py
           python3 host/test_watch_path.py
           python3 host/test_agentdoor.py
+          python3 e2e/test_glue.py
           host/watch-remote-stt --self-test
           node --test relay/outbound/test.mjs
           scripts/privacy-scan.sh
@@ -258,6 +259,7 @@ jobs:
           python3 host/test_outbound.py
           python3 host/test_watch_path.py
           python3 host/test_agentdoor.py
+          python3 e2e/test_glue.py
           host/watch-remote-stt --self-test
           node --test relay/outbound/test.mjs
           scripts/privacy-scan.sh
