@@ -157,7 +157,7 @@ struct WatchListView: View {
 
     private var sessionRows: some View {
         VStack(alignment: .leading, spacing: 4) {
-                if let banner = model.banner ?? model.snapshot.banner {
+                if let banner = chatBanner {
                     Text(banner)
                         .font(.caption2)
                         .foregroundStyle(LojoTheme.danger)
@@ -172,7 +172,7 @@ struct WatchListView: View {
                     .accessibilityIdentifier("voice.repair")
                 }
                 ListenTestHooks()
-                if model.snapshot.sessions.isEmpty, model.banner == nil, model.snapshot.banner == nil {
+                if model.snapshot.sessions.isEmpty, chatBanner == nil {
                     Text(emptyCopy)
                         .font(.caption)
                         .foregroundStyle(LojoTheme.readableSecondary(scheme))
@@ -265,8 +265,17 @@ struct WatchListView: View {
         }
     }
 
+    private var chatBanner: String? {
+        let text = model.banner ?? model.snapshot.banner
+        guard let text, !ChatTranscript.isStatusNoise(text) else { return nil }
+        return text
+    }
+
     private var showsApprovalNote: Bool {
-        model.forcedScreen == nil && model.snapshot.mode == .ssh && !model.snapshot.approvalsAvailable
+        model.forcedScreen == nil
+            && model.snapshot.mode == .ssh
+            && !model.snapshot.approvalsAvailable
+            && !model.autoApproves(nil)
     }
 
     private var emptyCopy: String {
@@ -352,13 +361,13 @@ struct WatchDetailView: View {
                     .font(.caption)
                     .foregroundStyle(LojoTheme.readablePrimary(scheme))
                     .fixedSize(horizontal: false, vertical: true)
-                if let banner = model.banner {
+                if let banner = model.banner, !ChatTranscript.isStatusNoise(banner) {
                     Text(banner)
                         .font(.caption2)
                         .foregroundStyle(LojoTheme.danger)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if let permission = current.permission {
+                if showsPermission, let permission = current.permission {
                     Text("Allow: \(ChatTranscript.approvalAction(permission.title))?")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(LojoTheme.readablePrimary(scheme))
@@ -375,7 +384,9 @@ struct WatchDetailView: View {
         .toolbarColorScheme(scheme == .dark ? .dark : .light, for: .navigationBar)
     }
 
-    private var showsPermission: Bool { current.permission != nil }
+    private var showsPermission: Bool {
+        current.permission != nil && !model.autoApproves(current.id)
+    }
 
     private var showsStop: Bool {
         current.status == .running || current.status == .needsApproval
@@ -457,7 +468,7 @@ struct WatchComposeView: View {
                 }
                 .buttonStyle(PrimaryButtonStyle(compact: true))
                 .accessibilityHint("Sends the task to the computer")
-                if let banner = model.banner {
+                if let banner = model.banner, !ChatTranscript.isStatusNoise(banner) {
                     Text(banner)
                         .font(.caption2)
                         .foregroundStyle(LojoTheme.danger)

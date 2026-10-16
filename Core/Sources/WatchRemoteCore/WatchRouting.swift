@@ -15,12 +15,20 @@ public enum WatchRouting {
     /// the background, so a reply that depends on it can stall halfway. The iPhone is used
     /// when there is no relay pairing, when the relay says the computer is not connected,
     /// or when the Watch itself has no network and the iPhone is reachable.
-    public static func path(hasRelayPairing: Bool, relayHostOnline: Bool?, phoneReachable: Bool, phoneActivated: Bool, watchHasNetwork: Bool = true) -> WatchTurnPath {
+    public static func path(
+        hasRelayPairing: Bool,
+        relayHostOnline: Bool?,
+        phoneReachable: Bool,
+        phoneActivated: Bool,
+        watchHasNetwork: Bool = true,
+        phoneCanSSH: Bool = true
+    ) -> WatchTurnPath {
         if hasRelayPairing {
-            if !watchHasNetwork && phoneReachable {
+            // A phone with no key yet cannot carry a turn. The relay still can, and it auto-approves.
+            if !watchHasNetwork && phoneReachable && phoneCanSSH {
                 return .phone
             }
-            if relayHostOnline == false && phoneReachable {
+            if relayHostOnline == false && phoneReachable && phoneCanSSH {
                 return .phone
             }
             return .relay

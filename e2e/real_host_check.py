@@ -44,6 +44,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "host"))
 
 import outbound  # noqa: E402
+import pairing  # noqa: E402
 import phone_mirror as phone  # noqa: E402
 import watch_poll  # noqa: E402
 
@@ -54,7 +55,7 @@ DEFAULT_OTHER = "What's the weather today in Amarillo Texas"
 # The same shape sits inside a forecast link: MapClick.php?CityName matches at "p?Ci".
 GLUED_SENTENCE = re.compile(r"[a-z][.!?][A-Z][a-z]")
 _TOKEN_BREAKS = frozenset(" \t\r\n<>()[]\"'`")
-SCENARIOS = ["turns", "reopen", "background", "relaunch", "crossing", "watch", "together"]
+SCENARIOS = ["turns", "reopen", "background", "relaunch", "crossing", "watch", "together", "fresh"]
 
 
 class CheckFailed(Exception):
@@ -479,6 +480,57 @@ class WatchSide:
         return [str(line) for line in restored.get("lines") or []]
 
 
+def drop_authorized_blob(path: Path, blob: str) -> None:
+    """Remove one public-key blob from authorized_keys and leave every other line."""
+    if not path.is_file():
+        return
+    rows = [row for row in path.read_text(encoding="utf-8").splitlines() if blob not in row.split()]
+    body = ("\n".join(rows).rstrip() + "\n") if rows else ""
+    temporary = path.with_name(path.name + ".watch-remote-tmp")
+    temporary.write_text(body, encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+    if path.exists():
+        path.chmod(0o600)
+
+
+def scenario_fresh(ctx: Context, recording: Recording) -> str:
+    """A Watch with no iPhone key yet still gets an auto-approved answer, then the key is authorized."""
+    args = ctx.args
+    side = WatchSide(ctx, recording)
+    with tempfile.TemporaryDirectory() as directory:
+        key_path = Path(directory) / "phone"
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-f", str(key_path), "-N", "", "-C", "watch-remote-e2e@iphone", "-q"],
+            check=True,
+        )
+        public = Path(str(key_path) + ".pub").read_text(encoding="utf-8").strip()
+    blob = public.split()[1]
+    keys = Path.home() / ".ssh" / "authorized_keys"
+    before = keys.read_text(encoding="utf-8") if keys.is_file() else ""
+    expect(blob not in before, "the fresh key was already authorized on this computer")
+    session_id = ""
+    try:
+        session_id = side.start(args.prompt)
+        lines = side.wait_answer(session_id, args.prompt, args.timeout, "fresh install")
+        for line in lines:
+            expect(
+                "Generate a key" not in line and "Tasks cannot ask for approval" not in line,
+                f"fresh install: the key setup error landed in the chat: {line[:300]!r}",
+            )
+        ident = side.watch.send("authorize", publicKey=public)
+        reply = side.watch.wait_for(lambda message: message.get("id") == ident, timeout=30)
+        expect(reply.get("op") == "ok", f"the computer did not authorize the fresh key: {reply}")
+        text = keys.read_text(encoding="utf-8") if keys.is_file() else ""
+        expect(blob in text, "the fresh key was not written")
+        row = next(item for item in text.splitlines() if blob in item.split())
+        expect(pairing.exec_is_refused(row), "the fresh key can do more than forward to the agent port")
+        recording.check(session_id, lines, authorized=True)
+    finally:
+        drop_authorized_blob(keys, blob)
+    return f"Watch chat {short(session_id)} answered before a key existed, then the computer authorized one"
+
+
 def scenario_watch(ctx: Context, recording: Recording) -> str:
     """Watch-alone: the deployed relay and this computer, with no iPhone in the path."""
     args = ctx.args
@@ -534,6 +586,7 @@ RUNNERS = {
     # Same phone-free path. Kept out of SCENARIOS so a full run does not ask Grok twice.
     "watch-alone": scenario_watch,
     "together": scenario_together,
+    "fresh": scenario_fresh,
 }
 
 

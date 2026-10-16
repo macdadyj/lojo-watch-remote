@@ -134,6 +134,9 @@ public enum ChatTranscript {
             return spokenText(last)
         }
         let summaryText = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isStatusNoise(summaryText) {
+            return "Empty chat"
+        }
         if isToolCard(summaryText) || isNote(summaryText) {
             return toolSummary(toolRawTitle(summaryText))
         }
@@ -188,6 +191,8 @@ public enum ChatTranscript {
         if folded == "on-device speech" || folded == "speech on iphone" { return true }
         if folded == "sending" || folded.hasPrefix("sending.") || folded.hasPrefix("sending ") { return true }
         if folded.hasPrefix("keychain error") { return true }
+        if folded.contains("generate a key") && folded.contains("authorize") { return true }
+        if folded.contains("authorized_keys") { return true }
         if folded == "listening" || folded == "hearing you" || folded == "restoring" || folded == "restored" { return true }
         return false
     }

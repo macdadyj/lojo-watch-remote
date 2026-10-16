@@ -1173,6 +1173,12 @@ final class WatchRemoteCoreTests: XCTestCase {
         XCTAssertEqual(ChatTranscript.toolSummary("Omarchy|omarchy"), "Used a tool")
         XCTAssertTrue(ChatTranscript.isStatusNoise("Keychain error -25308"))
         XCTAssertTrue(ChatTranscript.isStatusNoise("On-device speech"))
+        XCTAssertTrue(ChatTranscript.isStatusNoise("Generate a key on this iPhone, then authorize it on the computer."))
+        XCTAssertTrue(ChatTranscript.isStatusNoise("Login as me was denied. Add this iPhone’s key to authorized_keys on the computer."))
+        XCTAssertEqual(
+            ChatTranscript.lastMessage(summary: "Generate a key on this iPhone, then authorize it on the computer.", transcript: nil),
+            "Empty chat"
+        )
         let grouped = ChatTranscript.blocks(from: [
             "You: hi",
             ChatTranscript.toolCard("Tool"),

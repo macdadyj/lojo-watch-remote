@@ -244,7 +244,7 @@ struct VoiceConfirmView: View {
                     .accessibilityHint("Sends the task to the active computer")
                 Button("Cancel") { cancel() }
                     .buttonStyle(QuietButtonStyle(compact: true))
-                if !isPreview, let banner = model.banner {
+                if !isPreview, let banner = model.banner, !ChatTranscript.isStatusNoise(banner) {
                     Text(banner)
                         .font(.caption2)
                         .foregroundStyle(LojoTheme.danger)
@@ -1305,14 +1305,14 @@ extension WatchModel {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 21) { [weak self] in
                     self?.flushHeldVoiceTask(announcingFailure: false)
                 }
-            } else if let banner, !banner.isEmpty {
+            } else if let banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner) {
                 reply(banner, listenAfter: effect.listenAgain)
             } else {
                 reply("Could not send that.", listenAfter: effect.listenAgain)
             }
         case .selectComputer(let id):
             selectComputer(id)
-            if let banner, !banner.isEmpty {
+            if let banner, !banner.isEmpty, !ChatTranscript.isStatusNoise(banner) {
                 reply(banner, listenAfter: effect.listenAgain)
             } else {
                 reply(effect.spoken, listenAfter: effect.listenAgain)

@@ -132,6 +132,9 @@ final class DirectSession: ObservableObject {
     private var giveUp = false
     private var inflight: WatchPollTransport?
     private var pollToken = 0
+    private var authorizeID: String?
+    private var pendingAuthorizeKey: String?
+    private var authorizedKey: String?
 
     var hasPairing: Bool { pairing != nil }
     var label: String { pairing?.label ?? "" }
@@ -247,6 +250,17 @@ final class DirectSession: ObservableObject {
     func resume(_ sessionID: String, autoApprove: Bool? = nil) {
         var message = DirectMessage(op: .resume, id: freshID(), sessionID: sessionID)
         message.autoApprove = autoApprove
+        send(message)
+    }
+
+    /// Asks the computer to authorize this iPhone key. A repeat of the same key is not sent again.
+    func authorize(_ publicKey: String) {
+        let line = OpenSSHPublicKey.canonical(publicKey) ?? ""
+        guard hasPairing, !line.isEmpty, line != authorizedKey, line != pendingAuthorizeKey else { return }
+        var message = DirectMessage(op: .authorize, id: freshID())
+        message.publicKey = line
+        authorizeID = message.id
+        pendingAuthorizeKey = line
         send(message)
     }
 
@@ -530,6 +544,11 @@ final class DirectSession: ObservableObject {
         case .started:
             onStarted?(message.id, message.sessionID ?? "")
         case .ok, .pong:
+            if message.id == authorizeID {
+                authorizedKey = pendingAuthorizeKey
+                authorizeID = nil
+                pendingAuthorizeKey = nil
+            }
             onChange?()
         case .restored:
             onRestored?(message.sessionID ?? "", message.lines ?? [])
@@ -538,10 +557,16 @@ final class DirectSession: ObservableObject {
             onTranscript?(message.id, message.message ?? "")
             onChange?()
         case .error:
+            if message.id == authorizeID {
+                authorizeID = nil
+                pendingAuthorizeKey = nil
+                onChange?()
+                break
+            }
             let text = message.message ?? "The computer could not do that."
             onFailed?(message.id, text)
             onBanner?(text)
-        case .list, .start, .approve, .deny, .stop, .ping, .resume, .transcribe:
+        case .list, .start, .approve, .deny, .stop, .ping, .resume, .transcribe, .authorize:
             break
         }
     }

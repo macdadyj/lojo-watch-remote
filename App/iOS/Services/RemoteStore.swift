@@ -206,6 +206,9 @@ final class RemoteStore: ObservableObject {
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         self.support = support
         keys = KeyStore(directory: support)
+        if keys.key == nil {
+            try? keys.generateEd25519()
+        }
         let defaults = UserDefaults.standard
         mode = ConnectionMode(rawValue: defaults.string(forKey: "mode") ?? "") ?? .demo
         if defaults.object(forKey: "appearance") == nil {
@@ -279,7 +282,9 @@ final class RemoteStore: ObservableObject {
             computers: computers.map { ComputerSummary(id: $0.id, label: $0.label) },
             activeComputerID: host.id,
             directReady: directContext?.contains("\"clear\":true") == false && directContext != nil,
-            autoApproveTools: autoApproveTools
+            autoApproveTools: autoApproveTools,
+            sshReady: mode != .ssh || link == .connected,
+            phonePublicKey: keys.key?.publicKey
         )
     }
 
@@ -1317,11 +1322,16 @@ final class RemoteStore: ObservableObject {
                 link = .offline
             }
             approvalsAvailable = false
+            let text = error.localizedDescription
             update(localID) {
                 $0.status = .failed
-                $0.summary = error.localizedDescription
+                if !ChatTranscript.isStatusNoise(text) {
+                    $0.summary = text
+                }
             }
-            banner = error.localizedDescription
+            if !ChatTranscript.isStatusNoise(text) {
+                banner = text
+            }
         }
     }
 

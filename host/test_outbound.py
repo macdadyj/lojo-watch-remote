@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import miniws  # noqa: E402
 import outbound  # noqa: E402
+import pairing  # noqa: E402
 import relaybox  # noqa: E402
 
 
@@ -316,6 +317,36 @@ class HandleTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as blank:
             outbound.transcribe_audio("  ", environ={"WATCHREMOTE_STT_COMMAND": "/usr/bin/fake-stt"}, run=run)
         self.assertIn("Nothing was recorded", str(blank.exception))
+
+    def test_authorize_installs_a_restricted_key_without_a_chat_line(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            key_path = Path(directory) / "phone"
+            subprocess.run(
+                ["ssh-keygen", "-t", "ed25519", "-f", str(key_path), "-N", "", "-C", "watch-remote@iphone", "-q"],
+                check=True,
+            )
+            public = (Path(str(key_path) + ".pub")).read_text(encoding="utf-8").strip()
+            blob = public.split()[1]
+            keys = Path(directory) / "authorized_keys"
+            previous = os.environ.get("WATCHREMOTE_AUTHORIZED_KEYS")
+            os.environ["WATCHREMOTE_AUTHORIZED_KEYS"] = str(keys)
+            try:
+                reply = outbound.handle(outbound.AgentDown(), {"op": "authorize", "id": "k1", "publicKey": public})
+                again = outbound.handle(outbound.AgentDown(), {"op": "authorize", "id": "k2", "publicKey": public})
+                refused = outbound.handle(outbound.AgentDown(), {"op": "authorize", "id": "k3", "publicKey": "not a key"})
+            finally:
+                if previous is None:
+                    os.environ.pop("WATCHREMOTE_AUTHORIZED_KEYS", None)
+                else:
+                    os.environ["WATCHREMOTE_AUTHORIZED_KEYS"] = previous
+            self.assertEqual(reply["op"], "ok")
+            self.assertEqual(again["op"], "ok")
+            self.assertNotIn("Generate a key", json.dumps(reply))
+            text = keys.read_text(encoding="utf-8")
+            self.assertEqual(text.count(blob), 1)
+            self.assertTrue(pairing.exec_is_refused(text.strip()))
+            self.assertEqual(refused["op"], "error")
+            self.assertNotIn("not a key", refused["message"])
 
     def test_live_room_round_trip(self) -> None:
         probe = socket.socket()
