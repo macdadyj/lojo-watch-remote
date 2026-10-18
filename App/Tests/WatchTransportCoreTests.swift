@@ -47,6 +47,19 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertEqual(cursor.take(restarted).map(\.data), ["fresh"])
         XCTAssertEqual(cursor.epoch, "b")
         XCTAssertEqual(cursor.after, 1)
+        var restored = RelayPollCursor(after: 4, epoch: "a")
+        let replay = RelayPoll.Response(ok: true, epoch: "a", host: true, frames: [.init(seq: 4, data: "old"), .init(seq: 5, data: "new")])
+        XCTAssertEqual(restored.take(replay).map(\.data), ["new"])
+    }
+
+    func testAQueuedCommandReplyDoesNotApplyToANewCommand() {
+        let issued: Set<String> = ["new-start"]
+        XCTAssertFalse(WatchFrameFilter.accepts(op: .ok, id: "old-start", issued: issued))
+        XCTAssertFalse(WatchFrameFilter.accepts(op: .started, id: "old-start", issued: issued))
+        XCTAssertTrue(WatchFrameFilter.accepts(op: .started, id: "new-start", issued: issued))
+        XCTAssertTrue(WatchFrameFilter.accepts(op: .update, id: "push-12", issued: issued))
+        XCTAssertTrue(WatchFrameFilter.accepts(op: .sessions, id: "old-list", issued: issued))
+        XCTAssertFalse(WatchFrameFilter.accepts(op: .start, id: "new-start", issued: issued))
     }
 
     func testCountersFollowTheClockAndNeverRepeat() {

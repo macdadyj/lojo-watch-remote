@@ -5,8 +5,10 @@
 #   e2e/run-real-host-check.sh --no-install [real_host_check.py options]
 #   e2e/run-real-host-check.sh --only watch-alone
 #
-# watch and watch-alone are the same phone-free path: a Watch client polls the paired relay,
-# sends a prompt, and checks that the reply comes back after the prompt. No iPhone is involved.
+# watch and watch-alone are the same phone-free path through the paired public relay: a Watch
+# client polls POST /v1/watch, sends a prompt, and checks that the reply comes back after the
+# prompt. No iPhone is involved. That path is in the default run as watch. A frame the relay
+# still holds from an earlier Watch cannot count as this command's answer.
 # fresh is that path with no iPhone key yet: the Watch still gets an auto-approved answer, then
 # the computer authorizes a new key over the relay. The test key is removed afterward.
 #

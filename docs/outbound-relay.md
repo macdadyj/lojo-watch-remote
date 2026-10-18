@@ -62,7 +62,7 @@ Demo mode never opens the relay. A pairing QR without a relay URL never opens it
 
 | | |
 | --- | --- |
-| Room | one pairing token, one host, one Watch |
+| Room | one pairing token, one host, one Watch, one process. A second process makes the Watch see the computer as offline |
 | Auth | first text frame is the token; it is not logged |
 | After auth | binary frames only, forwarded as-is |
 | Rate limits | new sockets, bad tokens, and frames per connection |

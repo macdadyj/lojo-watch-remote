@@ -198,7 +198,10 @@ public struct RelayPollCursor: Equatable, Sendable {
     public private(set) var after = 0
     public private(set) var epoch = ""
 
-    public init() {}
+    public init(after: Int = 0, epoch: String = "") {
+        self.after = after
+        self.epoch = epoch
+    }
 
     /// Frames from one response that have not been seen yet, in order.
     /// A new epoch means the relay restarted or recreated the room: start counting again.
@@ -212,6 +215,25 @@ public struct RelayPollCursor: Equatable, Sendable {
             after = last.seq
         }
         return fresh
+    }
+}
+
+/// Which frames from one poll the Watch should apply.
+///
+/// The relay keeps host frames until a later poll acks them. A Watch that has not
+/// saved its cursor is handed that backlog again. Session updates describe the
+/// computer now and still apply. A command reply applies only when this Watch
+/// issued that id, so an old `ok` or `started` cannot satisfy a new command.
+public enum WatchFrameFilter {
+    public static func accepts(op: DirectMessage.Op, id: String, issued: Set<String>) -> Bool {
+        switch op {
+        case .sessions, .update:
+            return true
+        case .started, .ok, .pong, .restored, .transcript, .error:
+            return issued.contains(id)
+        case .list, .start, .approve, .deny, .stop, .ping, .resume, .transcribe, .authorize:
+            return false
+        }
     }
 }
 

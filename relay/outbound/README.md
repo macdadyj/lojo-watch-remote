@@ -55,6 +55,8 @@ The reply is `{"ok":true,"epoch":"...","host":true,"frames":[{"seq":13,"data":"<
 
 A room is one pairing token. It holds one host and one Watch. A new connection with the same role replaces the old one. A room with nobody connected is forgotten after 30 idle minutes. Frames are not written to disk. Restarting the process drops every room. Both sides connect again.
 
+Run one process. The rooms are in that process's memory. A second process behind the same address keeps the computer's socket on one process and the Watch's poll on the other, so the Watch is told the computer is offline while the computer is connected. Put the proxy in front of that single process. Do not add a second replica.
+
 ## Docker
 
 ```bash

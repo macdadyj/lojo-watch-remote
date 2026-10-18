@@ -122,10 +122,10 @@ class WatchPathTests(unittest.TestCase):
 
     def ask(self, op: str, **fields: object) -> dict:
         ident = self.watch.send(op, **fields)
-        return self.watch.wait_for(lambda message: message.get("id") == ident)
+        return self.watch.reply(ident)
 
     def started(self, ident: str) -> str:
-        reply = self.watch.wait_for(lambda message: message.get("id") == ident)
+        reply = self.watch.reply(ident)
         self.assertEqual(reply.get("op"), "started", reply)
         return str(reply["sessionID"])
 
@@ -214,7 +214,7 @@ class WatchPathTests(unittest.TestCase):
         deadline = time.time() + 20
         while True:
             ident = self.watch.send("start", prompt="Again")
-            reply = self.watch.wait_for(lambda message: message.get("id") == ident)
+            reply = self.watch.reply(ident)
             if reply.get("op") == "started":
                 break
             self.assertIn("not answering", reply.get("message", ""))
@@ -228,7 +228,7 @@ class WatchPathTests(unittest.TestCase):
         fresh.after = self.watch.after
         fresh.epoch = self.watch.epoch
         ident = fresh.send("list")
-        listed = fresh.wait_for(lambda message: message.get("id") == ident)
+        listed = fresh.reply(ident)
         self.assertEqual(listed["op"], "sessions")
 
     def test_a_long_used_grok_does_not_knock_the_computer_off_the_relay(self) -> None:
@@ -264,6 +264,45 @@ class WatchPathTests(unittest.TestCase):
         self.relay = start_relay(self.relay_port)
         self.watch.inbox.clear()
         self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: I can hear you."), timeout=15)
+
+    def test_a_queued_reply_from_an_earlier_watch_is_not_this_command(self) -> None:
+        """The public relay keeps host frames until a later poll acks them.
+
+        A new Watch stand-in, the same HTTP poll the Watch app uses, must not treat that
+        backlog as the answer to its own start. That is the phone-free path.
+        """
+        leaver = HttpWatch(f"http://127.0.0.1:{self.relay_port}", TOKEN, KEY)
+        deadline = time.time() + 10
+        while time.time() < deadline and not leaver.host_online:
+            leaver.poll()
+            time.sleep(0.05)
+        self.assertTrue(leaver.host_online)
+        left = leaver.send("list")
+        if not any(message.get("id") == left for message in leaver.inbox):
+            leaver.poll(wait_ms=1000)
+        self.assertTrue(any(message.get("id") == left and message.get("op") == "sessions" for message in leaver.inbox))
+        fresh = HttpWatch(f"http://127.0.0.1:{self.relay_port}", TOKEN, KEY)
+        fresh.counter = leaver.counter
+        ident = fresh.send("start", prompt="Can you hear me", autoApprove=True)
+        reply = fresh.reply(ident, timeout=10)
+        self.assertEqual(reply.get("op"), "started", reply)
+        self.assertNotEqual(reply.get("id"), left)
+        fresh.poll(wait_ms=0)
+        third = HttpWatch(f"http://127.0.0.1:{self.relay_port}", TOKEN, KEY)
+        third.counter = fresh.counter
+        opened = third.poll()
+        self.assertFalse(any(message.get("id") == left for message in opened), opened)
+
+
+class InboxMatchTests(unittest.TestCase):
+    def test_a_frame_already_in_the_inbox_is_not_this_command(self) -> None:
+        watch = HttpWatch("http://127.0.0.1:9", TOKEN, KEY)
+        watch.inbox.append({"id": "same", "op": "ok"})
+        watch.issued["same"] = len(watch.inbox)
+        watch.inbox.append({"id": "same", "op": "started", "sessionID": "session"})
+        found = watch.reply("same", timeout=1)
+        self.assertEqual(found["op"], "started")
+        self.assertEqual(found["sessionID"], "session")
 
 
 class HostUnitTests(unittest.TestCase):

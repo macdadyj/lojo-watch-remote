@@ -12,6 +12,7 @@ import io
 import json
 import time
 import urllib.error
+import uuid
 from email.message import Message
 from typing import Callable
 from urllib.parse import urlsplit
@@ -35,7 +36,8 @@ class HttpWatch:
         self.host_online = False
         self.http_version = 0
         self.inbox: list[dict] = []
-        self.next_id = 0
+        # Inbox index at the moment each command was sent. Earlier frames are a previous Watch's backlog.
+        self.issued: dict[str, int] = {}
 
     def poll(self, send: list[dict] | None = None, wait_ms: int = 0) -> list[dict]:
         frames = []
@@ -104,17 +106,22 @@ class HttpWatch:
         return raw
 
     def send(self, op: str, **fields: object) -> str:
-        self.next_id += 1
-        ident = f"w{self.next_id}"
+        # A fresh process used to count w1, w2 again. The relay still holds those ids until acked.
+        ident = uuid.uuid4().hex
         message = {"op": op, "id": ident}
         message.update({key: value for key, value in fields.items() if value is not None})
+        self.issued[ident] = len(self.inbox)
         self.poll([message])
         return ident
 
-    def wait_for(self, predicate, timeout: float = 15.0) -> dict:
+    def reply(self, ident: str, timeout: float = 15.0) -> dict:
+        """The host frame for `ident` that arrived with or after the command. An older frame with that id is ignored."""
+        return self.wait_for(lambda message: message.get("id") == ident, timeout=timeout, start=self.issued.get(ident, 0))
+
+    def wait_for(self, predicate, timeout: float = 15.0, start: int = 0) -> dict:
         deadline = time.time() + timeout
         while True:
-            for message in self.inbox:
+            for message in self.inbox[start:]:
                 if predicate(message):
                     return message
             remaining = deadline - time.time()
