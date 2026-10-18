@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import os
 import platform
@@ -441,11 +442,14 @@ class WatchSide:
             time.sleep(1)
             self.watch.poll(wait_ms=0)
         expect(self.watch.host_online, f"the relay at {self.base} says this computer's outbound service is offline")
+        # Same prefix the relay writes in its log (`room`). It is not the token.
+        room = hashlib.sha256(self.watch.token.encode()).hexdigest()[:8]
+        print(f"  public relay room {room}", flush=True)
 
     def start(self, prompt: str, session_id: str | None = None) -> str:
         ident = self.watch.send("start", prompt=prompt, sessionID=session_id, autoApprove=True)
         self.recording.add({"k": "relay-out", "f": {"op": "start", "id": ident, "sessionID": session_id, "prompt": prompt}})
-        started = self.watch.wait_for(lambda message: message.get("id") == ident, timeout=30)
+        started = self.watch.reply(ident, timeout=30)
         expect(started.get("op") == "started", f"the computer answered the Watch start with {started}")
         return str(started.get("sessionID") or session_id or "")
 
@@ -476,7 +480,7 @@ class WatchSide:
 
     def resume(self, session_id: str) -> list[str]:
         ident = self.watch.send("resume", sessionID=session_id)
-        restored = self.watch.wait_for(lambda message: message.get("id") == ident, timeout=30)
+        restored = self.watch.reply(ident, timeout=30)
         return [str(line) for line in restored.get("lines") or []]
 
 
@@ -519,7 +523,7 @@ def scenario_fresh(ctx: Context, recording: Recording) -> str:
                 f"fresh install: the key setup error landed in the chat: {line[:300]!r}",
             )
         ident = side.watch.send("authorize", publicKey=public)
-        reply = side.watch.wait_for(lambda message: message.get("id") == ident, timeout=30)
+        reply = side.watch.reply(ident, timeout=30)
         expect(reply.get("op") == "ok", f"the computer did not authorize the fresh key: {reply}")
         text = keys.read_text(encoding="utf-8") if keys.is_file() else ""
         expect(blob in text, "the fresh key was not written")

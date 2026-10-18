@@ -8,7 +8,7 @@ enum DirectKeychain {
     private static let account = "pairing"
     private static let countersAccount = "counters"
     private static var memory: DirectPairing?
-    private static var memoryCounters: (send: UInt64, recv: UInt64)?
+    private static var memoryCounters: (send: UInt64, recv: UInt64, after: Int, epoch: String)?
 
     static func save(_ pairing: DirectPairing) {
         guard let text = pairing.jsonText(), let data = text.data(using: .utf8) else { return }
@@ -31,20 +31,29 @@ enum DirectKeychain {
         SecItemDelete(base(account: countersAccount) as CFDictionary)
     }
 
-    static func saveCounters(send: UInt64, recv: UInt64) {
-        let text = #"{"recv":\#(recv),"send":\#(send)}"#
-        memoryCounters = (send, recv)
-        write(Data(text.utf8), account: countersAccount)
+    static func saveCounters(send: UInt64, recv: UInt64, after: Int, epoch: String) {
+        let payload: [String: Any] = [
+            "after": after,
+            "epoch": epoch,
+            "recv": NSNumber(value: recv),
+            "send": NSNumber(value: send),
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return }
+        memoryCounters = (send, recv, after, epoch)
+        write(data, account: countersAccount)
     }
 
-    static func counters() -> (send: UInt64, recv: UInt64) {
+    static func counters() -> (send: UInt64, recv: UInt64, after: Int, epoch: String) {
         if let memoryCounters { return memoryCounters }
         guard let data = read(account: countersAccount),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (0, 0) }
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (0, 0, 0, "") }
         let send = (object["send"] as? NSNumber)?.uint64Value ?? 0
         let recv = (object["recv"] as? NSNumber)?.uint64Value ?? 0
-        memoryCounters = (send, recv)
-        return (send, recv)
+        let after = (object["after"] as? NSNumber)?.intValue ?? 0
+        let epoch = object["epoch"] as? String ?? ""
+        let saved = (send, recv, after, epoch)
+        memoryCounters = saved
+        return saved
     }
 
     private static func write(_ data: Data, account: String) {
@@ -122,7 +131,8 @@ final class DirectSession: ObservableObject {
     private var replay = RelayReplay()
     private var cursor = RelayPollCursor()
     private var outbox: [Data] = []
-    private var next = 0
+    /// Command ids this process sent. A frame left in the relay queue from an earlier launch does not answer them.
+    private var issued = Set<String>()
     private var generation = 0
     private var loop: Task<Void, Never>?
     private var inflightWaits = false
@@ -174,6 +184,7 @@ final class DirectSession: ObservableObject {
         let saved = DirectKeychain.counters()
         sendCounter = saved.send
         replay = RelayReplay.restored(highest: saved.recv)
+        cursor = RelayPollCursor(after: saved.after, epoch: saved.epoch)
     }
 
     func ingest(_ text: String, resetCounters: Bool = false) {
@@ -194,7 +205,8 @@ final class DirectSession: ObservableObject {
         if changed || resetCounters {
             replay = RelayReplay()
             cursor = RelayPollCursor()
-            DirectKeychain.saveCounters(send: sendCounter, recv: 0)
+            issued.removeAll()
+            DirectKeychain.saveCounters(send: sendCounter, recv: 0, after: 0, epoch: "")
         }
         if changed {
             outbox.removeAll()
@@ -471,6 +483,7 @@ final class DirectSession: ObservableObject {
             guard let data = Data(base64Encoded: frame.data) else { continue }
             open(data)
         }
+        DirectKeychain.saveCounters(send: sendCounter, recv: replay.highest, after: cursor.after, epoch: cursor.epoch)
     }
 
     /// One lost poll is normal after a wrist raise. Only a second one in a row is shown.
@@ -523,7 +536,7 @@ final class DirectSession: ObservableObject {
     private func open(_ data: Data) {
         do {
             let plain = try RelayBox.open(frame: data, key: key, expecting: .hostToWatch, replay: &replay)
-            DirectKeychain.saveCounters(send: sendCounter, recv: replay.highest)
+            DirectKeychain.saveCounters(send: sendCounter, recv: replay.highest, after: cursor.after, epoch: cursor.epoch)
             guard let message = DirectMessage.decode(plain) else { return }
             apply(message)
         } catch RelayBoxError.replayed {
@@ -534,6 +547,7 @@ final class DirectSession: ObservableObject {
     }
 
     private func apply(_ message: DirectMessage) {
+        guard WatchFrameFilter.accepts(op: message.op, id: message.id, issued: issued) else { return }
         switch message.op {
         case .sessions, .update:
             if let sessions = message.sessions {
@@ -574,10 +588,11 @@ final class DirectSession: ObservableObject {
     @discardableResult
     private func enqueue(_ message: DirectMessage) -> Bool {
         guard let pairing, let plain = DirectMessage.encode(message), let key = RelayMaterial.keyData(pairing.key) else { return false }
+        issued.insert(message.id)
         sendCounter = RelayCounter.next(after: sendCounter)
         do {
             let frame = try RelayBox.seal(plaintext: plain, key: key, direction: .watchToHost, counter: sendCounter)
-            DirectKeychain.saveCounters(send: sendCounter, recv: replay.highest)
+            DirectKeychain.saveCounters(send: sendCounter, recv: replay.highest, after: cursor.after, epoch: cursor.epoch)
             outbox.append(frame)
             if outbox.count > 32 {
                 outbox.removeFirst(outbox.count - 32)
@@ -620,8 +635,7 @@ final class DirectSession: ObservableObject {
     }
 
     private func freshID() -> String {
-        next += 1
-        return "w\(next)"
+        UUID().uuidString.lowercased()
     }
 
     private static func failure(for error: Error) -> RelayPoll.WatchPollFailure {
