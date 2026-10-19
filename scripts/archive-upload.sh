@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Archive with manual distribution signing and upload to TestFlight.
 # The App Store Connect API key creates a new iOS Distribution certificate
-# and App Store profiles. Existing certificates are never touched. On exit, success
+# and App Store profiles. A certificate with any other name is never revoked.
+# If Apple refuses a new one, this script revokes one earlier certificate whose
+# name is Watch Remote Distribution, then tries once more. On exit, success
 # or failure, it deletes the profiles it created and revokes only the distribution
 # certificate it created in this run, so certificates never pile up.
 # Does not print secret values. Deletes the API key, keychain, and profiles on exit.

@@ -24,6 +24,9 @@ from pathlib import Path
 API_ROOT = "https://api.appstoreconnect.apple.com"
 PROFILE_TYPE = "IOS_APP_STORE"
 CERTIFICATE_TYPE = "IOS_DISTRIBUTION"
+# The common name on every CSR this script submits. A certificate with any
+# other name is never revoked, even when Apple refuses a new one.
+OWN_CERTIFICATE_NAME = "Watch Remote Distribution"
 TARGETS = (
     ("com.lojo.WatchRemote", "WatchRemote App Store"),
     ("com.lojo.WatchRemote.watchkitapp", "WatchRemoteWatch App Store"),
@@ -245,8 +248,8 @@ def delete_profile(token, profile_id):
     stop_api(status, body, "profile delete")
 
 
-def create_certificate(token, csr_text):
-    status, body = api(
+def post_certificate(token, csr_text):
+    return api(
         token,
         "POST",
         "/v1/certificates",
@@ -260,12 +263,69 @@ def create_certificate(token, csr_text):
             }
         },
     )
+
+
+def certificate_from_response(status, body):
     parsed = parse_data(status, body, "certificate")
     attributes = parsed["data"].get("attributes", {})
     content = attributes.get("certificateContent")
     if not content:
         stop_api(status, body, "certificate")
     return parsed["data"]["id"], base64.b64decode(content)
+
+
+def stale_distribution_certificate(certificates):
+    """The oldest distribution certificate this script named, or None.
+
+    Certificates with any other name are left alone.
+    """
+    owned = []
+    for item in certificates:
+        attributes = item.get("attributes") or {}
+        if attributes.get("certificateType") not in (None, CERTIFICATE_TYPE):
+            continue
+        label = attributes.get("name") or attributes.get("displayName") or ""
+        if label != OWN_CERTIFICATE_NAME:
+            continue
+        identifier = item.get("id") or ""
+        if not identifier:
+            continue
+        owned.append((attributes.get("expirationDate") or "", identifier))
+    if not owned:
+        return None
+    owned.sort()
+    return owned[0][1]
+
+
+def release_one_own_certificate(token):
+    """Revoke one earlier certificate this script named. Returns True when one is gone."""
+    query = urllib.parse.urlencode(
+        {"filter[certificateType]": CERTIFICATE_TYPE, "limit": "200"}
+    )
+    status, body = api(token, "GET", "/v1/certificates?" + query)
+    if status != 200:
+        return False
+    try:
+        rows = json.loads(body).get("data") or []
+    except json.JSONDecodeError:
+        return False
+    identifier = stale_distribution_certificate(rows)
+    if not identifier:
+        return False
+    delete_status, _body = api(token, "DELETE", "/v1/certificates/" + urllib.parse.quote(identifier))
+    return delete_status in (204, 404)
+
+
+def create_certificate(token, csr_text):
+    status, body = post_certificate(token, csr_text)
+    if status not in (200, 201) and certificate_limit(body):
+        if release_one_own_certificate(token):
+            print(
+                "Revoked one earlier Watch Remote Distribution certificate left by a previous run.",
+                flush=True,
+            )
+            status, body = post_certificate(token, csr_text)
+    return certificate_from_response(status, body)
 
 
 def create_profile(token, name, bundle_resource_id, certificate_id):
@@ -512,6 +572,72 @@ def cleanup():
         raise SystemExit(1)
 
 
+def stale_certificate_roundtrip():
+    rows = [
+        {"id": "HUMAN", "attributes": {"name": "Jane Developer", "certificateType": "IOS_DISTRIBUTION", "expirationDate": "2026-01-01T00:00:00Z"}},
+        {"id": "NEWER", "attributes": {"name": "Watch Remote Distribution", "certificateType": "IOS_DISTRIBUTION", "expirationDate": "2027-01-01T00:00:00Z"}},
+        {"id": "OLD", "attributes": {"displayName": "Watch Remote Distribution", "certificateType": "IOS_DISTRIBUTION", "expirationDate": "2026-06-01T00:00:00Z"}},
+        {"attributes": {"name": "Watch Remote Distribution", "expirationDate": "2025-01-01T00:00:00Z"}},
+    ]
+    if stale_distribution_certificate(rows) != "OLD":
+        raise SystemExit("did not choose the oldest certificate this script named")
+    if stale_distribution_certificate([rows[0]]) is not None:
+        raise SystemExit("a differently named certificate was selected")
+    if stale_distribution_certificate([]) is not None:
+        raise SystemExit("an empty certificate list was not left alone")
+    shell = Path(__file__).with_name("archive-upload.sh").read_text()
+    if "CN = Watch Remote Distribution" not in shell:
+        raise SystemExit("the CSR name no longer matches the certificate this script may revoke")
+
+
+def certificate_limit_retries_once():
+    calls = []
+    real_api = globals()["api"]
+
+    def fake_api(token, method, path, payload=None):
+        calls.append((method, path))
+        if method == "POST" and path == "/v1/certificates":
+            posts = [item for item in calls if item[0] == "POST"]
+            if len(posts) == 1:
+                return 409, (
+                    '{"errors":[{"detail":"You already have a current iOS Distribution '
+                    'certificate or a pending certificate request."}]}'
+                )
+            return 201, json.dumps(
+                {
+                    "data": {
+                        "id": "NEWCERT",
+                        "attributes": {"certificateContent": base64.b64encode(b"new-der").decode()},
+                    }
+                }
+            )
+        if method == "GET" and path.startswith("/v1/certificates?"):
+            return 200, json.dumps(
+                {
+                    "data": [
+                        {"id": "HUMAN", "attributes": {"name": "Jane Developer", "certificateType": "IOS_DISTRIBUTION", "expirationDate": "2026-01-01T00:00:00Z"}},
+                        {"id": "OLD", "attributes": {"name": "Watch Remote Distribution", "certificateType": "IOS_DISTRIBUTION", "expirationDate": "2026-06-01T00:00:00Z"}},
+                        {"id": "NEWER", "attributes": {"name": "Watch Remote Distribution", "certificateType": "IOS_DISTRIBUTION", "expirationDate": "2027-01-01T00:00:00Z"}},
+                    ]
+                }
+            )
+        if method == "DELETE" and path == "/v1/certificates/OLD":
+            return 204, ""
+        return 500, "unexpected"
+
+    globals()["api"] = fake_api
+    try:
+        identifier, der = create_certificate("token", "csr")
+    finally:
+        globals()["api"] = real_api
+    if identifier != "NEWCERT" or der != b"new-der":
+        raise SystemExit("retry did not return the new certificate")
+    if ("DELETE", "/v1/certificates/HUMAN") in calls or ("DELETE", "/v1/certificates/NEWER") in calls:
+        raise SystemExit("retry revoked a certificate it should have left alone")
+    if ("DELETE", "/v1/certificates/OLD") not in calls:
+        raise SystemExit("retry did not revoke the oldest named certificate")
+
+
 def self_test():
     der_roundtrip()
     jwt_roundtrip()
@@ -519,6 +645,8 @@ def self_test():
     export_roundtrip()
     forbidden_roundtrip()
     cleanup_roundtrip()
+    stale_certificate_roundtrip()
+    certificate_limit_retries_once()
     print("asc signing ok")
 
 
