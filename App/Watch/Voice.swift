@@ -394,7 +394,7 @@ struct VoiceChatView: View {
                 Label("Chats", systemImage: "chevron.backward")
                     .labelStyle(.titleAndIcon)
                     .font(.caption2.weight(.semibold))
-                    .frame(minHeight: 26, alignment: .leading)
+                    .frame(minWidth: 44, minHeight: 26, alignment: .leading)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -404,9 +404,15 @@ struct VoiceChatView: View {
             .accessibilityIdentifier("chat.toList")
             if !chatTitle.isEmpty {
                 titleText
-            } else {
-                Spacer(minLength: 0)
             }
+            Text(WatchRouting.statusLine(notice: model.connectionNotice, pathTitle: model.pathTitle))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(model.connectionNotice == nil && model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readableSecondary(scheme))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .layoutPriority(1)
+                .accessibilityLabel("Connection. \(WatchRouting.statusLine(notice: model.connectionNotice, pathTitle: model.pathTitle))")
+                .accessibilityIdentifier("chat.link")
         }
         .padding(.horizontal, 10)
     }

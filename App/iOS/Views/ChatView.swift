@@ -95,15 +95,31 @@ struct ChatListView: View {
     }
 
     private var connectionLine: some View {
-        HStack(spacing: 8) {
-            StatusMark(status: mark(for: store.link), size: 10)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Circle()
+                .fill(connectionColor)
+                .frame(width: 10, height: 10)
+                .accessibilityHidden(true)
             Text(store.statusLine)
-                .font(.subheadline)
-                .foregroundStyle(LojoTheme.secondaryText)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(store.statusLine)
+        .accessibilityLabel("Connection. \(store.statusLine)")
+        .accessibilityIdentifier("chat.connection")
+    }
+
+    private var connectionColor: Color {
+        switch store.link {
+        case .connected, .demo:
+            return LojoTheme.online
+        case .connecting, .needsPairing, .phoneAway:
+            return LojoTheme.warning
+        case .offline:
+            return LojoTheme.danger
+        }
     }
 
     private var empty: some View {
@@ -279,6 +295,18 @@ struct ChatThreadView: View {
         .background(canvas)
         .navigationTitle(current?.title ?? "Chat")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(true)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    store.selectedSessionID = nil
+                } label: {
+                    Label("Chats", systemImage: "chevron.backward")
+                }
+                .accessibilityLabel("Back to chats")
+                .accessibilityIdentifier("chat.back")
+            }
+        }
         .task(id: sessionID) {
             followLatest = true
             pinRequest += 1
@@ -352,7 +380,7 @@ struct ChatThreadView: View {
         if let current {
             HStack(spacing: 8) {
                 StatusMark(status: current.status)
-                Text(current.status == .idle ? "Chat" : current.status.title)
+                Text(current.status == .idle ? "Ready" : current.status.title)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(LojoTheme.secondaryText)
                     .accessibilityIdentifier("chat.thread")
@@ -637,14 +665,21 @@ struct ChatBlockRow: View {
             }
         } else {
             messageText(text, mine: false)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05))
+                )
         }
     }
 
     private func messageText(_ text: String, mine: Bool) -> some View {
         Text(markdown(text))
             .font(.body)
-            .foregroundStyle(mine ? Color.white : Color.primary)
+            .lineSpacing(3)
+            .foregroundStyle(mine ? Color.white : LojoTheme.readablePrimary(scheme))
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier(latest ? "chat.latest" : (oldest ? "chat.oldest" : "chat.line"))
     }

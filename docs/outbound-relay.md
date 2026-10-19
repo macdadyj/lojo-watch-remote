@@ -1,6 +1,6 @@
 # Watch without the iPhone
 
-The iPhone path is unchanged. The iPhone holds SSH to the computer over the private overlay, and the Watch can keep using that path. It shows **via iPhone** while the iPhone app is reachable.
+The iPhone path is unchanged. The iPhone holds SSH to the computer over the private overlay, and the Watch can keep using that path. It shows **Through iPhone** while the iPhone app is reachable.
 
 That path stops when the iPhone is left behind. The Watch cannot join the private overlay, and SSH on the computer stays off the public internet. The way across that gap is an outbound relay you host yourself.
 
@@ -48,13 +48,13 @@ This repository does not deploy a relay and does not create any cloud resources.
 
 5. On the iPhone, open **Computer**, tap **Scan QR code**, confirm the fingerprint, copy the authorize command, run it on the computer, and tap **Test connection**. The iPhone sends the direct pairing to the Watch over WatchConnectivity. The Watch stores it in its own Keychain. It does not stay only on the iPhone.
 
-6. Leave the iPhone. Open Watch Remote on the Watch, on Wi-Fi or cellular. The header says **direct**. Sessions, New task, Allow, Deny, and Stop use that path. When the iPhone is in reach again, the header says **via iPhone** and the Watch uses the phone.
+6. Leave the iPhone. Open Watch Remote on the Watch, on Wi-Fi or cellular. The header says **On this Watch**. Sessions, New task, Allow, Deny, and Stop use that path. When the iPhone is in reach again, the header says **Through iPhone** and the Watch uses the phone.
 
 ## What the Watch can and cannot do alone
 
 Lowering the wrist does not end a listen and does not mean the pairing was rejected. While the Watch is listening it starts an extended runtime session so recording can continue. If watchOS suspends the app anyway, the samples already captured stay in memory and the direct pairing stays in the Watch Keychain. Raising the wrist resumes that listen. A dropped socket retries with backoff and the screen says **Reconnecting…** only when the display is on. That is not a new pairing. The sentence **This relay did not accept this pairing** appears only when the relay's auth reply is explicitly not ok. Then the Watch asks the iPhone to open the pairing screen.
 
-A task you already started keeps running on the computer. Allow and Deny work while the header says **direct**. If the relay or the computer is down, the screen says so in plain words and keeps the last list. The host outbound client is unchanged.
+A task you already started keeps running on the computer. Allow and Deny work while the header says **On this Watch**. If the relay or the computer is down, the screen says so in plain words and keeps the last list. The host outbound client is unchanged.
 
 Demo mode never opens the relay. A pairing QR without a relay URL never opens it either.
 

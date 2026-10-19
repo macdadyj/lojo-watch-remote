@@ -123,6 +123,25 @@ public enum WatchRouting {
         return relayHostOnline == false ? RelayUserNotice.computerOfflineText : nil
     }
 
+    /// The words a person sees for a path. Diagnostics keep the short internal name.
+    public static func routeTitle(_ pathTitle: String) -> String {
+        if pathTitle == "direct" {
+            return "On this Watch"
+        }
+        if pathTitle == "via iPhone" {
+            return "Through iPhone"
+        }
+        return pathTitle
+    }
+
+    /// One status line. A link problem replaces the route name.
+    public static func statusLine(notice: String?, pathTitle: String) -> String {
+        if let notice, !notice.isEmpty {
+            return notice
+        }
+        return routeTitle(pathTitle)
+    }
+
     static func fold(_ text: String) -> String {
         text.lowercased()
             .split(whereSeparator: { $0.isWhitespace })

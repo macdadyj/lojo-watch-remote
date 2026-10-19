@@ -11,12 +11,12 @@ final class WatchPhoneOffUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// a. Home stays on screen, the path is direct, and the Action Button control is the default.
+    /// a. Home stays on screen, the path is the Watch's own link, and the Action Button control is the default.
     func testAPhoneOffHomeShowsDirectAndPauseToSend() throws {
         let app = launch()
         let list = app.scrollViews["session.list"]
         XCTAssertTrue(list.waitForExistence(timeout: 40), "home session list did not appear")
-        XCTAssertTrue(app.staticTexts["Path direct"].waitForExistence(timeout: 4), "phone-off home did not show the direct path")
+        XCTAssertTrue(app.staticTexts["On this Watch"].waitForExistence(timeout: 4), "phone-off home did not show the Watch path")
         let action = app.buttons["voice.action"]
         XCTAssertTrue(action.waitForExistence(timeout: 4), "Action Button control is missing")
         XCTAssertEqual(action.label, "Action Button")
