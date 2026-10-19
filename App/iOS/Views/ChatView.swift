@@ -532,13 +532,13 @@ struct ChatThreadView: View {
                 }
             } label: {
                 Image(systemName: dictation.listening ? "stop.circle.fill" : "mic.circle.fill")
-                    .font(.system(size: 32))
+                    .font(.system(size: 32, relativeTo: .title))
             }
             .accessibilityLabel(dictation.listening ? "Stop dictation" : "Dictate")
             .accessibilityIdentifier("chat.dictate")
             Button(action: sendDraft) {
                 Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 32))
+                    .font(.system(size: 32, relativeTo: .title))
             }
             .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             .accessibilityLabel("Send")

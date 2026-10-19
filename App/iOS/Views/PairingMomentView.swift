@@ -77,7 +77,7 @@ struct PairingMomentView: View {
     private var ready: some View {
         VStack(alignment: .leading, spacing: 18) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 72))
+                .font(.system(size: 72, relativeTo: .largeTitle))
                 .foregroundStyle(LojoTheme.online)
                 .scaleEffect(celebrate ? 1 : 0.6)
                 .opacity(celebrate ? 1 : 0)
@@ -98,7 +98,7 @@ struct PairingMomentView: View {
     private func problem(_ message: String) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Image(systemName: "exclamationmark.circle.fill")
-                .font(.system(size: 48))
+                .font(.system(size: 48, relativeTo: .largeTitle))
                 .foregroundStyle(LojoTheme.danger)
             Text("Not connected")
                 .font(.title.weight(.bold))

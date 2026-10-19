@@ -12,17 +12,22 @@ SIZE = 1024
 def icon() -> Image.Image:
     image = Image.new("RGB", (SIZE, SIZE))
     pixels = image.load()
-    teal = (15, 140, 148)
-    indigo = (38, 46, 120)
+    teal = (18, 148, 156)
+    indigo = (28, 38, 112)
     for y in range(SIZE):
         for x in range(SIZE):
-            t = (x + y) / (2 * (SIZE - 1))
-            pixels[x, y] = tuple(int(teal[i] + (indigo[i] - teal[i]) * t) for i in range(3))
+            blend = (x * 0.35 + y * 0.65) / (SIZE - 1)
+            pixels[x, y] = tuple(int(teal[i] + (indigo[i] - teal[i]) * blend) for i in range(3))
     draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((392, 250, 632, 774), radius=120, outline=(255, 255, 255), width=36)
-    draw.ellipse((452, 392, 572, 512), outline=(255, 255, 255), width=28)
-    draw.line((512, 452, 512, 400), fill=(255, 255, 255), width=18)
-    draw.line((512, 452, 560, 480), fill=(255, 255, 255), width=18)
+    face = (14, 32, 64)
+    # A filled case stays readable at 60 pt and inside the round Watch mask.
+    draw.rounded_rectangle((340, 188, 684, 836), radius=168, fill=(255, 255, 255))
+    draw.rounded_rectangle((388, 236, 636, 788), radius=136, fill=face)
+    draw.rounded_rectangle((684, 470, 736, 554), radius=18, fill=(255, 255, 255))
+    draw.ellipse((444, 444, 580, 580), outline=(255, 255, 255), width=22)
+    draw.line((512, 512, 512, 470), fill=(255, 255, 255), width=16)
+    draw.line((512, 512, 548, 540), fill=(255, 255, 255), width=16)
+    draw.ellipse((502, 502, 522, 522), fill=(255, 255, 255))
     return image
 
 
