@@ -20,7 +20,12 @@ final class WatchTransportCoreTests: XCTestCase {
         let decoded = try XCTUnwrap(RelayPoll.decode(reply))
         XCTAssertTrue(decoded.ok)
         XCTAssertEqual(decoded.host, false)
+        XCTAssertNil(decoded.hostSeen)
         XCTAssertEqual(decoded.frames, [RelayPoll.Frame(seq: 5, data: "AA==")])
+        let seen = Data(#"{"ok":true,"epoch":"e1","host":false,"hostSeen":false,"frames":[]}"#.utf8)
+        XCTAssertEqual(RelayPoll.decode(seen)?.hostSeen, false)
+        let remembered = Data(#"{"ok":true,"host":false,"hostSeen":true}"#.utf8)
+        XCTAssertEqual(RelayPoll.decode(remembered)?.hostSeen, true)
         XCTAssertEqual(RelayPoll.decode(Data(#"{"ok":false,"error":"rate"}"#.utf8))?.error, "rate")
     }
 
@@ -301,6 +306,73 @@ final class WatchTransportCoreTests: XCTestCase {
             "Sending"
         )
         XCTAssertEqual(WatchRouting.turnStatus(current: "Speaking", computerOffline: true, slow: true), "Speaking")
+        XCTAssertEqual(
+            WatchRouting.notice(
+                hasRelayPairing: true, relayUp: true, relayTrouble: false, relayHostOnline: false, phoneReachable: false,
+                hostSeen: nil, unhostedPolls: 20
+            ),
+            RelayUserNotice.computerOfflineText,
+            "an older relay omits hostSeen and stays Computer offline"
+        )
+        XCTAssertEqual(
+            WatchRouting.notice(
+                hasRelayPairing: true, relayUp: true, relayTrouble: false, relayHostOnline: false, phoneReachable: false,
+                hostSeen: false, unhostedPolls: WatchRouting.staleHostPolls - 1
+            ),
+            RelayUserNotice.computerOfflineText
+        )
+        XCTAssertEqual(
+            WatchRouting.notice(
+                hasRelayPairing: true, relayUp: true, relayTrouble: false, relayHostOnline: false, phoneReachable: false,
+                hostSeen: false, unhostedPolls: WatchRouting.staleHostPolls
+            ),
+            RelayUserNotice.repairNeededText
+        )
+        XCTAssertEqual(
+            WatchRouting.notice(
+                hasRelayPairing: true, relayUp: true, relayTrouble: false, relayHostOnline: false, phoneReachable: false,
+                hostSeen: true, unhostedPolls: 20
+            ),
+            RelayUserNotice.computerOfflineText,
+            "a computer that left is offline, not a stale pairing"
+        )
+        XCTAssertNil(
+            WatchRouting.notice(
+                hasRelayPairing: true, relayUp: true, relayTrouble: false, relayHostOnline: false, phoneReachable: true,
+                hostSeen: false, unhostedPolls: 20
+            )
+        )
+        XCTAssertEqual(
+            WatchRouting.notice(
+                hasRelayPairing: true, relayUp: true, relayTrouble: false, relayHostOnline: false, phoneReachable: true,
+                phoneCanSSH: false, hostSeen: false, unhostedPolls: WatchRouting.staleHostPolls
+            ),
+            RelayUserNotice.repairNeededText
+        )
+        XCTAssertEqual(WatchRouting.connectionBanner(RelayUserNotice.repairNeededText), RelayUserNotice.repairNeededSteps)
+        XCTAssertEqual(WatchRouting.connectionBanner(RelayUserNotice.computerOfflineText), RelayUserNotice.computerOfflineText)
+        XCTAssertTrue(RelayUserNotice.isConnectionNotice(RelayUserNotice.repairNeededText))
+        XCTAssertTrue(RelayUserNotice.isConnectionNotice(RelayUserNotice.repairNeededSteps))
+        XCTAssertTrue(RelayUserNotice.isLinkFailure(RelayUserNotice.repairNeededText))
+        XCTAssertFalse(ChatTranscript.isStatusNoise(RelayUserNotice.repairNeededSteps))
+        XCTAssertNotEqual(RelayUserNotice.repairNeededText, RelayUserNotice.computerOfflineText)
+        XCTAssertNotEqual(RelayUserNotice.repairNeededText, RelayUserNotice.reconnectingText)
+        XCTAssertTrue(PairingRepair.sshKeyRejected("Login as me was denied. Add this iPhone’s key to authorized_keys on the computer."))
+        XCTAssertTrue(PairingRepair.sshKeyRejected("Generate a key on this iPhone, then authorize it on the computer."))
+        XCTAssertFalse(PairingRepair.sshKeyRejected("Host key not trusted"))
+        XCTAssertFalse(PairingRepair.sshKeyRejected("Can’t connect: timed out. Is the VPN up?"))
+        XCTAssertEqual(
+            WatchRouting.turnStatus(current: "Sent", computerOffline: false, slow: true, repair: true),
+            RelayUserNotice.repairNeededText
+        )
+        XCTAssertEqual(
+            WatchRouting.turnStatus(current: RelayUserNotice.stillWaitingText, computerOffline: false, slow: true, repair: true),
+            RelayUserNotice.repairNeededText
+        )
+        XCTAssertEqual(
+            WatchRouting.turnStatus(current: RelayUserNotice.repairNeededText, computerOffline: false, slow: false, repair: false),
+            "Sending"
+        )
     }
 
     func testNoNetworkSendsTurnsThroughThePhoneWhenItIsReachable() {

@@ -115,11 +115,35 @@ public enum WatchRouting {
         hostOnline != false
     }
 
+    /// Polls with `host == false` and `hostSeen == false` before the Watch says to re-pair.
+    /// Each quiet poll waits about eight seconds. Ten of them cover the computer's redial
+    /// after a relay restart, which forgets `hostSeen` until the computer joins again.
+    /// A room that never had a computer stays false past this window.
+    public static let staleHostPolls = 10
+
+    /// True when this relay process has answered and this room has never had a computer.
+    /// A missing `hostSeen` (an older relay) is unknown, not stale.
+    public static func needsRepair(hostOnline: Bool?, hostSeen: Bool?, unhostedPolls: Int) -> Bool {
+        hostOnline == false && hostSeen == false && unhostedPolls >= staleHostPolls
+    }
+
     /// What an open turn should say. A computer the relay has marked offline keeps the
     /// message on the Watch. "Still waiting" is only for a turn that was actually sent.
-    public static func turnStatus(current: String, computerOffline: Bool, slow: Bool) -> String {
-        let pending = ["", "Sent", "Sending", RelayUserNotice.stillWaitingText, RelayUserNotice.queuedOfflineText]
+    /// A stale pairing says to re-pair instead of waiting.
+    public static func turnStatus(current: String, computerOffline: Bool, slow: Bool, repair: Bool = false) -> String {
+        let pending = [
+            "", "Sent", "Sending",
+            RelayUserNotice.stillWaitingText,
+            RelayUserNotice.queuedOfflineText,
+            RelayUserNotice.repairNeededText,
+        ]
         guard pending.contains(current) else { return current }
+        if repair {
+            return RelayUserNotice.repairNeededText
+        }
+        if current == RelayUserNotice.repairNeededText {
+            return computerOffline ? RelayUserNotice.queuedOfflineText : "Sending"
+        }
         if computerOffline {
             return RelayUserNotice.queuedOfflineText
         }
@@ -135,17 +159,44 @@ public enum WatchRouting {
     /// The sentence the Watch shows about the link, or nil when the turn path is healthy.
     /// "No network" means the Watch's own radio has no path. "Reconnecting…" means the radio is up
     /// and the relay is not answering. "Computer offline" means this relay process answered and
-    /// the computer's socket is not in the room. The room token does not expire. Any of these
-    /// is moot while the iPhone carries turns.
-    public static func notice(hasRelayPairing: Bool, relayUp: Bool, relayTrouble: Bool, relayHostOnline: Bool?, phoneReachable: Bool, noNetwork: Bool = false) -> String? {
-        guard hasRelayPairing, !phoneReachable else { return nil }
-        if noNetwork {
+    /// the computer's socket is not in the room. "Re-pair needed" means the room has never had a
+    /// computer. A missing `hostSeen` stays "Computer offline". The room token does not expire.
+    /// These stay quiet while the iPhone can carry turns.
+    public static func notice(
+        hasRelayPairing: Bool,
+        relayUp: Bool,
+        relayTrouble: Bool,
+        relayHostOnline: Bool?,
+        phoneReachable: Bool,
+        noNetwork: Bool = false,
+        phoneCanSSH: Bool = true,
+        hostSeen: Bool? = nil,
+        unhostedPolls: Int = 0
+    ) -> String? {
+        guard hasRelayPairing else { return nil }
+        let repair = relayUp && needsRepair(hostOnline: relayHostOnline, hostSeen: hostSeen, unhostedPolls: unhostedPolls)
+        if noNetwork && !phoneReachable {
             return RelayUserNotice.noNetworkText
         }
+        if repair && (!phoneReachable || !phoneCanSSH) {
+            return RelayUserNotice.repairNeededText
+        }
+        guard !phoneReachable else { return nil }
         if !relayUp {
             return relayTrouble ? RelayUserNotice.reconnectingText : nil
         }
+        if repair {
+            return RelayUserNotice.repairNeededText
+        }
         return relayHostOnline == false ? RelayUserNotice.computerOfflineText : nil
+    }
+
+    /// Header text stays short. The banner carries the re-pair steps.
+    public static func connectionBanner(_ notice: String?) -> String? {
+        if notice == RelayUserNotice.repairNeededText {
+            return RelayUserNotice.repairNeededSteps
+        }
+        return notice
     }
 
     /// The words a person sees for a path. Diagnostics keep the short internal name.

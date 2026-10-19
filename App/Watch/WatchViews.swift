@@ -229,7 +229,7 @@ struct WatchListView: View {
     }
 
     private var headerTitleColor: Color {
-        if model.connectionNotice == RelayUserNotice.computerOfflineText || model.connectionNotice == RelayUserNotice.noNetworkText {
+        if RelayUserNotice.isLinkFailure(model.connectionNotice) {
             return LojoTheme.danger
         }
         return LojoTheme.readablePrimary(scheme)
@@ -257,7 +257,7 @@ struct WatchListView: View {
     }
 
     private var headerMark: SessionStatus {
-        if model.connectionNotice == RelayUserNotice.noNetworkText || model.connectionNotice == RelayUserNotice.computerOfflineText {
+        if RelayUserNotice.isLinkFailure(model.connectionNotice) {
             return .failed
         }
         if model.connectionNotice == RelayUserNotice.reconnectingText {

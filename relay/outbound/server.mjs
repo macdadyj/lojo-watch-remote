@@ -67,6 +67,9 @@ export function createRelay(options = {}) {
         id,
         host: null,
         watch: null,
+        // Stays true after the computer leaves, until this process drops the room.
+        // A poll of a room that has never had a computer can say so.
+        hostSeen: false,
         queue: { host: [], watch: [] },
         epoch: crypto.randomBytes(8).toString("hex"),
         seq: 0,
@@ -123,7 +126,7 @@ export function createRelay(options = {}) {
    *
    * Request:  Authorization: Bearer <room token>
    *           {"send": [base64 ciphertext...], "after": <last seq seen>, "epoch": "<from last reply>", "wait": <ms>}
-   * Response: {"ok": true, "epoch": "...", "host": <host connected>, "frames": [{"seq": n, "data": base64}]}
+   * Response: {"ok": true, "epoch": "...", "host": <host connected>, "hostSeen": <a computer has joined this room>, "frames": [{"seq": n, "data": base64}]}
    *
    * Frames stay queued until a later poll acks them with `after`, so a reply is never lost
    * when a poll dies in flight. A different `epoch` means the room was recreated; the
@@ -210,6 +213,7 @@ export function createRelay(options = {}) {
             ok: true,
             epoch: room.epoch,
             host: hostOnline(room),
+            hostSeen: room.hostSeen === true,
             frames: out,
             more: out.length < waiting.length,
           });
@@ -432,7 +436,10 @@ export function createRelay(options = {}) {
         room.queue[role] = [];
         for (const frame of queued) sendFrame(current.socket, 2, Buffer.isBuffer(frame) ? frame : frame.data);
         // A parked Watch poll reports whether the computer is in the room. Answer it now.
-        if (role === "host") wakeWatchPolls(room);
+        if (role === "host") {
+          room.hostSeen = true;
+          wakeWatchPolls(room);
+        }
         return;
       }
       if (opcode !== 2) {

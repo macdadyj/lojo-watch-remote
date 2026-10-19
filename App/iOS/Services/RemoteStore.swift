@@ -199,6 +199,8 @@ final class RemoteStore: ObservableObject {
     private let bridge = PhoneBridge()
     private let relay = RelayClient()
     private var directContext: String?
+    /// The computer refused this iPhone's SSH key. Quiet refreshes keep the re-pair sentence.
+    private var keyRepair = false
 
     init() {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -246,6 +248,11 @@ final class RemoteStore: ObservableObject {
             onEvent: { [weak self] event in self?.apply(event) },
             onDropped: { [weak self] in
                 guard let self, self.mode == .ssh, !self.userDisconnected else { return }
+                if self.keyRepair {
+                    self.applyKeyRepair()
+                    self.publish()
+                    return
+                }
                 self.streamLost = true
                 self.link = .connecting
                 self.statusLine = "Reconnecting"
@@ -410,6 +417,7 @@ final class RemoteStore: ObservableObject {
         if keys.key == nil {
             do {
                 try keys.generateEd25519()
+                keyRepair = false
             } catch {
                 pairingMoment = .problem("A key could not be created on this iPhone.")
                 return
@@ -491,6 +499,7 @@ final class RemoteStore: ObservableObject {
             }
         }
         refreshSecretFlag()
+        keyRepair = false
         storeDirect(payload, computerID: id, label: saved.label)
         pairingNotice = PairingNotice(label: saved.label, fingerprint: saved.pinnedFingerprint, storedSecret: storedSecret)
         if changed { disconnectForHostChange() }
@@ -877,6 +886,10 @@ final class RemoteStore: ObservableObject {
 
     private func refreshSSH(quiet: Bool) async {
         guard let live else { return }
+        if quiet, keyRepair {
+            applyKeyRepair()
+            return
+        }
         do {
             try await ensureSSH()
             let listed = try await live.list(cwd: cwd.isEmpty ? nil : cwd)
@@ -885,7 +898,12 @@ final class RemoteStore: ObservableObject {
             approvalsAvailable = live.approvalsAvailable
             statusLine = live.statusLine
             banner = nil
+            keyRepair = false
         } catch {
+            if sshKeyRejected(error) {
+                applyKeyRepair()
+                return
+            }
             if link != .needsPairing {
                 if quiet, live.isSessionActive {
                     link = .connected
@@ -904,6 +922,27 @@ final class RemoteStore: ObservableObject {
                 statusLine = live.statusLine
             }
         }
+    }
+
+    /// A new key can log in where the old one was refused. The next refresh may try again.
+    func noteSSHKeyReplaced() {
+        keyRepair = false
+    }
+
+    private func sshKeyRejected(_ error: Error) -> Bool {
+        if let error = error as? SSHClientError {
+            if case .authenticationFailed = error { return true }
+            return false
+        }
+        return PairingRepair.sshKeyRejected(error.localizedDescription)
+    }
+
+    private func applyKeyRepair() {
+        keyRepair = true
+        link = .needsPairing
+        approvalsAvailable = false
+        statusLine = RelayUserNotice.repairNeededText
+        banner = RelayUserNotice.repairNeededSteps
     }
 
     private func continueSession(_ sessionID: String, prompt: String) async {
@@ -1164,11 +1203,15 @@ final class RemoteStore: ObservableObject {
             } else {
                 clearResumeNotice(sessionID)
             }
-            if link != .needsPairing, live.isSessionActive != true {
-                link = .offline
+            if sshKeyRejected(error) {
+                applyKeyRepair()
+            } else {
+                if link != .needsPairing, live.isSessionActive != true {
+                    link = .offline
+                }
+                statusLine = live.statusLine
+                banner = nil
             }
-            statusLine = live.statusLine
-            banner = nil
         }
         publish()
     }
@@ -1212,12 +1255,16 @@ final class RemoteStore: ObservableObject {
         } catch {
             settleOutgoing(sessionID)
             setResumeNotice(sessionID, SessionResume.unavailableMessage)
-            if link != .needsPairing, live.isSessionActive != true {
-                link = .offline
+            if sshKeyRejected(error) {
+                applyKeyRepair()
+            } else {
+                if link != .needsPairing, live.isSessionActive != true {
+                    link = .offline
+                }
+                approvalsAvailable = false
+                statusLine = live.statusLine
+                banner = nil
             }
-            approvalsAvailable = false
-            statusLine = live.statusLine
-            banner = nil
         }
         publish()
     }
@@ -1318,19 +1365,27 @@ final class RemoteStore: ObservableObject {
             statusLine = live.statusLine
             link = .connected
         } catch {
-            if link != .needsPairing {
-                link = .offline
-            }
-            approvalsAvailable = false
-            let text = error.localizedDescription
-            update(localID) {
-                $0.status = .failed
-                if !ChatTranscript.isStatusNoise(text) {
-                    $0.summary = text
+            if sshKeyRejected(error) {
+                applyKeyRepair()
+                update(localID) {
+                    $0.status = .failed
+                    $0.summary = RelayUserNotice.repairNeededText
                 }
-            }
-            if !ChatTranscript.isStatusNoise(text) {
-                banner = text
+            } else {
+                if link != .needsPairing {
+                    link = .offline
+                }
+                approvalsAvailable = false
+                let text = error.localizedDescription
+                update(localID) {
+                    $0.status = .failed
+                    if !ChatTranscript.isStatusNoise(text) {
+                        $0.summary = text
+                    }
+                }
+                if !ChatTranscript.isStatusNoise(text) {
+                    banner = text
+                }
             }
         }
     }
@@ -1714,6 +1769,7 @@ final class RemoteStore: ObservableObject {
 
     private func disconnectForHostChange() {
         live?.disconnect()
+        keyRepair = false
         guard mode == .ssh else { return }
         link = .offline
         approvalsAvailable = false

@@ -214,6 +214,7 @@ test("an HTTP watch learns when the host is offline and its frames wait for it",
   const token = "roomtokenvalue0103";
   const body = await (await poll(port, token, { send: [Buffer.from("early").toString("base64")] })).json();
   assert.equal(body.host, false);
+  assert.equal(body.hostSeen, false);
   const host = await connect(port);
   await auth(host, "host", token);
   await host.waitFor((frames) => frames.some((frame) => frame.opcode === 2 && frame.payload.toString() === "early"));
@@ -227,6 +228,7 @@ test("a parked HTTP poll hears at once when the host joins or leaves", async () 
   const token = "roomtokenvalue0106";
   const first = await (await poll(port, token, {})).json();
   assert.equal(first.host, false);
+  assert.equal(first.hostSeen, false);
 
   let started = Date.now();
   const joining = poll(port, token, { after: 0, epoch: first.epoch, wait: 5000 });
@@ -235,6 +237,7 @@ test("a parked HTTP poll hears at once when the host joins or leaves", async () 
   await auth(host, "host", token);
   const joined = await (await joining).json();
   assert.equal(joined.host, true);
+  assert.equal(joined.hostSeen, true);
   assert.ok(Date.now() - started < 3000, "the poll waited out its timer after the host joined");
 
   started = Date.now();
@@ -243,6 +246,7 @@ test("a parked HTTP poll hears at once when the host joins or leaves", async () 
   host.socket.destroy();
   const left = await (await leaving).json();
   assert.equal(left.host, false);
+  assert.equal(left.hostSeen, true, "a computer that left this room is remembered");
   assert.ok(Date.now() - started < 3000, "the poll waited out its timer after the host left");
   relay.server.close();
 });

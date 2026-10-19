@@ -132,6 +132,10 @@ final class DirectSession: ObservableObject {
     @Published private(set) var approvalsAvailable = false
     /// What the relay last said about the computer. Nil until the first poll answers.
     @Published private(set) var hostOnline: Bool?
+    /// Whether a computer has ever joined this room. Nil until a poll includes the field.
+    private(set) var hostSeen: Bool?
+    /// Answered polls in a row with the computer absent from a room that has never had one.
+    private(set) var unhostedPolls = 0
     /// The Watch's own radio has no path. This is not the computer being offline.
     @Published private(set) var networkDown = false
     @Published private(set) var lastError = ""
@@ -206,6 +210,9 @@ final class DirectSession: ObservableObject {
         case .connecting:
             return "connecting"
         case .up:
+            if WatchRouting.needsRepair(hostOnline: hostOnline, hostSeen: hostSeen, unhostedPolls: unhostedPolls) {
+                return "up, re-pair needed"
+            }
             return hostOnline == false ? "up, computer offline" : "up"
         case .failed:
             return "failed"
@@ -248,6 +255,8 @@ final class DirectSession: ObservableObject {
             outbox.removeAll()
             outboxTags.removeAll()
             hostOnline = nil
+            hostSeen = nil
+            unhostedPolls = 0
             disconnect()
         }
     }
@@ -511,10 +520,18 @@ final class DirectSession: ObservableObject {
         networkDown = false
         let wasUp = phase == .up
         let host = response.host
-        if !wasUp || hostOnline != host || recovered {
+        let previousRepair = WatchRouting.needsRepair(hostOnline: hostOnline, hostSeen: hostSeen, unhostedPolls: unhostedPolls)
+        if host == false && response.hostSeen == false {
+            unhostedPolls += 1
+        } else {
+            unhostedPolls = 0
+        }
+        let repair = WatchRouting.needsRepair(hostOnline: host, hostSeen: response.hostSeen, unhostedPolls: unhostedPolls)
+        if !wasUp || hostOnline != host || hostSeen != response.hostSeen || recovered || previousRepair != repair {
             phase = .up
             hostOnline = host
-            lastError = host == false ? "The computer is not connected to the relay." : ""
+            hostSeen = response.hostSeen
+            lastError = repair ? RelayUserNotice.repairNeededSteps : (host == false ? "The computer is not connected to the relay." : "")
             onBanner?(nil)
             onChange?()
         }

@@ -36,7 +36,7 @@ Use a hostname you control and a certificate the Watch will trust. The pairing U
 {"send": ["<base64 ciphertext>"], "after": 12, "epoch": "<from the last reply>", "wait": 25000}
 ```
 
-The reply is `{"ok":true,"epoch":"...","host":true,"frames":[{"seq":13,"data":"<base64>"}],"more":false}`. `host` says whether the computer is connected. Frames for the Watch stay queued (up to 64) until a later poll acks them with `after`, so a reply is not lost when a poll dies in flight. One reply carries at most 512 KB of frames (always at least one); `more` is true when more are waiting, and the next poll returns them at once. A poll with nothing to send waits up to `wait` milliseconds (at most 25 seconds) for the next frame. A new `epoch` means the room was recreated; start again from `after: 0`.
+The reply is `{"ok":true,"epoch":"...","host":true,"hostSeen":true,"frames":[{"seq":13,"data":"<base64>"}],"more":false}`. `host` says whether the computer is connected right now. `hostSeen` is false until a computer has joined this room, and it stays true after that computer leaves. A missing `hostSeen` is an older relay. Frames for the Watch stay queued (up to 64) until a later poll acks them with `after`, so a reply is not lost when a poll dies in flight. One reply carries at most 512 KB of frames (always at least one); `more` is true when more are waiting, and the next poll returns them at once. A poll with nothing to send waits up to `wait` milliseconds (at most 25 seconds) for the next frame. A new `epoch` means the room was recreated; start again from `after: 0`.
 
 ## Limits
 
