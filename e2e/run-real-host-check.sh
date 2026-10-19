@@ -9,6 +9,9 @@
 # client polls POST /v1/watch, sends a prompt, and checks that the reply comes back after the
 # prompt. No iPhone is involved. That path is in the default run as watch. A frame the relay
 # still holds from an earlier Watch cannot count as this command's answer.
+# watch-wrist is the path the real Watch actually hits: send, stop polling, a second poller
+# acks the queue, then a new process with an empty issued set asks the computer for that
+# command. It is not in the default list. Run it with --only watch-wrist.
 # fresh is that path with no iPhone key yet: the Watch still gets an auto-approved answer, then
 # the computer authorizes a new key over the relay. The test key is removed afterward.
 #

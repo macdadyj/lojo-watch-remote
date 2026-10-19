@@ -580,6 +580,61 @@ def scenario_together(ctx: Context, recording: Recording) -> str:
     return f"phone chat {short(phone_chat)} and Watch chat {short(watch_chat)} both answered, neither crossed"
 
 
+def scenario_watch_wrist(ctx: Context, recording: Recording) -> str:
+    """Jon's Watch: the prompt goes out, the wrist goes down, another poller acks the queue,
+    and a cold process with an empty issued set still has to show the reply.
+
+    Uses this computer's paired relay session. The tight watch-alone loop is a different
+    client and does not count as this check.
+    """
+    args = ctx.args
+    side = WatchSide(ctx, recording)
+    watch = side.watch
+    command_id = uuid.uuid4().hex
+    watch.poll([{
+        "op": "start",
+        "id": command_id,
+        "prompt": args.prompt,
+        "autoApprove": True,
+    }])
+    recording.add({"k": "ui", "a": "wrist-down", "id": command_id})
+    time.sleep(3)
+    drainer = watch_poll.HttpWatch(side.base, watch.token, watch.key)
+    deadline = time.monotonic() + args.timeout
+    drain_until = deadline - 15
+    while time.monotonic() < drain_until and not _queued_reply(drainer):
+        drainer.poll(wait_ms=2000)
+    drainer.poll(wait_ms=0)
+    recording.add({"k": "ui", "a": "cold-start", "after": drainer.after})
+    cold = watch_poll.HttpWatch(side.base, watch.token, watch.key)
+    cold.after = drainer.after
+    cold.epoch = drainer.epoch
+    receipt: dict = {}
+    while time.monotonic() < deadline:
+        result_id = uuid.uuid4().hex
+        cold.issued[result_id] = len(cold.inbox)
+        cold.poll([{"op": "result", "id": result_id, "commandID": command_id}])
+        receipt = cold.reply(result_id, timeout=15)
+        if receipt.get("status") != "pending":
+            break
+        time.sleep(1)
+    expect(receipt.get("op") == "result", f"wrist-down: the computer did not keep the command: {receipt}")
+    expect(receipt.get("status") == "done", f"wrist-down: no reply after a cold start: {receipt}")
+    lines = [str(line) for line in receipt.get("lines") or []]
+    expect(any(line.startswith("Grok:") for line in lines), f"wrist-down: the receipt has no reply: {lines[-3:]}")
+    expect(f"You: {args.prompt}" in lines, f"wrist-down: the receipt dropped the prompt: {lines[-3:]}")
+    expect(cold.http_version == 11, "the cold Watch did not poll over HTTP/1.1")
+    return f"wrist-down then cold start still showed the reply ({len(lines)} lines)"
+
+
+def _queued_reply(watch: watch_poll.HttpWatch) -> bool:
+    for message in watch.inbox:
+        for row in message.get("sessions") or []:
+            if any(str(line).startswith("Grok:") for line in row.get("transcript") or []):
+                return True
+    return False
+
+
 RUNNERS = {
     "turns": scenario_turns,
     "reopen": scenario_reopen,
@@ -589,6 +644,8 @@ RUNNERS = {
     "watch": scenario_watch,
     # Same phone-free path. Kept out of SCENARIOS so a full run does not ask Grok twice.
     "watch-alone": scenario_watch,
+    # Wrist down and a cold start on the paired session. Not in the default list: it asks Grok once more.
+    "watch-wrist": scenario_watch_wrist,
     "together": scenario_together,
     "fresh": scenario_fresh,
 }

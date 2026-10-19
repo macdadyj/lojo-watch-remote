@@ -60,6 +60,11 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertTrue(WatchFrameFilter.accepts(op: .update, id: "push-12", issued: issued))
         XCTAssertTrue(WatchFrameFilter.accepts(op: .sessions, id: "old-list", issued: issued))
         XCTAssertFalse(WatchFrameFilter.accepts(op: .start, id: "new-start", issued: issued))
+        XCTAssertTrue(WatchFrameFilter.accepts(op: .result, id: "ask-1", issued: ["ask-1"]))
+        XCTAssertFalse(WatchFrameFilter.accepts(op: .result, id: "ask-1", issued: []))
+        XCTAssertTrue(WatchReceipt.resend(WatchReceipt.unknown))
+        XCTAssertFalse(WatchReceipt.resend(WatchReceipt.pending))
+        XCTAssertFalse(WatchReceipt.resend(WatchReceipt.done))
     }
 
     func testCountersFollowTheClockAndNeverRepeat() {

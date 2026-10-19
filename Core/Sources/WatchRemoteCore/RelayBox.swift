@@ -195,6 +195,8 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         case transcribe
         case transcript
         case authorize
+        /// Ask the computer for a command it already accepted. The reply does not depend on the relay queue.
+        case result
     }
 
     public var op: Op
@@ -214,6 +216,10 @@ public struct DirectMessage: Codable, Equatable, Sendable {
     public var autoApprove: Bool?
     /// OpenSSH public key on an `authorize` request. The computer adds it for local forwarding.
     public var publicKey: String?
+    /// The earlier command a `result` request is asking about.
+    public var commandID: String?
+    /// `pending`, `done`, `error`, or `unknown` on a `result` reply.
+    public var status: String?
 
     public init(
         op: Op,
@@ -228,7 +234,9 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         lines: [String]? = nil,
         audio: String? = nil,
         autoApprove: Bool? = nil,
-        publicKey: String? = nil
+        publicKey: String? = nil,
+        commandID: String? = nil,
+        status: String? = nil
     ) {
         self.op = op
         self.id = id
@@ -243,6 +251,8 @@ public struct DirectMessage: Codable, Equatable, Sendable {
         self.audio = audio
         self.autoApprove = autoApprove
         self.publicKey = publicKey
+        self.commandID = commandID
+        self.status = status
     }
 
     public static func encode(_ message: DirectMessage) -> Data? {

@@ -3,12 +3,21 @@ import Security
 import WatchRemoteCore
 
 /// The Watch's own copy of the direct pairing. It is not the iPhone Keychain.
+struct StoredTurn: Codable, Equatable {
+    var id: String
+    var prompt: String
+    var sessionID: String
+    var sent: Bool
+}
+
 enum DirectKeychain {
     static let service = "com.lojo.WatchRemote.direct"
     private static let account = "pairing"
     private static let countersAccount = "counters"
+    private static let turnsAccount = "turns"
     private static var memory: DirectPairing?
     private static var memoryCounters: (send: UInt64, recv: UInt64, after: Int, epoch: String)?
+    private static var memoryTurns: [StoredTurn]?
 
     static func save(_ pairing: DirectPairing) {
         guard let text = pairing.jsonText(), let data = text.data(using: .utf8) else { return }
@@ -27,8 +36,24 @@ enum DirectKeychain {
     static func delete() {
         memory = nil
         memoryCounters = nil
+        memoryTurns = nil
         SecItemDelete(base(account: account) as CFDictionary)
         SecItemDelete(base(account: countersAccount) as CFDictionary)
+        SecItemDelete(base(account: turnsAccount) as CFDictionary)
+    }
+
+    static func saveTurns(_ turns: [StoredTurn]) {
+        memoryTurns = turns
+        guard let data = try? JSONEncoder().encode(turns) else { return }
+        write(data, account: turnsAccount)
+    }
+
+    static func loadTurns() -> [StoredTurn] {
+        if let memoryTurns { return memoryTurns }
+        guard let data = read(account: turnsAccount),
+              let turns = try? JSONDecoder().decode([StoredTurn].self, from: data) else { return [] }
+        memoryTurns = turns
+        return turns
     }
 
     static func saveCounters(send: UInt64, recv: UInt64, after: Int, epoch: String) {
@@ -133,6 +158,14 @@ final class DirectSession: ObservableObject {
     private var outbox: [Data] = []
     /// Command ids this process sent. A frame left in the relay queue from an earlier launch does not answer them.
     private var issued = Set<String>()
+    /// Starts the Watch still wants an answer for. Survives a cold start. `sent` is true once the relay accepted the post.
+    private var openTurns: [StoredTurn] = []
+    /// Parallel to `outbox`. A start's command id, or empty for every other frame.
+    private var outboxTags: [String] = []
+    /// Result-request id → the command it asks about. An error for that id is an old host, not a failed turn.
+    private var resultRequestToCommand: [String: String] = [:]
+    /// Do not ask for a receipt again until this time. A pending answer, or a host with no ledger, waits one poll.
+    private var receiptWaitUntil: Date?
     private var generation = 0
     private var loop: Task<Void, Never>?
     private var inflightWaits = false
@@ -185,6 +218,7 @@ final class DirectSession: ObservableObject {
         sendCounter = saved.send
         replay = RelayReplay.restored(highest: saved.recv)
         cursor = RelayPollCursor(after: saved.after, epoch: saved.epoch)
+        openTurns = DirectKeychain.loadTurns()
     }
 
     func ingest(_ text: String, resetCounters: Bool = false) {
@@ -206,10 +240,13 @@ final class DirectSession: ObservableObject {
             replay = RelayReplay()
             cursor = RelayPollCursor()
             issued.removeAll()
+            openTurns = []
+            DirectKeychain.saveTurns([])
             DirectKeychain.saveCounters(send: sendCounter, recv: 0, after: 0, epoch: "")
         }
         if changed {
             outbox.removeAll()
+            outboxTags.removeAll()
             hostOnline = nil
             disconnect()
         }
@@ -242,6 +279,8 @@ final class DirectSession: ObservableObject {
         displayOff = false
         guard hasPairing, !giveUp else { return }
         failures = 0
+        receiptWaitUntil = nil
+        stageReceipts()
         enqueue(listMessage())
         startLoop()
     }
@@ -352,6 +391,7 @@ final class DirectSession: ObservableObject {
                 quietPause()
                 return
             }
+            stageReceipts()
             // Hold the outbox while the relay says the computer is gone. An empty poll
             // still learns when it rejoins, and the relay wakes that poll on the join.
             let batch = WatchRouting.shouldPost(hostOnline: hostOnline) ? Array(outbox.prefix(RelayPoll.maxFramesPerRequest)) : []
@@ -360,7 +400,7 @@ final class DirectSession: ObservableObject {
             guard generation == current else { return }
             if displayOff {
                 if case .answered(let response) = result {
-                    outbox.removeFirst(min(batch.count, outbox.count))
+                    acknowledge(batch.count)
                     noteAnswered(response)
                 }
                 quietPause()
@@ -368,7 +408,7 @@ final class DirectSession: ObservableObject {
             }
             switch result {
             case .answered(let response):
-                outbox.removeFirst(min(batch.count, outbox.count))
+                acknowledge(batch.count)
                 noteAnswered(response)
             case .kicked:
                 continue
@@ -556,8 +596,13 @@ final class DirectSession: ObservableObject {
                 self.sessions = sessions
             }
             approvalsAvailable = message.approvalsAvailable ?? true
+            absorbFinishedTurns()
             onChange?()
         case .started:
+            if let index = openTurns.firstIndex(where: { $0.id == message.id }) {
+                openTurns[index].sessionID = message.sessionID ?? ""
+                DirectKeychain.saveTurns(openTurns)
+            }
             onStarted?(message.id, message.sessionID ?? "")
         case .ok, .pong:
             if message.id == authorizeID {
@@ -572,7 +617,13 @@ final class DirectSession: ObservableObject {
         case .transcript:
             onTranscript?(message.id, message.message ?? "")
             onChange?()
+        case .result:
+            applyReceipt(message)
         case .error:
+            if resultRequestToCommand.removeValue(forKey: message.id) != nil {
+                receiptWaitUntil = Date().addingTimeInterval(TimeInterval(RelayPoll.watchWaitMilliseconds) / 1000)
+                break
+            }
             if message.id == authorizeID {
                 authorizeID = nil
                 pendingAuthorizeKey = nil
@@ -587,6 +638,142 @@ final class DirectSession: ObservableObject {
         }
     }
 
+    /// Ask the computer for every open command, or send one it never accepted.
+    private func stageReceipts() {
+        if let receiptWaitUntil, Date() < receiptWaitUntil { return }
+        let turns = openTurns
+        for turn in turns {
+            if turn.sent {
+                guard !resultRequestToCommand.values.contains(turn.id) else { continue }
+                let requestID = freshID()
+                resultRequestToCommand[requestID] = turn.id
+                if !enqueue(DirectMessage(op: .result, id: requestID, commandID: turn.id)) {
+                    resultRequestToCommand.removeValue(forKey: requestID)
+                }
+            } else if !outboxTags.contains(turn.id) {
+                var message = DirectMessage(op: .start, id: turn.id, prompt: turn.prompt, sessionID: turn.sessionID.isEmpty ? nil : turn.sessionID)
+                message.autoApprove = autoApproveDefault
+                enqueue(message)
+            }
+        }
+    }
+
+    private func acknowledge(_ count: Int) {
+        let taken = min(count, outbox.count, outboxTags.count)
+        guard taken > 0 else { return }
+        let tags = Array(outboxTags.prefix(taken))
+        outbox.removeFirst(taken)
+        outboxTags.removeFirst(taken)
+        for tag in tags where !tag.isEmpty {
+            markSent(tag)
+        }
+    }
+
+    private func remember(_ message: DirectMessage, sent: Bool) {
+        guard message.op == .start else { return }
+        let prompt = String((message.prompt ?? "").prefix(500))
+        if let index = openTurns.firstIndex(where: { $0.id == message.id }) {
+            openTurns[index].prompt = prompt
+            if let sessionID = message.sessionID, !sessionID.isEmpty {
+                openTurns[index].sessionID = sessionID
+            }
+            openTurns[index].sent = sent
+        } else {
+            openTurns.append(StoredTurn(id: message.id, prompt: prompt, sessionID: message.sessionID ?? "", sent: sent))
+            if openTurns.count > 8 {
+                openTurns.removeFirst(openTurns.count - 8)
+            }
+        }
+        DirectKeychain.saveTurns(openTurns)
+    }
+
+    private func markSent(_ commandID: String) {
+        guard let index = openTurns.firstIndex(where: { $0.id == commandID }) else { return }
+        openTurns[index].sent = true
+        DirectKeychain.saveTurns(openTurns)
+    }
+
+    private func absorbFinishedTurns() {
+        let finished = openTurns.filter { turn in
+            guard !turn.sessionID.isEmpty,
+                  let lines = sessions.first(where: { $0.id == turn.sessionID })?.transcript else { return false }
+            return WatchRouting.hasReply(after: turn.prompt, in: lines)
+        }.map(\.id)
+        for id in finished {
+            finishCommand(id)
+        }
+    }
+
+    private func finishCommand(_ commandID: String) {
+        openTurns.removeAll { $0.id == commandID }
+        resultRequestToCommand = resultRequestToCommand.filter { $0.value != commandID }
+        DirectKeychain.saveTurns(openTurns)
+    }
+
+    private func applyReceipt(_ message: DirectMessage) {
+        resultRequestToCommand.removeValue(forKey: message.id)
+        let commandID = message.commandID ?? ""
+        guard let turn = openTurns.first(where: { $0.id == commandID }) else { return }
+        let status = message.status ?? ""
+        if WatchReceipt.resend(status) {
+            resend(commandID)
+            return
+        }
+        if status == WatchReceipt.failed {
+            finishCommand(commandID)
+            onFailed?(commandID, message.message ?? "The computer could not do that.")
+            return
+        }
+        guard status == WatchReceipt.done else {
+            receiptWaitUntil = Date().addingTimeInterval(TimeInterval(RelayPoll.watchWaitMilliseconds) / 1000)
+            return
+        }
+        let lines = message.lines ?? []
+        guard WatchRouting.hasReply(after: turn.prompt, in: lines) else {
+            receiptWaitUntil = Date().addingTimeInterval(TimeInterval(RelayPoll.watchWaitMilliseconds) / 1000)
+            return
+        }
+        let sessionID = message.sessionID ?? ""
+        if !sessionID.isEmpty {
+            onStarted?(commandID, sessionID)
+            upsertSession(id: sessionID, lines: lines)
+        }
+        finishCommand(commandID)
+        onChange?()
+    }
+
+    private func resend(_ commandID: String) {
+        guard let index = openTurns.firstIndex(where: { $0.id == commandID }) else { return }
+        openTurns[index].sent = false
+        DirectKeychain.saveTurns(openTurns)
+        receiptWaitUntil = nil
+        guard !outboxTags.contains(commandID) else { return }
+        var message = DirectMessage(
+            op: .start,
+            id: commandID,
+            prompt: openTurns[index].prompt,
+            sessionID: openTurns[index].sessionID.isEmpty ? nil : openTurns[index].sessionID
+        )
+        message.autoApprove = autoApproveDefault
+        enqueue(message)
+    }
+
+    private func upsertSession(id: String, lines: [String]) {
+        let summary = lines.last(where: { $0.hasPrefix("Grok:") })
+            .map { String($0.dropFirst("Grok:".count)).trimmingCharacters(in: .whitespaces) } ?? ""
+        if let index = sessions.firstIndex(where: { $0.id == id }) {
+            var row = sessions[index]
+            row.transcript = lines
+            row.status = .idle
+            if !summary.isEmpty {
+                row.summary = summary
+            }
+            sessions[index] = row
+        } else {
+            sessions.insert(GrokSession(id: id, title: "", summary: summary, status: .idle, transcript: lines), at: 0)
+        }
+    }
+
     @discardableResult
     private func enqueue(_ message: DirectMessage) -> Bool {
         guard let pairing, let plain = DirectMessage.encode(message), let key = RelayMaterial.keyData(pairing.key) else { return false }
@@ -596,8 +783,14 @@ final class DirectSession: ObservableObject {
             let frame = try RelayBox.seal(plaintext: plain, key: key, direction: .watchToHost, counter: sendCounter)
             DirectKeychain.saveCounters(send: sendCounter, recv: replay.highest, after: cursor.after, epoch: cursor.epoch)
             outbox.append(frame)
+            outboxTags.append(message.op == .start ? message.id : "")
+            if message.op == .start {
+                remember(message, sent: false)
+            }
             if outbox.count > 32 {
-                outbox.removeFirst(outbox.count - 32)
+                let extra = outbox.count - 32
+                outbox.removeFirst(extra)
+                outboxTags.removeFirst(min(extra, outboxTags.count))
             }
             return true
         } catch {
@@ -623,6 +816,7 @@ final class DirectSession: ObservableObject {
         inflight?.cancel()
         inflight = nil
         outbox.removeAll()
+        outboxTags.removeAll()
         phase = .failed(RelayUserNotice.pairingRejectedText)
         onBanner?(RelayUserNotice.pairingRejectedText)
         onRepair?()

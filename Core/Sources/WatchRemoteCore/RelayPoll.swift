@@ -229,11 +229,25 @@ public enum WatchFrameFilter {
         switch op {
         case .sessions, .update:
             return true
-        case .started, .ok, .pong, .restored, .transcript, .error:
+        case .started, .ok, .pong, .restored, .transcript, .error, .result:
             return issued.contains(id)
         case .list, .start, .approve, .deny, .stop, .ping, .resume, .transcribe, .authorize:
             return false
         }
+    }
+}
+
+/// What the computer says when the Watch asks again for a command.
+public enum WatchReceipt {
+    public static let pending = "pending"
+    public static let done = "done"
+    public static let failed = "error"
+    public static let unknown = "unknown"
+
+    /// The computer never saw this command. Sending the same id again does not start a second turn
+    /// once the first one is recorded.
+    public static func resend(_ status: String?) -> Bool {
+        status == unknown
     }
 }
 

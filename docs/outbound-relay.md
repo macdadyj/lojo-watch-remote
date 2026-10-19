@@ -56,6 +56,10 @@ Lowering the wrist does not end a listen and does not mean the pairing was rejec
 
 A task you already started keeps running on the computer. Allow and Deny work while the header says **On this Watch**. If the relay or the computer is down, the screen says so in plain words and keeps the last list. A message sent while the computer is offline stays on the Watch and goes out when the computer rejoins the room. The outbound client redials when the relay stops sending heartbeats, so a dropped socket does not leave the Watch on Computer offline. The relay closes a computer socket that misses three heartbeats. Deploy that `relay/outbound/server.mjs` as one process; a second process makes the Watch show Computer offline while the computer is connected to the other one.
 
+The reply is not only a frame in the relay queue. The computer keeps a receipt for that command, in `turn-receipts.json` next to the outbound counters (mode `0600`, on the computer, not in this repo). The Watch asks for it by command id on the next poll, including after the wrist comes back up and after the app is killed. Sending the same command id again does not start a second turn.
+
+The proxy in front of the relay should not advertise HTTP/3. A Watch poll is a new HTTPS request each time and is meant to stay on HTTP/2. An `alt-svc: h3` header is a different network path from the computer's HTTP/1.1 check.
+
 Demo mode never opens the relay. A pairing QR without a relay URL never opens it either.
 
 ## Relay behavior
