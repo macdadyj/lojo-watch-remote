@@ -321,17 +321,17 @@ struct WatchRow: View {
                 }
             }
             Text(session.title)
-                .font(.body.weight(.semibold))
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(LojoTheme.readablePrimary(scheme))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Text(ChatTranscript.lastMessage(summary: session.summary, transcript: session.transcript))
                 .font(.footnote)
                 .foregroundStyle(LojoTheme.readableSecondary(scheme))
-                .lineLimit(3)
+                .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .lojoCard(padding: 8)
+        .lojoCard(padding: 4)
         .accessibilityElement(children: .combine)
     }
 }
