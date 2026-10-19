@@ -155,6 +155,12 @@ def main() -> int:
     )
     need("outputFormat(forBus: 0)" in capture and "inputFormat(forBus: 0)" in capture, "capture tries the hardware input format")
     need("requiresOnDeviceRecognition = false" in read("App/iOS/Services/WatchSpeechRelay.swift"), "on-device recognition is not required")
+    for manifest in ("App/iOS/PrivacyInfo.xcprivacy", "App/Watch/PrivacyInfo.xcprivacy"):
+        privacy = read(manifest)
+        need("NSPrivacyTracking" in privacy and "<false/>" in privacy, f"{manifest} declares no tracking")
+        need("NSPrivacyAccessedAPICategoryUserDefaults" in privacy, f"{manifest} declares UserDefaults")
+        need("CA92.1" in privacy, f"{manifest} gives the UserDefaults reason")
+        need("NSPrivacyCollectedDataTypes" in privacy, f"{manifest} declares collected data")
 
     if args.screenshots:
         directory = Path(args.screenshots)
