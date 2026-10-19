@@ -253,14 +253,23 @@ import_certificate() {
       -k "$(cat "${STATE_DIR}/keychain.pass")" \
       "${KEYCHAIN}"
 
+  # Keychain Access exports use RC2, which OpenSSL 3 reads only with -legacy.
   if ! openssl pkcs12 \
     -in "${STATE_DIR}/cert.p12" \
     -nokeys \
     -passin "file:${STATE_DIR}/p12.pass" \
     -out "${STATE_DIR}/cert.pem" \
     >/dev/null 2>"${STATE_DIR}/openssl.err"; then
-    show_safe_error "Could not read the distribution certificate." "${STATE_DIR}/openssl.err"
-    exit 1
+    if ! openssl pkcs12 \
+      -in "${STATE_DIR}/cert.p12" \
+      -nokeys \
+      -legacy \
+      -passin "file:${STATE_DIR}/p12.pass" \
+      -out "${STATE_DIR}/cert.pem" \
+      >/dev/null 2>"${STATE_DIR}/openssl.err"; then
+      show_safe_error "Could not read the distribution certificate." "${STATE_DIR}/openssl.err"
+      exit 1
+    fi
   fi
   # A .p12 can carry the leaf plus intermediates. Keep the distribution leaf.
   # The subject is not printed: it contains the team id.
