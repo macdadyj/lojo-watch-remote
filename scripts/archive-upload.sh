@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 # Archive with manual distribution signing and upload to TestFlight.
-# The App Store Connect API key creates a new iOS Distribution certificate
-# and App Store profiles. A certificate with any other name is never revoked.
-# If Apple refuses a new one, this script revokes one earlier certificate whose
-# name is Watch Remote Distribution, then tries once more. On exit, success
-# or failure, it deletes the profiles it created and revokes only the distribution
-# certificate it created in this run, so certificates never pile up.
-# Does not print secret values. Deletes the API key, keychain, and profiles on exit.
+# The shared certificate is already in the temporary keychain created by
+# import-dist-cert.sh. App Store profiles are fetched or created for each
+# app bundle id through the App Store Connect API, bound to that certificate.
+# This script does not create or revoke distribution certificates, and Xcode
+# is not asked to create signing assets. It does not print secret values.
+# The API key is deleted on exit. The keychain is deleted by import-dist-cert.sh --cleanup.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -116,6 +115,7 @@ PY
   [[ "$(compute_build_number 5 3)" == "105.3" ]] || { echo "self-test failed: build number for a re-run" >&2; exit 1; }
   [[ "$(compute_build_number "" 1)" == "101" ]] || { echo "self-test failed: build number without a run" >&2; exit 1; }
   echo "build number ok: run 1 -> 101, run 5 attempt 3 -> 105.3"
+  bash "${SCRIPT_DIR}/import-dist-cert.sh" --self-test
   python3 "${SCRIPT_DIR}/asc_signing.py" --self-test
   python3 "${SCRIPT_DIR}/asc_testflight.py" --self-test
   python3 "${SCRIPT_DIR}/patch-watch-embed.py" --self-test
@@ -138,25 +138,33 @@ if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
   echo "Missing GitHub secret DEVELOPMENT_TEAM." >&2
   exit 1
 fi
+if [[ -z "${SIGNING_KEYCHAIN:-}" || ! -f "${SIGNING_KEYCHAIN}" ]]; then
+  echo "Import the shared distribution certificate before archiving." >&2
+  exit 1
+fi
+if [[ -z "${SIGNING_CERT_DER:-}" || ! -f "${SIGNING_CERT_DER}" ]]; then
+  echo "The shared distribution certificate was not decoded." >&2
+  exit 1
+fi
+if [[ -z "${SIGNING_IDENTITY:-}" ]]; then
+  echo "The shared distribution certificate has no signing identity." >&2
+  exit 1
+fi
 TEAM="${DEVELOPMENT_TEAM}"
 BUILD_NUMBER="$(compute_build_number "${GITHUB_RUN_NUMBER:-1}" "${GITHUB_RUN_ATTEMPT:-1}")"
-echo "Archive build number ${BUILD_NUMBER} for com.lojo.WatchRemote and com.lojo.WatchRemote.watchkitapp."
+echo "Archive build number ${BUILD_NUMBER} for the app targets."
 WORKDIR="$(mktemp -d)"
-KEYCHAIN="${WORKDIR}/signing.keychain-db"
 MANIFEST="${WORKDIR}/signing-manifest.json"
 KEY_PATH="${WORKDIR}/private_keys/AuthKey_${ASC_KEY_ID}.p8"
-KEYCHAIN_READY=0
 cleanup() {
   local status=$?
-  if [[ "${KEYCHAIN_READY}" == "1" ]]; then
-    security delete-keychain "${KEYCHAIN}" >/dev/null 2>&1 || true
-    security default-keychain -s login.keychain-db >/dev/null 2>&1 || true
-    security list-keychains -d user -s login.keychain-db >/dev/null 2>&1 || true
-  fi
-  if [[ -f "${MANIFEST}" && -f "${KEY_PATH}" ]]; then
-    # Deletes this run's profiles, then revokes only the certificate this run created.
+  # The workflow also deletes the keychain from an always() step. Doing it
+  # here covers a local run and a normal exit. Secrets are not printed.
+  bash "${SCRIPT_DIR}/import-dist-cert.sh" --cleanup || \
+    echo "Warning: could not delete the temporary signing keychain." >&2
+  if [[ -f "${MANIFEST}" ]]; then
     SIGNING_MANIFEST="${MANIFEST}" python3 "${SCRIPT_DIR}/asc_signing.py" cleanup || \
-      echo "Warning: could not fully clean up App Store Connect signing assets for this run." >&2
+      echo "Warning: could not remove local provisioning profiles for this run." >&2
   fi
   rm -rf "${WORKDIR}"
   exit "${status}"
@@ -173,63 +181,22 @@ if [[ ! -d WatchRemote.xcodeproj ]]; then
 fi
 check_encryption
 
-openssl genrsa -out "${WORKDIR}/distribution.key" 2048
-cat > "${WORKDIR}/openssl.cnf" <<'EOF'
-[req]
-distinguished_name = dn
-prompt = no
-[dn]
-CN = Watch Remote Distribution
-EOF
-openssl req -new -sha256 \
-  -key "${WORKDIR}/distribution.key" \
-  -out "${WORKDIR}/distribution.csr" \
-  -config "${WORKDIR}/openssl.cnf"
-
 python3 "${SCRIPT_DIR}/asc_signing.py" prepare \
-  --certificate-out "${WORKDIR}/distribution.cer" \
+  --certificate-der "${SIGNING_CERT_DER}" \
   --manifest "${MANIFEST}" \
   --profiles-dir "${HOME}/Library/MobileDevice/Provisioning Profiles" \
-  --csr "${WORKDIR}/distribution.csr" \
+  --project-yml "${ROOT}/project.yml" \
   --team "${TEAM}" \
-  --keychain "${KEYCHAIN}" \
+  --keychain "${SIGNING_KEYCHAIN}" \
   --pbxproj "${ROOT}/WatchRemote.xcodeproj/project.pbxproj" \
-  --export-plist "${ROOT}/build/ExportOptions.plist"
-
-openssl x509 -inform DER -in "${WORKDIR}/distribution.cer" -out "${WORKDIR}/distribution.pem"
-openssl rand -base64 32 | tr -d '\n' > "${WORKDIR}/keychain.pass"
-chmod 600 "${WORKDIR}/keychain.pass"
-openssl pkcs12 -export \
-  -inkey "${WORKDIR}/distribution.key" \
-  -in "${WORKDIR}/distribution.pem" \
-  -out "${WORKDIR}/distribution.p12" \
-  -passout "file:${WORKDIR}/keychain.pass"
-security create-keychain -p "$(cat "${WORKDIR}/keychain.pass")" "${KEYCHAIN}"
-KEYCHAIN_READY=1
-security set-keychain-settings -lut 21600 "${KEYCHAIN}"
-security unlock-keychain -p "$(cat "${WORKDIR}/keychain.pass")" "${KEYCHAIN}"
-security import "${WORKDIR}/distribution.p12" \
-  -k "${KEYCHAIN}" \
-  -P "$(cat "${WORKDIR}/keychain.pass")" \
-  -f pkcs12 -A \
-  -T /usr/bin/codesign \
-  -T /usr/bin/security >/dev/null
-security set-key-partition-list \
-  -S apple-tool:,apple:,codesign: \
-  -s \
-  -k "$(cat "${WORKDIR}/keychain.pass")" \
-  "${KEYCHAIN}" >/dev/null
-security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db >/dev/null
-security default-keychain -s "${KEYCHAIN}"
-if ! security find-identity -p codesigning "${KEYCHAIN}" 2>/dev/null | grep -q "Distribution"; then
-  echo "The distribution certificate did not import into the temporary keychain." >&2
-  exit 1
-fi
+  --export-plist "${ROOT}/build/ExportOptions.plist" \
+  --identity "${SIGNING_IDENTITY}"
 
 echo "Archiving with manual distribution signing."
-# The two app targets were switched to Manual in the generated project, each
-# with its own App Store profile. A global Manual setting would also hit
-# unsigned package targets.
+# The app targets were switched to Manual in the generated project, each with
+# its own App Store profile. A global Manual setting would also hit unsigned
+# package targets. Authentication is not passed here: the archive must sign
+# with the imported certificate and the profiles already on disk.
 xcodebuild archive \
   -project WatchRemote.xcodeproj \
   -scheme WatchRemote \
@@ -243,6 +210,8 @@ xcodebuild archive \
 python3 "${SCRIPT_DIR}/patch-watch-embed.py" --check-app \
   "${ROOT}/build/WatchRemote.xcarchive/Products/Applications/WatchRemote.app"
 
+# The API key authenticates the upload. It is not used to create a certificate
+# or a profile; those profiles were installed before the archive.
 xcodebuild -exportArchive \
   -archivePath "${ROOT}/build/WatchRemote.xcarchive" \
   -exportPath "${ROOT}/build/export" \
