@@ -312,20 +312,16 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             DEVELOPMENT_TEAM=""
 
-      - name: Import the shared distribution certificate
-        env:
-          DIST_CERT_P12: ${{ secrets.DIST_CERT_P12 }}
-          DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
-        run: scripts/import-dist-cert.sh
-
       - name: Archive and upload to TestFlight
         env:
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           DEVELOPMENT_TEAM: ${{ secrets.DEVELOPMENT_TEAM }}
+          DIST_CERT_P12: ${{ secrets.DIST_CERT_P12 }}
+          DIST_CERT_PASSWORD: ${{ secrets.DIST_CERT_PASSWORD }}
         run: scripts/archive-upload.sh
 
       - name: Delete the temporary signing keychain
         if: always()
-        run: scripts/import-dist-cert.sh --cleanup
+        run: scripts/delete-signing-keychain.sh
