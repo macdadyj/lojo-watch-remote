@@ -260,6 +260,8 @@ def fit_for_watch(message: dict) -> dict:
         copy["sessions"] = watch_rows(list(message.get("sessions") or []), budget=FRAME_BUDGET // 2)
     elif op == "restored":
         copy["lines"] = watch_lines(list(message.get("lines") or []), budget=FRAME_BUDGET // 2)
+    elif op == "result":
+        copy["lines"] = watch_lines(list(message.get("lines") or []), budget=FRAME_BUDGET // 2)
     if len(relaybox.encode_message(copy)) <= FRAME_BUDGET:
         return copy
     return {"op": "error", "id": str(message.get("id") or ""), "message": TOO_LARGE}
@@ -480,7 +482,213 @@ def authorized_keys_path() -> Path:
     return Path.home() / ".ssh" / "authorized_keys"
 
 
-def handle(agent: object, message: dict) -> dict:
+def _fold_prompt(text: str) -> str:
+    return " ".join(str(text).split()).lower().strip(".?!")
+
+
+def _reply_span(prompt: str, lines: list) -> list[str]:
+    """Transcript from the user's prompt through a later Grok line, or nothing yet."""
+    needle = _fold_prompt(prompt)
+    last = None
+    for index, line in enumerate(lines):
+        text = str(line)
+        if not text.startswith("You:"):
+            continue
+        if not needle or _fold_prompt(text.split(":", 1)[-1]) == needle:
+            last = index
+    if last is None:
+        return []
+    tail = [str(line) for line in lines[last:]]
+    if any(line.startswith("Grok:") for line in tail[1:]):
+        return tail
+    return []
+
+
+def _session_rows(agent: object) -> list:
+    list_sessions = getattr(agent, "list_sessions", None)
+    if list_sessions is None:
+        return []
+    try:
+        rows = list_sessions()
+    except (RuntimeError, OSError):
+        return []
+    return rows if isinstance(rows, list) else []
+
+
+class TurnReceipts:
+    """One Watch command's answer, kept on the computer until the Watch asks again.
+
+    The relay's queue is not a mailbox: any poller of the pairing can ack a frame,
+    and the Watch stops polling when the wrist goes down or the app is killed.
+    A later poll asks for this command id and gets the same answer.
+    """
+
+    LIMIT = 64
+    TTL = 6 * 60 * 60
+    KEEP_LINES = 40
+
+    def __init__(self, path: Path | None) -> None:
+        self.path = path
+        self.rows: dict[str, dict] = {}
+        self.last_repeat = 0.0
+        self._load()
+
+    def get(self, command_id: str) -> dict | None:
+        self._expire()
+        row = self.rows.get(command_id)
+        return dict(row) if row else None
+
+    def begin(self, command_id: str, session_id: str, prompt: str) -> None:
+        if not command_id:
+            return
+        self._expire()
+        current = self.rows.get(command_id)
+        if current and current.get("sessionID"):
+            return
+        self.rows[command_id] = {
+            "commandID": command_id,
+            "sessionID": str(session_id or ""),
+            "prompt": str(prompt or ""),
+            "status": "pending",
+            "message": "",
+            "lines": [],
+            "updated": time.time(),
+        }
+        self._trim()
+        self._save()
+
+    def fail(self, command_id: str, message: str) -> None:
+        if not command_id:
+            return
+        row = self.rows.get(command_id) or {}
+        if row.get("status") == "done":
+            return
+        self.rows[command_id] = {
+            "commandID": command_id,
+            "sessionID": str(row.get("sessionID") or ""),
+            "prompt": str(row.get("prompt") or ""),
+            "status": "error",
+            "message": str(message or "The computer could not do that."),
+            "lines": [],
+            "updated": time.time(),
+        }
+        self._trim()
+        self._save()
+
+    def observe(self, sessions: list) -> None:
+        if not self.rows or not sessions:
+            return
+        changed = False
+        for row in self.rows.values():
+            if row.get("status") != "pending":
+                continue
+            session_id = str(row.get("sessionID") or "")
+            match = next(
+                (item for item in sessions if isinstance(item, dict) and str(item.get("id") or "") == session_id),
+                None,
+            )
+            if match is None:
+                continue
+            lines = match.get("transcript")
+            if not isinstance(lines, list):
+                lines = match.get("lines")
+            span = _reply_span(str(row.get("prompt") or ""), lines if isinstance(lines, list) else [])
+            if span:
+                kept = [clip_line(line) for line in span[-self.KEEP_LINES :]]
+                grok = next((line for line in reversed(kept) if line.startswith("Grok:")), "")
+                row["status"] = "done"
+                row["lines"] = kept
+                row["message"] = grok.split(":", 1)[-1].strip()
+                row["updated"] = time.time()
+                self.last_repeat = row["updated"]
+                changed = True
+                continue
+            if str(match.get("status") or "") == "failed":
+                row["status"] = "error"
+                row["message"] = str(match.get("summary") or "The computer could not do that.")
+                row["lines"] = []
+                row["updated"] = time.time()
+                changed = True
+        if changed:
+            self._save()
+
+    def reply(self, request_id: str, command_id: str) -> dict:
+        self._expire()
+        row = self.rows.get(command_id)
+        if row is None:
+            return {"op": "result", "id": request_id, "commandID": command_id, "status": "unknown"}
+        return {
+            "op": "result",
+            "id": request_id,
+            "commandID": command_id,
+            "sessionID": row.get("sessionID") or "",
+            "status": row.get("status") or "pending",
+            "message": row.get("message") or "",
+            "lines": list(row.get("lines") or []),
+        }
+
+    def due_repeat(self) -> bool:
+        """Push the session list again for a Watch that is still on the build without receipts.
+
+        That build only shows a reply when a session frame arrives. A frame the relay already
+        handed to another poller is gone. Repeating for a minute and a half covers the wrist
+        coming back up. A Watch that asks by command id does not need this.
+        """
+        now = time.time()
+        fresh = any(
+            row.get("status") == "done" and now - float(row.get("updated") or 0) < 90
+            for row in self.rows.values()
+        )
+        if not fresh or now - self.last_repeat < 2:
+            return False
+        self.last_repeat = now
+        return True
+
+    def _expire(self) -> None:
+        now = time.time()
+        stale = [key for key, row in self.rows.items() if now - float(row.get("updated") or 0) > self.TTL]
+        if not stale:
+            return
+        for key in stale:
+            self.rows.pop(key, None)
+        self._save()
+
+    def _trim(self) -> None:
+        if len(self.rows) <= self.LIMIT:
+            return
+        ordered = sorted(self.rows, key=lambda key: float(self.rows[key].get("updated") or 0))
+        for key in ordered[: len(self.rows) - self.LIMIT]:
+            self.rows.pop(key, None)
+
+    def _load(self) -> None:
+        if self.path is None or not self.path.is_file():
+            return
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        rows = raw.get("receipts") if isinstance(raw, dict) else None
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if isinstance(row, dict) and row.get("commandID"):
+                self.rows[str(row["commandID"])] = row
+
+    def _save(self) -> None:
+        if self.path is None:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_name(self.path.name + ".tmp")
+            temporary.write_text(json.dumps({"receipts": list(self.rows.values())}), encoding="utf-8")
+            temporary.chmod(0o600)
+            os.replace(temporary, self.path)
+            self.path.chmod(0o600)
+        except OSError:
+            pass
+
+
+def handle(agent: object, message: dict, receipts: TurnReceipts | None = None) -> dict:
     op = message.get("op")
     ident = str(message.get("id") or "")
     approvals = getattr(agent, "approvals", None)
@@ -511,19 +719,33 @@ def handle(agent: object, message: dict) -> dict:
                 "sessions": watch_rows(agent.list_sessions(), focus() if focus else None),
                 "approvalsAvailable": bool(getattr(agent, "available", True)),
             }
+        if op == "result":
+            command_id = str(message.get("commandID") or "")
+            if receipts is not None:
+                receipts.observe(_session_rows(agent))
+                return receipts.reply(ident, command_id)
+            return {"op": "result", "id": ident, "commandID": command_id, "status": "unknown"}
         if op == "start":
             prompt = str(message.get("prompt") or "").strip()
             if not prompt:
                 return {"op": "error", "id": ident, "message": "Say what the task should do."}
+            if receipts is not None:
+                existing = receipts.get(ident)
+                if existing and existing.get("sessionID"):
+                    return {"op": "started", "id": ident, "sessionID": existing["sessionID"]}
             session_id = str(message.get("sessionID") or "").strip()
             if session_id:
                 if approvals is not None:
                     approvals.note({"autoApprove": message.get("autoApprove"), "sessionID": session_id})
                 continued = agent.continue_session(session_id, prompt, str(message.get("cwd") or ""))
+                if receipts is not None:
+                    receipts.begin(ident, continued, prompt)
                 return {"op": "started", "id": ident, "sessionID": continued}
             session_id = agent.start(prompt, str(message.get("cwd") or ""))
             if approvals is not None:
                 approvals.note({"autoApprove": message.get("autoApprove"), "sessionID": session_id})
+            if receipts is not None:
+                receipts.begin(ident, session_id, prompt)
             return {"op": "started", "id": ident, "sessionID": session_id}
         if op == "resume":
             session_id = str(message.get("sessionID") or "").strip()
@@ -546,6 +768,8 @@ def handle(agent: object, message: dict) -> dict:
         return {"op": "error", "id": ident, "message": "That command is not supported."}
     except RuntimeError as error:
         text = str(error).strip() or "The computer could not do that."
+        if receipts is not None and op == "start":
+            receipts.fail(ident, text)
         return {"op": "error", "id": ident, "message": text}
     except (OSError, miniws.SocketError):
         if hasattr(agent, "broken"):
@@ -1372,6 +1596,7 @@ def run(config_path: Path, agent: object | None = None, slot: AgentSlot | None =
 def serve_connection(config: dict, agent: object | None, counters: Path, slot: AgentSlot | None = None) -> None:
     send_n, recv_n = load_counters(counters)
     replay = relaybox.ReplayWindow.restored(recv_n)
+    receipts = TurnReceipts(counters.with_name("turn-receipts.json"))
     conn = miniws.connect(config["relay"])
     local = slot is None
     if slot is None:
@@ -1379,6 +1604,9 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
 
     def seal(message: dict) -> None:
         nonlocal send_n
+        sessions = message.get("sessions")
+        if isinstance(sessions, list):
+            receipts.observe(sessions)
         send_n = next_counter(send_n)
         plain = relaybox.encode_message(fit_for_watch(message))
         conn.send_binary(relaybox.seal(plain, config["key"], relaybox.HOST_TO_WATCH, send_n))
@@ -1437,6 +1665,15 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
             update = agent.take_update()
             if update is not None:
                 seal(update)
+            elif receipts.due_repeat():
+                rows = _session_rows(agent)
+                if rows:
+                    seal({
+                        "op": "update",
+                        "id": f"receipt-{int(time.time() * 1000)}",
+                        "sessions": watch_rows(rows, getattr(agent, "watch_focus", lambda: None)() or None),
+                        "approvalsAvailable": bool(getattr(agent, "available", True)),
+                    })
             if conn.sock not in readable:
                 continue
             try:
@@ -1450,7 +1687,7 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
                 message = relaybox.decode_message(plain)
             except (relaybox.RelayBoxError, ValueError):
                 continue
-            seal(handle(agent, message))
+            seal(handle(agent, message, receipts))
     finally:
         conn.close()
         if local:

@@ -333,6 +333,56 @@ class WatchPathTests(unittest.TestCase):
         opened = third.poll()
         self.assertFalse(any(message.get("id") == left for message in opened), opened)
 
+    def test_wrist_down_cold_start_still_shows_the_reply(self) -> None:
+        """The real Watch, not the tight e2e loop.
+
+        Send a prompt, lower the wrist (stop polling), let another poller of the same
+        pairing ack the relay queue, then cold-start: empty issued set, cursor already
+        past those frames. The reply has to come back from the computer by command id.
+        """
+        import uuid
+
+        command_id = uuid.uuid4().hex
+        self.watch.poll([{"op": "start", "id": command_id, "prompt": "Can you hear me", "autoApprove": True}])
+        self.watch.issued[command_id] = 0
+        # Wrist down. The process is not polling. The computer still finishes the turn.
+        time.sleep(0.6)
+        drainer = HttpWatch(f"http://127.0.0.1:{self.relay_port}", TOKEN, KEY)
+        deadline = time.time() + 10
+        saw_reply = False
+        while time.time() < deadline and not saw_reply:
+            drainer.poll(wait_ms=200)
+            saw_reply = _inbox_has_reply(drainer)
+        self.assertTrue(saw_reply, "the host never pushed a reply for the drainer to ack")
+        drainer.poll(wait_ms=0)
+        # Cold start. Same pairing, nothing left in memory, cursor already acked.
+        cold = HttpWatch(f"http://127.0.0.1:{self.relay_port}", TOKEN, KEY)
+        cold.after = drainer.after
+        cold.epoch = drainer.epoch
+        self.assertEqual(cold.issued, {})
+        result_id = uuid.uuid4().hex
+        cold.issued[result_id] = 0
+        cold.poll([{"op": "result", "id": result_id, "commandID": command_id}])
+        receipt = cold.reply(result_id, timeout=5)
+        self.assertEqual(receipt.get("op"), "result", receipt)
+        self.assertEqual(receipt.get("status"), "done", receipt)
+        self.assertTrue(any(str(line).startswith("Grok:") for line in receipt.get("lines") or []), receipt)
+        # The same command id must not start a second Grok turn.
+        cold.issued[command_id] = len(cold.inbox)
+        cold.poll([{"op": "start", "id": command_id, "prompt": "Can you hear me", "autoApprove": True}])
+        started = cold.reply(command_id, timeout=5)
+        self.assertEqual(started.get("op"), "started", started)
+        self.assertEqual(started.get("sessionID"), receipt.get("sessionID"))
+        listed = uuid.uuid4().hex
+        cold.issued[listed] = len(cold.inbox)
+        cold.poll([{"op": "list", "id": listed}])
+        sessions = cold.reply(listed, timeout=5)
+        prompts = [
+            row for row in sessions.get("sessions") or []
+            if any("Can you hear me" in str(line) for line in row.get("transcript") or [])
+        ]
+        self.assertEqual(len(prompts), 1, sessions)
+
 
 class InboxMatchTests(unittest.TestCase):
     def test_a_frame_already_in_the_inbox_is_not_this_command(self) -> None:
@@ -457,6 +507,35 @@ class HostUnitTests(unittest.TestCase):
         self.assertEqual(agent.rows[0]["status"], "needsApproval")
         self.assertEqual(agent.rows[0]["permission"]["title"], "Run tests")
         self.assertIn("s:7", agent.permissions)
+
+    def test_a_receipt_survives_a_new_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "turn-receipts.json"
+            ledger = outbound.TurnReceipts(path)
+            ledger.begin("c1", "s1", "Can you hear me")
+            ledger.observe([{
+                "id": "s1",
+                "status": "idle",
+                "lines": ["You: Can you hear me", "Grok: I can hear you."],
+            }])
+            reloaded = outbound.TurnReceipts(path)
+            receipt = reloaded.reply("r1", "c1")
+            self.assertEqual(receipt["status"], "done")
+            self.assertIn("Grok: I can hear you.", receipt["lines"])
+            agent = outbound.MemoryAgent()
+            started = outbound.handle(agent, {"op": "start", "id": "c1", "prompt": "Can you hear me"}, reloaded)
+            self.assertEqual(started["op"], "started")
+            self.assertEqual(started["sessionID"], "s1")
+            self.assertEqual(agent.started, [])
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+
+def _inbox_has_reply(watch: HttpWatch) -> bool:
+    for message in watch.inbox:
+        for row in message.get("sessions") or []:
+            if any(str(line).startswith("Grok:") for line in row.get("transcript") or []):
+                return True
+    return False
 
 
 if __name__ == "__main__":

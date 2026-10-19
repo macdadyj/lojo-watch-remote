@@ -212,6 +212,11 @@ struct ChatThreadView: View {
     @State private var sawBottom = false
     @State private var pinRequest = 0
     @State private var openToolIDs: Set<Int> = []
+    @ObservedObject private var speech = PhoneSpeechPreference.shared
+    /// History loaded on open is not a new reply. Speech starts only after this chat has been running.
+    @State private var sawRunning = false
+    @State private var speechBaseline: [String] = []
+    @State private var speechReady = false
 
     private var tailToken: String {
         let lines = current?.transcript ?? []
@@ -270,11 +275,16 @@ struct ChatThreadView: View {
                 .onChange(of: pinRequest) { _, _ in
                     pin(proxy)
                 }
-                .onChange(of: current?.transcript ?? []) { _, _ in
+                .onChange(of: current?.transcript ?? []) { _, lines in
+                    noteSpeech(lines)
                     guard followLatest else { return }
                     pin(proxy)
                 }
-                .onChange(of: current?.status) { _, _ in
+                .onChange(of: current?.status) { _, status in
+                    if status == .running || status == .needsApproval {
+                        sawRunning = true
+                    }
+                    noteSpeech(current?.transcript ?? [])
                     guard followLatest else { return }
                     pin(proxy)
                 }
@@ -306,9 +316,22 @@ struct ChatThreadView: View {
                 .accessibilityLabel("Back to chats")
                 .accessibilityIdentifier("chat.back")
             }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    speech.readReplies.toggle()
+                } label: {
+                    Image(systemName: speech.readReplies ? "speaker.wave.2.fill" : "speaker.slash")
+                }
+                .accessibilityLabel(speech.readReplies ? "Mute replies" : "Read replies aloud")
+                .accessibilityIdentifier("chat.speak")
+            }
         }
         .task(id: sessionID) {
             followLatest = true
+            sawRunning = false
+            speechReady = false
+            speechBaseline = current?.transcript ?? []
+            speechReady = true
             pinRequest += 1
             ComposerSpeech.releaseIdleSession()
             await store.resume(sessionID: sessionID)
@@ -316,10 +339,31 @@ struct ChatThreadView: View {
         }
         .onDisappear {
             dictation.stop()
+            PhoneReplySpeaker.shared.stop()
         }
     }
 
     private static let bottomID = "chat.bottom"
+
+    /// Speaks a Grok line that arrived after this chat started running. Loaded history stays quiet.
+    private func noteSpeech(_ lines: [String]) {
+        guard speechReady else { return }
+        let status = current?.status
+        if status == .running || status == .needsApproval {
+            sawRunning = true
+            return
+        }
+        guard sawRunning, status == .idle || status == .stopped, speech.readReplies else {
+            speechBaseline = lines
+            return
+        }
+        guard let text = ReplySpeech.freshReply(before: speechBaseline, after: lines) else {
+            speechBaseline = lines
+            return
+        }
+        speechBaseline = lines
+        PhoneReplySpeaker.shared.speak(text, dedupeKey: sessionID + "\n" + text)
+    }
 
     private func pin(_ proxy: ScrollViewProxy) {
         followLatest = true

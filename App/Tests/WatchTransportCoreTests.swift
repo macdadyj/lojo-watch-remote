@@ -60,6 +60,11 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertTrue(WatchFrameFilter.accepts(op: .update, id: "push-12", issued: issued))
         XCTAssertTrue(WatchFrameFilter.accepts(op: .sessions, id: "old-list", issued: issued))
         XCTAssertFalse(WatchFrameFilter.accepts(op: .start, id: "new-start", issued: issued))
+        XCTAssertTrue(WatchFrameFilter.accepts(op: .result, id: "ask-1", issued: ["ask-1"]))
+        XCTAssertFalse(WatchFrameFilter.accepts(op: .result, id: "ask-1", issued: []))
+        XCTAssertTrue(WatchReceipt.resend(WatchReceipt.unknown))
+        XCTAssertFalse(WatchReceipt.resend(WatchReceipt.pending))
+        XCTAssertFalse(WatchReceipt.resend(WatchReceipt.done))
     }
 
     func testCountersFollowTheClockAndNeverRepeat() {
@@ -221,6 +226,24 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertEqual(WatchRouting.newChat(for: "Can you hear me", known: [PhoneEcho.seedID], in: echo.sessions)?.id, "echo-new-1")
         XCTAssertEqual(echo.accept(PhoneCommand(kind: .start, prompt: "Again", sessionID: "echo-new-1")), "echo-new-1")
         XCTAssertEqual(echo.sessions.count, 2)
+    }
+
+    func testReplySpeechKeepsTheCurrentDefault() {
+        XCTAssertTrue(ReplySpeech.watchEnabled(stored: nil))
+        XCTAssertFalse(ReplySpeech.watchEnabled(stored: false))
+        XCTAssertTrue(ReplySpeech.watchEnabled(stored: true))
+        XCTAssertFalse(ReplySpeech.phoneEnabled(stored: nil))
+        XCTAssertTrue(ReplySpeech.phoneEnabled(stored: true))
+        XCTAssertTrue(ReplySpeech.watchShouldSpeak(enabled: true, inConversation: true, alsoOutsideConversation: false))
+        XCTAssertFalse(ReplySpeech.watchShouldSpeak(enabled: false, inConversation: true, alsoOutsideConversation: true))
+        XCTAssertFalse(ReplySpeech.watchShouldSpeak(enabled: true, inConversation: false, alsoOutsideConversation: false))
+        XCTAssertTrue(ReplySpeech.watchShouldSpeak(enabled: true, inConversation: false, alsoOutsideConversation: true))
+        XCTAssertNil(ReplySpeech.freshReply(before: [], after: ["You: hi", "Grok: Hello there."]))
+        XCTAssertEqual(
+            ReplySpeech.freshReply(before: ["You: hi"], after: ["You: hi", "Grok: Hello there."]),
+            "Hello there."
+        )
+        XCTAssertNil(ReplySpeech.freshReply(before: ["You: hi", "Grok: Hello there."], after: ["You: hi", "Grok: Hello there.", "You: again"]))
     }
 
     func testConnectionNoticeIsHonest() {

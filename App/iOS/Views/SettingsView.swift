@@ -3,6 +3,7 @@ import WatchRemoteCore
 
 struct SettingsView: View {
     @EnvironmentObject private var store: RemoteStore
+    @ObservedObject private var speech = PhoneSpeechPreference.shared
     @State private var agentSecret = ""
     @State private var relayToken = ""
     @State private var relayPin = ""
@@ -54,6 +55,17 @@ struct SettingsView: View {
                         }
                     }
                     .accessibilityIdentifier("settings.autoApprove")
+
+                    Toggle(isOn: $speech.readReplies) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Read replies aloud")
+                                .font(.headline)
+                            Text("Speaks Grok's reply in the open chat. Off until you turn it on. The button in the chat does the same.")
+                                .font(.footnote)
+                                .foregroundStyle(LojoTheme.secondaryText)
+                        }
+                    }
+                    .accessibilityIdentifier("settings.speakReplies")
 
                     Picker("Appearance", selection: Binding(
                         get: { store.appearance },
