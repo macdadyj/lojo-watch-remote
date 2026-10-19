@@ -124,12 +124,12 @@ struct WatchListView: View {
                         }
                     }
                     if model.pathTitle != headerTitle {
-                        Text(model.pathTitle)
+                        Text(WatchRouting.routeTitle(model.pathTitle))
                             .font(.caption.weight(.bold))
-                            .foregroundStyle(model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readablePrimary(scheme))
+                            .foregroundStyle(routeColor)
                             .lineLimit(2)
                             .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityLabel("Path \(model.pathTitle)")
+                            .accessibilityLabel(WatchRouting.routeTitle(model.pathTitle))
                     }
                     if model.snapshot.computers.count > 1 {
                         computerSwitcher
@@ -222,6 +222,10 @@ struct WatchListView: View {
                 .accessibilityLabel(computer.id == model.snapshot.activeComputerID ? "\(computer.label), active" : "Switch to \(computer.label)")
             }
         }
+    }
+
+    private var routeColor: Color {
+        model.connectionNotice == nil && model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readablePrimary(scheme)
     }
 
     private var phoneAway: Bool {
@@ -317,17 +321,17 @@ struct WatchRow: View {
                 }
             }
             Text(session.title)
-                .font(.footnote.weight(.semibold))
+                .font(.body.weight(.semibold))
                 .foregroundStyle(LojoTheme.readablePrimary(scheme))
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             Text(ChatTranscript.lastMessage(summary: session.summary, transcript: session.transcript))
                 .font(.footnote)
-                .foregroundStyle(LojoTheme.readablePrimary(scheme))
-                .lineLimit(2)
+                .foregroundStyle(LojoTheme.readableSecondary(scheme))
+                .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .lojoCard(padding: 4)
+        .lojoCard(padding: 8)
         .accessibilityElement(children: .combine)
     }
 }

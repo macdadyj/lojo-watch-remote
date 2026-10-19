@@ -387,26 +387,36 @@ struct VoiceChatView: View {
     /// Stays above the scrolling history so the way back and the chat's name are always on
     /// screen. History scrolled up underneath can never cover either.
     private var backToChats: some View {
-        HStack(spacing: 6) {
-            Button {
-                model.voiceModeActive = false
-            } label: {
-                Label("Chats", systemImage: "chevron.backward")
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption2.weight(.semibold))
-                    .frame(minHeight: 26, alignment: .leading)
-                    .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Button {
+                    model.voiceModeActive = false
+                } label: {
+                    Label("Chats", systemImage: "chevron.backward")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption.weight(.semibold))
+                        .frame(minWidth: 44, minHeight: 36, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(LojoTheme.accent)
+                .fixedSize()
+                .accessibilityLabel("Back to chats")
+                .accessibilityIdentifier("chat.toList")
+                if !chatTitle.isEmpty {
+                    titleText
+                } else {
+                    Spacer(minLength: 0)
+                }
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(LojoTheme.accent)
-            .fixedSize()
-            .accessibilityLabel("Back to chats")
-            .accessibilityIdentifier("chat.toList")
-            if !chatTitle.isEmpty {
-                titleText
-            } else {
-                Spacer(minLength: 0)
-            }
+            Text(WatchRouting.statusLine(notice: model.connectionNotice, pathTitle: model.pathTitle))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(model.connectionNotice == nil && model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readableSecondary(scheme))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.leading, 4)
+                .accessibilityLabel("Connection. \(WatchRouting.statusLine(notice: model.connectionNotice, pathTitle: model.pathTitle))")
+                .accessibilityIdentifier("chat.link")
         }
         .padding(.horizontal, 10)
     }
@@ -812,11 +822,12 @@ private struct WatchBubble: View {
         HStack {
             if mine { Spacer(minLength: 8) }
             Text(text)
-                .font(.footnote)
+                .font(.body)
+                .lineSpacing(2)
                 .foregroundStyle(mine ? Color.white : LojoTheme.readablePrimary(scheme))
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(mine ? LojoTheme.accent : (scheme == .dark ? Color.white.opacity(0.08) : Color.black.opacity(0.06)))

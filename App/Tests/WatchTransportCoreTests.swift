@@ -250,6 +250,14 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertNotEqual(RelayUserNotice.noNetworkText, RelayUserNotice.reconnectingText)
         XCTAssertTrue(RelayUserNotice.isConnectionNotice(RelayUserNotice.noNetworkText))
         XCTAssertFalse(RelayUserNotice.isConnectionNotice("The computer could not do that."))
+        XCTAssertEqual(WatchRouting.routeTitle("direct"), "On this Watch")
+        XCTAssertEqual(WatchRouting.routeTitle("via iPhone"), "Through iPhone")
+        XCTAssertEqual(WatchRouting.routeTitle("Pair on iPhone first"), "Pair on iPhone first")
+        XCTAssertEqual(WatchRouting.statusLine(notice: nil, pathTitle: "direct"), "On this Watch")
+        XCTAssertEqual(
+            WatchRouting.statusLine(notice: RelayUserNotice.computerOfflineText, pathTitle: "direct"),
+            RelayUserNotice.computerOfflineText
+        )
     }
 
     func testNoNetworkSendsTurnsThroughThePhoneWhenItIsReachable() {
