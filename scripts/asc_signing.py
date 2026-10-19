@@ -2,10 +2,10 @@
 """Install App Store profiles for the shared iOS Distribution certificate.
 
 Uses the App Store Connect REST API (ES256 JWT, audience appstoreconnect-v1).
-The certificate already exists (id VJ5MXTN7UT). This script never creates or
-revokes a certificate. It reuses an App Store profile for each app bundle id
-when that profile is active and includes the shared certificate, and creates
-one when it does not. It does not print private keys, API tokens, or passwords.
+Does not create, renew, or delete certificates. Profiles are fetched when they
+are already tied to the shared certificate, and created for that certificate
+only when a target has none. Does not print private keys, API tokens, or
+certificate passwords.
 """
 
 import base64
@@ -21,22 +21,28 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 API_ROOT = "https://api.appstoreconnect.apple.com"
 PROFILE_TYPE = "IOS_APP_STORE"
 CERTIFICATE_TYPE = "IOS_DISTRIBUTION"
-# Shared iOS Distribution certificate. Profiles are created against this id.
-CERTIFICATE_ID = "VJ5MXTN7UT"
-PROFILE_NAMES = {
-    "com.lojo.WatchRemote": "WatchRemote App Store",
-    "com.lojo.WatchRemote.watchkitapp": "WatchRemoteWatch App Store",
-}
-SKIP_TARGET_TYPES = {"bundle.ui-testing", "bundle.unit-test"}
+SHARED_CERTIFICATE_ID = "VJ5MXTN7UT"
+PRIMARY_BUNDLE_ID = "com.lojo.WatchRemote"
+DISTRIBUTION_PRODUCT_TYPES = (
+    "com.apple.product-type.application",
+    "com.apple.product-type.app-extension",
+    "com.apple.product-type.extensionkit-extension",
+    "com.apple.product-type.watchkit2-extension",
+    "com.apple.product-type.application.watchapp",
+    "com.apple.product-type.application.watchapp2",
+    "com.apple.product-type.application.on-demand-install-capable",
+)
 SIGNING_KEYS = (
     "CODE_SIGN_STYLE",
     "CODE_SIGN_IDENTITY",
     "DEVELOPMENT_TEAM",
+    "PROVISIONING_PROFILE",
     "PROVISIONING_PROFILE_SPECIFIER",
     "OTHER_CODE_SIGN_FLAGS",
 )
@@ -129,10 +135,7 @@ def stop_api(status, body, context):
     sys.stderr.write(text)
     if not text.endswith("\n"):
         sys.stderr.write("\n")
-    sys.stderr.write(
-        f"{context} failed with HTTP {status}. "
-        "Stopped. No distribution certificate was created or revoked.\n"
-    )
+    sys.stderr.write(f"{context} failed with HTTP {status}.\n")
     raise SystemExit(1)
 
 
@@ -155,10 +158,7 @@ def api(token, method, path, payload=None):
     except urllib.error.HTTPError as error:
         return error.code, error.read().decode()
     except urllib.error.URLError:
-        raise SystemExit(
-            "Could not reach App Store Connect. "
-            "Stopped. No distribution certificate was created or revoked."
-        )
+        raise SystemExit("Could not reach App Store Connect.")
 
 
 def load_pem(path):
@@ -185,57 +185,78 @@ def parse_data(status, body, context):
     return parsed
 
 
-def profile_name_for(bundle_id, target_name):
-    if bundle_id in PROFILE_NAMES:
-        return PROFILE_NAMES[bundle_id]
-    leaf = target_name or bundle_id.rsplit(".", 1)[-1]
-    return f"{leaf} App Store"
+def pem_certificates(path):
+    text = Path(path).read_text()
+    certificates = []
+    for match in re.finditer(
+        r"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----",
+        text,
+        re.S,
+    ):
+        certificates.append(base64.b64decode("".join(match.group(1).split())))
+    if not certificates:
+        raise SystemExit("The imported distribution certificate could not be read.")
+    return certificates
 
 
-def signable_type(target_type):
-    if target_type in SKIP_TARGET_TYPES:
-        return False
-    if target_type == "application":
-        return True
-    return "extension" in target_type
+def signing_identity(cert_der):
+    inspected = subprocess.run(
+        ["openssl", "x509", "-inform", "DER", "-noout", "-subject"],
+        input=cert_der,
+        capture_output=True,
+        check=False,
+    )
+    if inspected.returncode != 0:
+        raise SystemExit("The shared distribution certificate could not be read.")
+    subject = inspected.stdout.decode()
+    if "iPhone Distribution" in subject:
+        return "iPhone Distribution"
+    return "Apple Distribution"
 
 
-def distribution_targets(project_text):
-    """App and extension bundle ids the archive must sign. Test bundles are omitted."""
-    in_targets = False
-    targets = []
-    current_type = None
-    current_bundle = None
-    current_name = None
+def assert_certificate_usable(attributes):
+    if attributes.get("certificateType") != CERTIFICATE_TYPE:
+        raise SystemExit("The shared certificate is not an iOS Distribution certificate.")
+    text = attributes.get("expirationDate") or ""
+    if not text:
+        return
+    cleaned = text.replace("Z", "+00:00")
+    try:
+        expires = datetime.fromisoformat(cleaned)
+    except ValueError:
+        return
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires <= datetime.now(timezone.utc):
+        raise SystemExit("The shared iOS Distribution certificate is expired.")
 
-    def flush():
-        nonlocal current_type, current_bundle, current_name
-        if current_bundle and current_type and signable_type(current_type):
-            targets.append((current_bundle, profile_name_for(current_bundle, current_name)))
-        current_type = None
-        current_bundle = None
-        current_name = None
 
-    for line in project_text.splitlines():
-        if line.startswith("targets:"):
-            in_targets = True
-            continue
-        if not in_targets:
-            continue
-        if line.startswith("schemes:"):
-            flush()
-            break
-        if line.startswith("  ") and not line.startswith("   ") and line.rstrip().endswith(":"):
-            flush()
-            current_name = line.strip()[:-1]
-            continue
-        stripped = line.strip()
-        if stripped.startswith("type:"):
-            current_type = stripped.split(":", 1)[1].strip()
-        elif stripped.startswith("PRODUCT_BUNDLE_IDENTIFIER:"):
-            current_bundle = stripped.split(":", 1)[1].strip()
-    flush()
-    return targets
+def fetch_shared_certificate(token):
+    status, body = api(
+        token,
+        "GET",
+        "/v1/certificates/" + urllib.parse.quote(SHARED_CERTIFICATE_ID),
+    )
+    if status == 404:
+        raise SystemExit(
+            "The shared iOS Distribution certificate is missing from App Store Connect."
+        )
+    parsed = parse_data(status, body, "certificate lookup")
+    attributes = parsed["data"].get("attributes") or {}
+    assert_certificate_usable(attributes)
+    content = attributes.get("certificateContent")
+    if not content:
+        stop_api(status, body, "certificate lookup")
+    return base64.b64decode(content)
+
+
+def matching_installed_certificate(installed_certs, remote_der):
+    matches = [cert for cert in installed_certs if cert == remote_der]
+    if len(matches) != 1:
+        raise SystemExit(
+            "The imported .p12 does not contain the shared iOS Distribution certificate."
+        )
+    return matches[0]
 
 
 def find_bundle_id(token, identifier):
@@ -248,10 +269,120 @@ def find_bundle_id(token, identifier):
         if item.get("attributes", {}).get("identifier") == identifier:
             return item["id"]
     sys.stderr.write(
-        f"No App Store Connect bundle ID for {identifier}. "
-        "Create that App ID first. No distribution certificate was created or revoked.\n"
+        f"No App Store Connect bundle ID for {identifier}. Create that App ID first.\n"
     )
     raise SystemExit(1)
+
+
+def list_profiles(token):
+    items = []
+    query = urllib.parse.urlencode(
+        {
+            "filter[profileType]": PROFILE_TYPE,
+            "include": "bundleId,certificates",
+            "limit": "200",
+        }
+    )
+    path = "/v1/profiles?" + query
+    for _page in range(20):
+        status, body = api(token, "GET", path)
+        parsed = parse_data(status, body, "profile lookup")
+        items.extend(parsed.get("data") or [])
+        next_link = ((parsed.get("links") or {}).get("next")) or ""
+        if next_link.startswith(API_ROOT):
+            path = next_link[len(API_ROOT):]
+            continue
+        break
+    return items
+
+
+def profile_bundle_resource(item):
+    relationship = ((item.get("relationships") or {}).get("bundleId") or {}).get("data") or {}
+    return relationship.get("id")
+
+
+def profile_certificate_ids(token, item):
+    relationship = ((item.get("relationships") or {}).get("certificates") or {}).get("data") or []
+    identifiers = [entry.get("id") for entry in relationship if entry.get("id")]
+    if identifiers:
+        return identifiers
+    status, body = api(
+        token,
+        "GET",
+        "/v1/profiles/" + urllib.parse.quote(item["id"]) + "/relationships/certificates",
+    )
+    parsed = parse_data(status, body, "profile certificates")
+    return [entry.get("id") for entry in parsed.get("data") or [] if entry.get("id")]
+
+
+def profile_bytes(token, item):
+    content = (item.get("attributes") or {}).get("profileContent")
+    if content:
+        return base64.b64decode(content)
+    status, body = api(token, "GET", "/v1/profiles/" + urllib.parse.quote(item["id"]))
+    parsed = parse_data(status, body, "profile")
+    content = (parsed["data"].get("attributes") or {}).get("profileContent")
+    if not content:
+        stop_api(status, body, "profile")
+    return base64.b64decode(content)
+
+
+def decode_profile(raw):
+    with tempfile.NamedTemporaryFile() as handle:
+        handle.write(raw)
+        handle.flush()
+        decoded = subprocess.run(
+            [
+                "openssl",
+                "cms",
+                "-inform",
+                "DER",
+                "-verify",
+                "-noverify",
+                "-in",
+                handle.name,
+            ],
+            capture_output=True,
+            check=False,
+        )
+    if not decoded.stdout:
+        raise SystemExit("Could not read the provisioning profile.")
+    try:
+        return plistlib.loads(decoded.stdout)
+    except Exception:
+        raise SystemExit("Could not read the provisioning profile.")
+
+
+def application_identifier_matches(app_id, bundle_id):
+    team, separator, rest = str(app_id).partition(".")
+    if not separator:
+        return app_id == bundle_id
+    return rest == bundle_id and team.isalnum()
+
+
+def profile_matches(raw, bundle_id, cert_der):
+    payload = decode_profile(raw)
+    entitlements = payload.get("Entitlements") or {}
+    app_id = entitlements.get("application-identifier") or ""
+    if not application_identifier_matches(app_id, bundle_id):
+        return False
+    certificates = []
+    for item in payload.get("DeveloperCertificates") or []:
+        certificates.append(item if isinstance(item, bytes) else bytes(item))
+    if cert_der not in certificates:
+        return False
+    return payload
+
+
+def profile_name_for(bundle_id):
+    known = {
+        "com.lojo.WatchRemote": "WatchRemote App Store",
+        "com.lojo.WatchRemote.watchkitapp": "WatchRemoteWatch App Store",
+    }
+    if bundle_id in known:
+        return known[bundle_id]
+    leaf = bundle_id.rsplit(".", 1)[-1]
+    return f"Watch Remote {leaf} App Store"[:255]
 
 
 def delete_profile(token, profile_id):
@@ -261,62 +392,7 @@ def delete_profile(token, profile_id):
     stop_api(status, body, "profile delete")
 
 
-def list_named_profiles(token, name):
-    query = urllib.parse.urlencode(
-        {
-            "filter[name]": name,
-            "filter[profileType]": PROFILE_TYPE,
-            "include": "bundleId,certificates",
-            "limit": "20",
-        }
-    )
-    status, body = api(token, "GET", "/v1/profiles?" + query)
-    parsed = parse_data(status, body, "profile lookup")
-    rows = []
-    for item in parsed["data"]:
-        attributes = item.get("attributes") or {}
-        if attributes.get("name") != name or attributes.get("profileType") != PROFILE_TYPE:
-            continue
-        rows.append(item)
-    return rows
-
-
-def fetch_profile(token, profile_id):
-    query = urllib.parse.urlencode({"include": "bundleId,certificates"})
-    status, body = api(
-        token,
-        "GET",
-        "/v1/profiles/" + urllib.parse.quote(profile_id) + "?" + query,
-    )
-    parsed = parse_data(status, body, "profile")
-    return parsed["data"]
-
-
-def profile_usable(profile, certificate_id, bundle_resource_id):
-    attributes = profile.get("attributes") or {}
-    if attributes.get("profileType") != PROFILE_TYPE:
-        return False
-    if attributes.get("profileState") != "ACTIVE":
-        return False
-    expiration = attributes.get("expirationDate") or ""
-    if expiration and expiration < time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()):
-        return False
-    relationships = profile.get("relationships") or {}
-    certificates = (relationships.get("certificates") or {}).get("data") or []
-    if not any(item.get("id") == certificate_id for item in certificates):
-        return False
-    bundle = (relationships.get("bundleId") or {}).get("data") or {}
-    return bundle.get("id") == bundle_resource_id
-
-
-def profile_bytes(profile):
-    content = (profile.get("attributes") or {}).get("profileContent")
-    if not content:
-        return b""
-    return base64.b64decode(content)
-
-
-def create_profile(token, name, bundle_resource_id, certificate_id):
+def create_profile(token, name, bundle_resource_id):
     status, body = api(
         token,
         "POST",
@@ -333,91 +409,176 @@ def create_profile(token, name, bundle_resource_id, certificate_id):
                         "data": {"type": "bundleIds", "id": bundle_resource_id}
                     },
                     "certificates": {
-                        "data": [{"type": "certificates", "id": certificate_id}]
+                        "data": [
+                            {"type": "certificates", "id": SHARED_CERTIFICATE_ID}
+                        ]
                     },
                 },
             }
         },
     )
+    if status == 409:
+        return None
     parsed = parse_data(status, body, "profile")
-    content = parsed["data"].get("attributes", {}).get("profileContent")
+    content = (parsed["data"].get("attributes") or {}).get("profileContent")
     if not content:
         stop_api(status, body, "profile")
-    return parsed["data"]["id"], base64.b64decode(content)
+    return parsed["data"]["id"], base64.b64decode(content), parsed["data"]
 
 
-def install_profile(raw, profile_id, directory):
+def install_profile(raw, payload, directory):
     directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{profile_id}.mobileprovision"
+    filename = payload.get("UUID") or payload.get("Name") or "profile"
+    path = directory / f"{filename}.mobileprovision"
     path.write_bytes(raw)
     os.chmod(path, 0o644)
     return path
 
 
-def fetch_certificate_der(token, certificate_id):
-    status, body = api(token, "GET", "/v1/certificates/" + urllib.parse.quote(certificate_id))
-    parsed = parse_data(status, body, "certificate lookup")
-    attributes = parsed["data"].get("attributes") or {}
-    if attributes.get("certificateType") not in (None, CERTIFICATE_TYPE):
+def profiles_for_bundle(items, resource_id):
+    matched = []
+    for item in items:
+        if (item.get("attributes") or {}).get("profileType") not in (None, PROFILE_TYPE):
+            continue
+        if profile_bundle_resource(item) == resource_id:
+            matched.append(item)
+    return matched
+
+
+def choose_profile(items, token, cert_der, bundle_id, preferred_name):
+    usable = []
+    for item in items:
+        attributes = item.get("attributes") or {}
+        if attributes.get("profileState") not in (None, "ACTIVE"):
+            continue
+        if SHARED_CERTIFICATE_ID not in profile_certificate_ids(token, item):
+            continue
+        raw = profile_bytes(token, item)
+        payload = profile_matches(raw, bundle_id, cert_der)
+        if not payload:
+            continue
+        usable.append((item, raw, payload))
+    if not usable:
+        return None
+    preferred = [
+        entry for entry in usable
+        if (entry[0].get("attributes") or {}).get("name") == preferred_name
+    ]
+    pool = preferred or usable
+
+    def expiry(entry):
+        return (entry[0].get("attributes") or {}).get("expirationDate") or ""
+
+    pool.sort(key=expiry, reverse=True)
+    return pool[0]
+
+
+def delete_stale_named_profiles(token, items, preferred_name):
+    for item in items:
+        attributes = item.get("attributes") or {}
+        if attributes.get("name") != preferred_name:
+            continue
+        if (
+            attributes.get("profileState") in (None, "ACTIVE")
+            and SHARED_CERTIFICATE_ID in profile_certificate_ids(token, item)
+        ):
+            continue
+        delete_profile(token, item["id"])
+
+
+def ensure_profile(token, bundle_id, resource_id, cert_der, profiles_dir):
+    preferred_name = profile_name_for(bundle_id)
+    items = profiles_for_bundle(list_profiles(token), resource_id)
+    chosen = choose_profile(items, token, cert_der, bundle_id, preferred_name)
+    if chosen is not None:
+        _item, raw, payload = chosen
+        print(f"Using the App Store profile for {bundle_id}.", flush=True)
+        return install_record(raw, payload, bundle_id, profiles_dir)
+    print(f"Creating an App Store profile for {bundle_id}.", flush=True)
+    delete_stale_named_profiles(token, items, preferred_name)
+    created = create_profile(token, preferred_name, resource_id)
+    if created is None:
+        items = profiles_for_bundle(list_profiles(token), resource_id)
+        chosen = choose_profile(items, token, cert_der, bundle_id, preferred_name)
+        if chosen is None:
+            raise SystemExit(f"Could not install an App Store profile for {bundle_id}.")
+        _item, raw, payload = chosen
+        print(f"Using the App Store profile for {bundle_id}.", flush=True)
+        return install_record(raw, payload, bundle_id, profiles_dir)
+    _profile_id, raw, _data = created
+    payload = profile_matches(raw, bundle_id, cert_der)
+    if not payload:
         raise SystemExit(
-            "The shared certificate is not an iOS Distribution certificate. "
-            "Stopped. No distribution certificate was created or revoked."
+            f"The App Store profile for {bundle_id} is not tied to the shared certificate."
         )
-    content = attributes.get("certificateContent")
-    if not content:
-        stop_api(status, body, "certificate lookup")
-    return base64.b64decode(content)
+    return install_record(raw, payload, bundle_id, profiles_dir)
 
 
-def canonical_der(data):
-    """Re-encode a certificate so two copies of the same cert compare equal."""
-    with tempfile.NamedTemporaryFile() as handle:
-        handle.write(data)
-        handle.flush()
-        converted = subprocess.run(
-            ["openssl", "x509", "-inform", "DER", "-in", handle.name, "-outform", "DER"],
-            capture_output=True,
-            check=False,
-        )
-    if converted.returncode == 0 and converted.stdout:
-        return converted.stdout
-    return None
+def install_record(raw, payload, bundle_id, profiles_dir):
+    path = install_profile(raw, payload, profiles_dir)
+    name = payload.get("Name") or profile_name_for(bundle_id)
+    return {
+        "id": payload.get("UUID") or name,
+        "name": name,
+        "bundleId": bundle_id,
+        "path": str(path),
+    }
 
 
-def assert_same_certificate(local_der, remote_der):
-    if local_der == remote_der:
-        return
-    left = canonical_der(local_der)
-    right = canonical_der(remote_der)
-    if left is not None and left == right:
-        return
-    raise SystemExit(
-        "The imported distribution certificate does not match the shared "
-        "App Store Connect certificate. Stopped. No distribution certificate "
-        "was created or revoked."
-    )
+def pbx_objects(text):
+    objects = {}
+    needle = " = {"
+    index = 0
+    while True:
+        found = text.find(needle, index)
+        if found < 0:
+            break
+        line_start = text.rfind("\n", 0, found) + 1
+        header = text[line_start:found]
+        body_start = found + len(needle)
+        depth = 1
+        cursor = body_start
+        while cursor < len(text) and depth:
+            char = text[cursor]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+            cursor += 1
+        match = re.search(r"([A-Za-z0-9]+)\s*/\*", header)
+        if match is None:
+            index = body_start
+            continue
+        objects[match.group(1)] = text[body_start:cursor - 1]
+        index = cursor
+    return objects
 
 
-def ensure_profile(token, bundle_id, profile_name, bundle_resource_id, certificate_id):
-    """Return (profile id, bytes, name, created). Never creates a certificate."""
-    rows = []
-    for item in list_named_profiles(token, profile_name):
-        record = item
-        if not profile_usable(record, certificate_id, bundle_resource_id) or not profile_bytes(record):
-            record = fetch_profile(token, item["id"])
-        rows.append(record)
-    for record in rows:
-        if profile_usable(record, certificate_id, bundle_resource_id):
-            raw = profile_bytes(record)
-            if not raw:
-                stop_api(200, "profile has no content", "profile")
-            name = (record.get("attributes") or {}).get("name") or profile_name
-            return record["id"], raw, name, False
-    for record in rows:
-        if (record.get("attributes") or {}).get("name") == profile_name:
-            delete_profile(token, record["id"])
-    profile_id, raw = create_profile(token, profile_name, bundle_resource_id, certificate_id)
-    return profile_id, raw, profile_name, True
+def distribution_bundle_ids(text):
+    objects = pbx_objects(text)
+    bundle_ids = []
+    for body in objects.values():
+        if "isa = PBXNativeTarget;" not in body:
+            continue
+        product = re.search(r'productType = "([^"]+)";', body)
+        if product is None or product.group(1) not in DISTRIBUTION_PRODUCT_TYPES:
+            continue
+        config_list = re.search(r"buildConfigurationList = ([A-Za-z0-9]+)", body)
+        if config_list is None:
+            continue
+        list_body = objects.get(config_list.group(1), "")
+        for config_id in re.findall(r"([A-Za-z0-9]+) /\*", list_body):
+            config_body = objects.get(config_id, "")
+            bundle = re.search(
+                r'PRODUCT_BUNDLE_IDENTIFIER = "?([^";]+)"?;',
+                config_body,
+            )
+            if bundle is None:
+                continue
+            identifier = bundle.group(1).strip()
+            if identifier not in bundle_ids:
+                bundle_ids.append(identifier)
+    return bundle_ids
 
 
 def bundle_in_block(text, bundle_id):
@@ -427,7 +588,7 @@ def bundle_in_block(text, bundle_id):
     )
 
 
-def patch_pbxproj(text, team, keychain, profiles, identity):
+def patch_pbxproj(text, team, keychain, profiles, identity="Apple Distribution"):
     lines = text.splitlines(keepends=True)
     output = []
     index = 0
@@ -482,7 +643,7 @@ def rewrite_settings(block, team, keychain, profile_name, identity):
     return kept
 
 
-def write_export_options(path, team, profiles, identity):
+def write_export_options(path, team, profiles, identity="Apple Distribution"):
     payload = {
         "method": "app-store-connect",
         "signingStyle": "manual",
@@ -498,9 +659,9 @@ def write_export_options(path, team, profiles, identity):
         plistlib.dump(payload, handle)
 
 
-def write_manifest(path, certificate_id, profiles):
+def write_manifest(path, profiles):
     payload = {
-        "certificateId": certificate_id,
+        "certificateId": SHARED_CERTIFICATE_ID,
         "profiles": profiles,
     }
     Path(path).write_text(json.dumps(payload))
@@ -508,69 +669,55 @@ def write_manifest(path, certificate_id, profiles):
 
 
 def prepare(argv):
-    identity = argv["identity"]
-    if any(char in identity for char in '"\n\\'):
-        raise SystemExit("The signing identity could not be used.")
-    certificate_der = Path(argv["certificate_der"]).read_bytes()
-    if not certificate_der:
-        raise SystemExit("The imported distribution certificate is empty.")
-    manifest_path = Path(argv["manifest"])
-    profiles_dir = Path(argv["profiles_dir"]).expanduser()
-    project_text = Path(argv["project_yml"]).read_text()
-    targets = distribution_targets(project_text)
-    if not targets:
-        raise SystemExit("No app targets to sign.")
-    print(f"Using the shared iOS Distribution certificate {CERTIFICATE_ID}.", flush=True)
+    installed = pem_certificates(argv["installed_pem"])
     token = jwt_from_env()
-    remote_der = fetch_certificate_der(token, CERTIFICATE_ID)
-    assert_same_certificate(certificate_der, remote_der)
-    write_manifest(manifest_path, CERTIFICATE_ID, [])
-    installed = []
-    resolved = []
-    try:
-        for bundle_id, profile_name in targets:
-            resource_id = find_bundle_id(token, bundle_id)
-            profile_id, raw, actual_name, created = ensure_profile(
-                token, bundle_id, profile_name, resource_id, CERTIFICATE_ID
-            )
-            if created:
-                print(f"Created an App Store profile for {bundle_id}.", flush=True)
-            else:
-                print(f"Using an existing App Store profile for {bundle_id}.", flush=True)
-            path = install_profile(raw, profile_id, profiles_dir)
-            installed.append(
-                {
-                    "id": profile_id,
-                    "name": actual_name,
-                    "bundleId": bundle_id,
-                    "path": str(path),
-                    "created": created,
-                }
-            )
-            resolved.append((bundle_id, actual_name))
-            write_manifest(manifest_path, CERTIFICATE_ID, installed)
-    except SystemExit:
-        write_manifest(manifest_path, CERTIFICATE_ID, installed)
-        raise
+    remote = fetch_shared_certificate(token)
+    certificate = matching_installed_certificate(installed, remote)
+    identity = signing_identity(certificate)
+    print("Using the shared iOS Distribution certificate.", flush=True)
     project = Path(argv["pbxproj"])
-    patched = patch_pbxproj(project.read_text(), argv["team"], argv["keychain"], resolved, identity)
-    if patched.count("CODE_SIGN_STYLE = Manual;") < len(resolved):
-        raise SystemExit(
-            "Could not set manual signing on every app target. "
-            "No distribution certificate was created or revoked."
-        )
-    if identity not in patched:
-        raise SystemExit(
-            "Could not set the distribution identity. "
-            "No distribution certificate was created or revoked."
-        )
+    project_text = project.read_text()
+    bundle_ids = distribution_bundle_ids(project_text)
+    if not bundle_ids:
+        raise SystemExit("No distributable targets were found in the Xcode project.")
+    profiles_dir = Path(argv["profiles_dir"]).expanduser()
+    manifest_path = Path(argv["manifest"])
+    installed_profiles = []
+    try:
+        for bundle_id in bundle_ids:
+            resource_id = find_bundle_id(token, bundle_id)
+            record = ensure_profile(
+                token, bundle_id, resource_id, certificate, profiles_dir
+            )
+            installed_profiles.append(record)
+            write_manifest(manifest_path, installed_profiles)
+    except SystemExit:
+        write_manifest(manifest_path, installed_profiles)
+        raise
+    pairs = [(record["bundleId"], record["name"]) for record in installed_profiles]
+    patched = patch_pbxproj(project_text, argv["team"], argv["keychain"], pairs, identity)
+    for bundle_id, profile_name in pairs:
+        if f'PROVISIONING_PROFILE_SPECIFIER = "{profile_name}";' not in patched:
+            raise SystemExit(f"Could not set manual signing for {bundle_id}.")
+    if patched.count("CODE_SIGN_STYLE = Manual;") < len(pairs):
+        raise SystemExit("Could not set manual signing on every distributable target.")
+    if f'CODE_SIGN_IDENTITY = "{identity}";' not in patched:
+        raise SystemExit("Could not set the distribution signing identity.")
     project.write_text(patched)
-    write_export_options(Path(argv["export_plist"]), argv["team"], resolved, identity)
-    write_manifest(manifest_path, CERTIFICATE_ID, installed)
+    write_export_options(Path(argv["export_plist"]), argv["team"], pairs, identity)
+    write_manifest(manifest_path, installed_profiles)
+    print(
+        "Manual signing is set for " + ", ".join(bundle_ids) + ".",
+        flush=True,
+    )
 
 
 def cleanup():
-    """Remove local profile files recorded for this run. Does not call the API."""
+    """Remove local profile files recorded for this run.
+
+    Shared App Store profiles and the distribution certificate stay in
+    App Store Connect so the next run can reuse them.
+    """
     manifest_path = Path(os.environ["SIGNING_MANIFEST"])
     if not manifest_path.is_file():
         return
@@ -579,6 +726,19 @@ def cleanup():
         path = profile.get("path")
         if path:
             Path(path).unlink(missing_ok=True)
+
+
+def self_test():
+    der_roundtrip()
+    jwt_roundtrip()
+    discovery_roundtrip()
+    pbxproj_roundtrip()
+    export_roundtrip()
+    profile_match_roundtrip()
+    forbidden_roundtrip()
+    cleanup_roundtrip()
+    prepare_roundtrip()
+    print("asc signing ok")
 
 
 def der_roundtrip():
@@ -648,49 +808,136 @@ def jwt_roundtrip():
             raise SystemExit("JWT signature did not verify")
 
 
-def pbxproj_roundtrip():
-    fixture = """
-\t\tbuildSettings = {
-\t\t\tCODE_SIGN_STYLE = Automatic;
-\t\t\tDEVELOPMENT_TEAM = EXAMPLETEAM;
-\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote;
-\t\t};
-\t\tbuildSettings = {
-\t\t\tCODE_SIGN_STYLE = Automatic;
-\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote.tests;
-\t\t};
-\t\tbuildSettings = {
-\t\t\tCODE_SIGN_STYLE = Automatic;
-\t\t\tPRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote.watchkitapp;
-\t\t};
+PROJECT_FIXTURE = """
+{
+	objects = {
+		APP /* WatchRemote */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = APPLIST /* Build configuration list for PBXNativeTarget "WatchRemote" */;
+			productType = "com.apple.product-type.application";
+		};
+		EXT /* Widget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EXTLIST /* Build configuration list for PBXNativeTarget "Widget" */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		TESTS /* WatchRemoteTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = TESTLIST /* Build configuration list for PBXNativeTarget "WatchRemoteTests" */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		UITESTS /* WatchRemoteUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = UITESTLIST /* Build configuration list for PBXNativeTarget "WatchRemoteUITests" */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		APPLIST /* Build configuration list for PBXNativeTarget "WatchRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				APPDEBUG /* Debug */,
+				APPREL /* Release */,
+			);
+			defaultConfigurationName = Release;
+		};
+		EXTLIST /* Build configuration list for PBXNativeTarget "Widget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EXTREL /* Release */,
+			);
+		};
+		TESTLIST /* Build configuration list for PBXNativeTarget "WatchRemoteTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				TESTDEBUG /* Debug */,
+			);
+		};
+		UITESTLIST /* Build configuration list for PBXNativeTarget "WatchRemoteUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				UITESTDEBUG /* Debug */,
+			);
+		};
+		APPDEBUG /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote;
+			};
+			name = Debug;
+		};
+		APPREL /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote;
+			};
+			name = Release;
+		};
+		EXTREL /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote.widget;
+			};
+			name = Release;
+		};
+		TESTDEBUG /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote.tests;
+			};
+			name = Debug;
+		};
+		UITESTDEBUG /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				PRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote.uitests;
+			};
+			name = Debug;
+		};
+	};
+}
 """
-    targets = (
+
+
+def discovery_roundtrip():
+    found = distribution_bundle_ids(PROJECT_FIXTURE)
+    if found != ["com.lojo.WatchRemote", "com.lojo.WatchRemote.widget"]:
+        raise SystemExit("distribution targets were not discovered: " + repr(found))
+
+
+def pbxproj_roundtrip():
+    profiles = (
         ("com.lojo.WatchRemote", "WatchRemote App Store"),
-        ("com.lojo.WatchRemote.watchkitapp", "WatchRemoteWatch App Store"),
+        ("com.lojo.WatchRemote.widget", "Watch Remote widget App Store"),
     )
-    patched = patch_pbxproj(fixture, "EXAMPLETEAM", "/tmp/signing.keychain-db", targets, "Apple Distribution")
-    if 'PRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote;' not in patched:
-        raise SystemExit("pbxproj lost the iOS bundle id")
-    if patched.count("CODE_SIGN_STYLE = Manual;") != 2:
-        raise SystemExit("pbxproj did not set manual signing on both apps")
+    patched = patch_pbxproj(PROJECT_FIXTURE, "EXAMPLETEAM", "/tmp/signing.keychain-db", profiles)
+    if patched.count("CODE_SIGN_STYLE = Manual;") != 3:
+        raise SystemExit("pbxproj did not set manual signing on every distributable target")
     if 'PROVISIONING_PROFILE_SPECIFIER = "WatchRemote App Store";' not in patched:
-        raise SystemExit("pbxproj missed the iOS profile name")
-    if 'PROVISIONING_PROFILE_SPECIFIER = "WatchRemoteWatch App Store";' not in patched:
-        raise SystemExit("pbxproj missed the watch profile name")
-    if "com.lojo.WatchRemote.tests" not in patched or patched.count("CODE_SIGN_STYLE = Automatic;") != 1:
-        raise SystemExit("pbxproj changed the test bundle")
+        raise SystemExit("pbxproj missed the app profile name")
+    if patched.count('PROVISIONING_PROFILE_SPECIFIER = "WatchRemote App Store";') != 2:
+        raise SystemExit("pbxproj missed a build configuration for the app")
+    if 'PROVISIONING_PROFILE_SPECIFIER = "Watch Remote widget App Store";' not in patched:
+        raise SystemExit("pbxproj missed the extension profile name")
+    if "com.lojo.WatchRemote.tests" not in patched or "com.lojo.WatchRemote.uitests" not in patched:
+        raise SystemExit("pbxproj dropped a test bundle")
+    if patched.count("CODE_SIGN_STYLE = Automatic;") != 2:
+        raise SystemExit("pbxproj changed a test target")
     if "Apple Distribution" not in patched or "/tmp/signing.keychain-db" not in patched:
         raise SystemExit("pbxproj missed the distribution identity or keychain")
 
 
 def export_roundtrip():
-    targets = (
+    profiles = (
         ("com.lojo.WatchRemote", "WatchRemote App Store"),
-        ("com.lojo.WatchRemote.watchkitapp", "WatchRemoteWatch App Store"),
+        ("com.lojo.WatchRemote.widget", "Watch Remote widget App Store"),
     )
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "ExportOptions.plist"
-        write_export_options(path, "EXAMPLETEAM", targets, "Apple Distribution")
+        write_export_options(path, "EXAMPLETEAM", profiles)
         with path.open("rb") as handle:
             payload = plistlib.load(handle)
         if payload["method"] != "app-store-connect" or payload["signingStyle"] != "manual":
@@ -699,35 +946,70 @@ def export_roundtrip():
             raise SystemExit("export options missed Apple Distribution")
         if payload["destination"] != "upload" or payload["manageAppVersionAndBuildNumber"] is not False:
             raise SystemExit("export options did not keep the build number or upload destination")
-        profiles = payload["provisioningProfiles"]
-        if profiles.get("com.lojo.WatchRemote") != "WatchRemote App Store":
-            raise SystemExit("export options missed the iOS profile")
-        if profiles.get("com.lojo.WatchRemote.watchkitapp") != "WatchRemoteWatch App Store":
-            raise SystemExit("export options missed the watch profile")
+        stored = payload["provisioningProfiles"]
+        if stored.get("com.lojo.WatchRemote") != "WatchRemote App Store":
+            raise SystemExit("export options missed the app profile")
+        if stored.get("com.lojo.WatchRemote.widget") != "Watch Remote widget App Store":
+            raise SystemExit("export options missed the extension profile")
+        if len(stored) != 2:
+            raise SystemExit("export options should name every distributable target")
 
 
-def targets_roundtrip():
-    text = Path(__file__).resolve().parents[1].joinpath("project.yml").read_text()
-    found = distribution_targets(text)
-    bundles = [bundle for bundle, _name in found]
-    if bundles != ["com.lojo.WatchRemote", "com.lojo.WatchRemote.watchkitapp"]:
-        raise SystemExit("signable targets changed: " + ", ".join(bundles))
-    names = dict(found)
-    if names["com.lojo.WatchRemote"] != "WatchRemote App Store":
-        raise SystemExit("iOS profile name changed")
-    if names["com.lojo.WatchRemote.watchkitapp"] != "WatchRemoteWatch App Store":
-        raise SystemExit("watch profile name changed")
-    extra = text.replace(
-        "\nschemes:\n",
-        "\n  Widget:\n    type: app-extension\n    settings:\n      base:\n"
-        "        PRODUCT_BUNDLE_IDENTIFIER: com.lojo.WatchRemote.widget\nschemes:\n",
-        1,
-    )
-    extra_bundles = [bundle for bundle, _name in distribution_targets(extra)]
-    if "com.lojo.WatchRemote.widget" not in extra_bundles:
-        raise SystemExit("an app extension was not signed")
-    if any(bundle.endswith(".tests") or "uitests" in bundle for bundle in extra_bundles):
-        raise SystemExit("a test bundle was signed")
+def sign_profile(bundle_id, cert_der, name):
+    payload = {
+        "Name": name,
+        "UUID": "UUID-" + bundle_id.replace(".", "-"),
+        "Entitlements": {"application-identifier": "TEAMID1234." + bundle_id},
+        "DeveloperCertificates": [cert_der],
+    }
+    with tempfile.TemporaryDirectory() as directory:
+        directory = Path(directory)
+        key = directory / "key.pem"
+        cert = directory / "cert.pem"
+        plist = directory / "payload.plist"
+        profile = directory / "profile.mobileprovision"
+        created = subprocess.run(
+            [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-keyout", str(key), "-out", str(cert), "-days", "1",
+                "-nodes", "-subj", "/CN=Test",
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if created.returncode != 0:
+            raise SystemExit("Could not build a test profile signer.")
+        with plist.open("wb") as handle:
+            plistlib.dump(payload, handle)
+        signed = subprocess.run(
+            [
+                "openssl", "cms", "-sign", "-nodetach", "-binary",
+                "-signer", str(cert), "-inkey", str(key),
+                "-in", str(plist), "-outform", "DER", "-out", str(profile),
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if signed.returncode != 0:
+            raise SystemExit("Could not sign a test profile.")
+        return profile.read_bytes()
+
+
+def profile_match_roundtrip():
+    cert_der = b"\x30\x03\x01\x01\x00"
+    raw = sign_profile(PRIMARY_BUNDLE_ID, cert_der, "WatchRemote App Store")
+    payload = profile_matches(raw, PRIMARY_BUNDLE_ID, cert_der)
+    if not payload or payload.get("Name") != "WatchRemote App Store":
+        raise SystemExit("profile did not match the shared certificate")
+    other = sign_profile("com.lojo.WatchRemote.widget", b"\x30\x01\xff", "Other")
+    if profile_matches(other, "com.lojo.WatchRemote.widget", cert_der):
+        raise SystemExit("profile matched a different certificate")
+    if profile_matches(raw, "com.lojo.WatchRemote.widget", cert_der):
+        raise SystemExit("app profile matched the extension bundle id")
+    if not application_identifier_matches("TEAMID1234.com.lojo.WatchRemote", PRIMARY_BUNDLE_ID):
+        raise SystemExit("application identifier should match the app")
+    if application_identifier_matches("TEAMID1234.com.lojo.WatchRemote.widget", PRIMARY_BUNDLE_ID):
+        raise SystemExit("application identifier matched a shorter bundle id")
 
 
 def forbidden_roundtrip():
@@ -741,17 +1023,17 @@ def forbidden_roundtrip():
             "profile",
         )
     except SystemExit as error:
-        if error.code != 1:
+        if error.code not in (1, None):
             raise SystemExit("forbidden path did not stop")
     else:
         raise SystemExit("forbidden path did not stop")
     finally:
         sys.stderr = held
     text = captured.getvalue()
-    if "FORBIDDEN_ERROR" not in text or "The resource is not allowed." not in text:
+    if "FORBIDDEN_ERROR" not in text or "profile failed with HTTP 403" not in text:
         raise SystemExit("forbidden path did not keep the API response")
-    if "No distribution certificate was created or revoked" not in text:
-        raise SystemExit("forbidden path did not say certificates were left alone")
+    if "certificate" in text.lower() and "creat" in text.lower():
+        raise SystemExit("forbidden path talked about creating a certificate")
 
 
 def cleanup_roundtrip():
@@ -760,7 +1042,7 @@ def cleanup_roundtrip():
 
     def fake_api(token, method, path, payload=None):
         calls.append((method, path))
-        return 500, "cleanup must not call the API"
+        raise SystemExit("cleanup called the App Store Connect API")
 
     with tempfile.TemporaryDirectory() as tmp:
         profile_file = Path(tmp) / "p.mobileprovision"
@@ -768,7 +1050,6 @@ def cleanup_roundtrip():
         manifest = Path(tmp) / "m.json"
         write_manifest(
             manifest,
-            CERTIFICATE_ID,
             [{"id": "PROF1", "name": "n", "bundleId": "b", "path": str(profile_file)}],
         )
         globals()["api"] = fake_api
@@ -779,252 +1060,215 @@ def cleanup_roundtrip():
                 raise SystemExit("cleanup called the API: " + repr(calls))
             if profile_file.exists():
                 raise SystemExit("cleanup left the profile file behind")
+            stored = json.loads(manifest.read_text())
+            if stored.get("certificateId") != SHARED_CERTIFICATE_ID:
+                raise SystemExit("manifest lost the shared certificate id")
         finally:
             globals()["api"] = real_api
             os.environ.pop("SIGNING_MANIFEST", None)
 
 
-def profile_flow_roundtrip():
-    """Reuse an active profile, replace an invalid one, and never touch certificates."""
+def certificate_body(cert_der):
+    return json.dumps({
+        "data": {
+            "type": "certificates",
+            "id": SHARED_CERTIFICATE_ID,
+            "attributes": {
+                "certificateType": CERTIFICATE_TYPE,
+                "expirationDate": "2099-01-01T00:00:00.000+00:00",
+                "certificateContent": base64.b64encode(cert_der).decode(),
+            },
+        }
+    })
+
+
+def sample_certificate():
+    with tempfile.TemporaryDirectory() as directory:
+        directory = Path(directory)
+        created = subprocess.run(
+            [
+                "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                "-keyout", str(directory / "key.pem"),
+                "-out", str(directory / "cert.pem"),
+                "-days", "1", "-nodes",
+                "-subj", "/CN=Apple Distribution: Test (TEAMID1234)",
+            ],
+            capture_output=True,
+            check=False,
+        )
+        if created.returncode != 0:
+            raise SystemExit("Could not build a test certificate.")
+        exported = subprocess.run(
+            ["openssl", "x509", "-in", str(directory / "cert.pem"), "-outform", "DER"],
+            capture_output=True,
+            check=False,
+        )
+        if exported.returncode != 0 or not exported.stdout:
+            raise SystemExit("Could not export a test certificate.")
+        return exported.stdout
+
+
+def prepare_roundtrip():
+    cert_der = sample_certificate()
     calls = []
-    cert_der = b"shared-cert-der"
+    profiles = []
 
     def fake_api(token, method, path, payload=None):
-        calls.append((method, path.split("?", 1)[0], payload))
+        calls.append((method, path.split("?", 1)[0]))
+        if method == "POST" and path.split("?", 1)[0] == "/v1/certificates":
+            raise SystemExit("prepare created a certificate")
+        if method == "DELETE" and "/v1/certificates/" in path:
+            raise SystemExit("prepare deleted a certificate")
         if method == "GET" and path.startswith("/v1/certificates/"):
-            if path != "/v1/certificates/" + CERTIFICATE_ID:
-                return 404, "wrong certificate"
-            return 200, json.dumps(
-                {
-                    "data": {
-                        "id": CERTIFICATE_ID,
-                        "attributes": {
-                            "certificateType": "IOS_DISTRIBUTION",
-                            "certificateContent": base64.b64encode(cert_der).decode(),
-                        },
-                    }
-                }
-            )
-        if method == "GET" and path.startswith("/v1/bundleIds?"):
+            if not path.endswith("/" + SHARED_CERTIFICATE_ID):
+                raise SystemExit("prepare looked up a different certificate")
+            return 200, certificate_body(cert_der)
+        if method == "GET" and path.startswith("/v1/bundleIds"):
             query = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
             identifier = query["filter[identifier]"][0]
-            return 200, json.dumps(
-                {"data": [{"id": "BID-" + identifier, "attributes": {"identifier": identifier}}]}
-            )
-        if method == "GET" and path.startswith("/v1/profiles?"):
-            query = urllib.parse.parse_qs(urllib.parse.urlparse(path).query)
-            name = query["filter[name]"][0]
-            if name == "WatchRemote App Store":
-                return 200, json.dumps(
-                    {
-                        "data": [
-                            {
-                                "id": "PROF-IOS",
-                                "attributes": {
-                                    "name": name,
-                                    "profileType": "IOS_APP_STORE",
-                                    "profileState": "ACTIVE",
-                                    "profileContent": base64.b64encode(b"profile-ios").decode(),
-                                    "expirationDate": "2099-01-01T00:00:00Z",
-                                },
-                                "relationships": {
-                                    "bundleId": {
-                                        "data": {"type": "bundleIds", "id": "BID-com.lojo.WatchRemote"}
-                                    },
-                                    "certificates": {
-                                        "data": [{"type": "certificates", "id": CERTIFICATE_ID}]
-                                    },
-                                },
-                            }
-                        ]
-                    }
-                )
-            return 200, json.dumps(
-                {
-                    "data": [
-                        {
-                            "id": "PROF-OLD",
-                            "attributes": {
-                                "name": name,
-                                "profileType": "IOS_APP_STORE",
-                                "profileState": "INVALID",
-                                "expirationDate": "2099-01-01T00:00:00Z",
-                            },
-                            "relationships": {
-                                "bundleId": {
-                                    "data": {
-                                        "type": "bundleIds",
-                                        "id": "BID-com.lojo.WatchRemote.watchkitapp",
-                                    }
-                                },
-                                "certificates": {
-                                    "data": [{"type": "certificates", "id": "REVOKED"}]
-                                },
-                            },
-                        }
-                    ]
-                }
-            )
-        if method == "GET" and path.startswith("/v1/profiles/PROF-OLD"):
-            return 200, json.dumps(
-                {
-                    "data": {
-                        "id": "PROF-OLD",
-                        "attributes": {
-                            "name": "WatchRemoteWatch App Store",
-                            "profileType": "IOS_APP_STORE",
-                            "profileState": "INVALID",
-                        },
-                        "relationships": {
-                            "bundleId": {
-                                "data": {
-                                    "type": "bundleIds",
-                                    "id": "BID-com.lojo.WatchRemote.watchkitapp",
-                                }
-                            },
-                            "certificates": {"data": [{"type": "certificates", "id": "REVOKED"}]},
-                        },
-                    }
-                }
-            )
-        if method == "DELETE" and path == "/v1/profiles/PROF-OLD":
-            return 204, ""
+            resource = "BID-APP" if identifier == PRIMARY_BUNDLE_ID else "BID-WIDGET"
+            return 200, json.dumps({
+                "data": [{
+                    "type": "bundleIds",
+                    "id": resource,
+                    "attributes": {"identifier": identifier},
+                }]
+            })
+        if method == "GET" and path.startswith("/v1/profiles"):
+            return 200, json.dumps({"data": list(profiles)})
         if method == "POST" and path == "/v1/profiles":
-            certs = payload["data"]["relationships"]["certificates"]["data"]
-            if certs != [{"type": "certificates", "id": CERTIFICATE_ID}]:
-                return 400, "profile was not bound to the shared certificate"
-            return 201, json.dumps(
-                {
-                    "data": {
-                        "id": "PROF-WATCH",
-                        "attributes": {
-                            "profileContent": base64.b64encode(b"profile-watch").decode(),
-                        },
-                    }
+            relationships = payload["data"]["relationships"]
+            certificates = relationships["certificates"]["data"]
+            if certificates != [{"type": "certificates", "id": SHARED_CERTIFICATE_ID}]:
+                raise SystemExit("profile was not tied to the shared certificate")
+            resource = relationships["bundleId"]["data"]["id"]
+            bundle_id = PRIMARY_BUNDLE_ID if resource == "BID-APP" else "com.lojo.WatchRemote.widget"
+            name = payload["data"]["attributes"]["name"]
+            raw = sign_profile(bundle_id, cert_der, name)
+            return 201, json.dumps({
+                "data": {
+                    "type": "profiles",
+                    "id": "PROF-" + resource,
+                    "attributes": {
+                        "name": name,
+                        "profileType": PROFILE_TYPE,
+                        "profileState": "ACTIVE",
+                        "profileContent": base64.b64encode(raw).decode(),
+                    },
                 }
-            )
-        return 500, "unexpected " + method + " " + path
+            })
+        if method == "DELETE" and path.startswith("/v1/profiles/"):
+            return 204, ""
+        return 404, "{}"
 
-    real_api = globals()["api"]
-    real_jwt = globals()["jwt_from_env"]
+    real_api, real_jwt = globals()["api"], globals()["jwt_from_env"]
     globals()["api"] = fake_api
+    globals()["jwt_from_env"] = lambda: "token"
     try:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            project = root / "project.yml"
-            project.write_text(Path(__file__).resolve().parents[1].joinpath("project.yml").read_text())
-            pbx = root / "project.pbxproj"
-            pbx.write_text(
-                "buildSettings = {\n"
-                "\tCODE_SIGN_STYLE = Automatic;\n"
-                "\tPRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote;\n"
-                "};\n"
-                "buildSettings = {\n"
-                "\tCODE_SIGN_STYLE = Automatic;\n"
-                "\tPRODUCT_BUNDLE_IDENTIFIER = com.lojo.WatchRemote.watchkitapp;\n"
-                "};\n"
+            tmp = Path(tmp)
+            pem = tmp / "installed.pem"
+            pem.write_text(
+                "-----BEGIN CERTIFICATE-----\n"
+                + base64.b64encode(cert_der).decode()
+                + "\n-----END CERTIFICATE-----\n"
             )
-            certificate = root / "cert.der"
-            certificate.write_bytes(cert_der)
-            os.environ["KEY_PATH"] = str(root / "missing.p8")
-            globals()["jwt_from_env"] = lambda: "token"
-            prepare(
-                {
-                    "identity": "Apple Distribution",
-                    "certificate_der": str(certificate),
-                    "manifest": str(root / "manifest.json"),
-                    "profiles_dir": str(root / "profiles"),
-                    "project_yml": str(project),
-                    "team": "EXAMPLETEAM",
-                    "keychain": "/tmp/signing.keychain-db",
-                    "pbxproj": str(pbx),
-                    "export_plist": str(root / "ExportOptions.plist"),
-                }
-            )
-            methods = [(method, path) for method, path, _payload in calls]
-            if ("POST", "/v1/certificates") in methods or any(
-                method == "DELETE" and path.startswith("/v1/certificates") for method, path in methods
+            project = tmp / "project.pbxproj"
+            project.write_text(PROJECT_FIXTURE)
+            manifest = tmp / "manifest.json"
+            export_plist = tmp / "ExportOptions.plist"
+            prepare({
+                "installed_pem": str(pem),
+                "manifest": str(manifest),
+                "profiles_dir": str(tmp / "profiles"),
+                "team": "EXAMPLETEAM",
+                "keychain": "/tmp/watchremote-signing.keychain-db",
+                "pbxproj": str(project),
+                "export_plist": str(export_plist),
+            })
+            text = project.read_text()
+            if text.count("CODE_SIGN_STYLE = Manual;") != 3:
+                raise SystemExit("prepare did not sign every distributable target")
+            if "CODE_SIGN_STYLE = Automatic;" not in text:
+                raise SystemExit("prepare signed a test target")
+            if ("POST", "/v1/certificates") in calls or any(
+                method == "DELETE" and path.startswith("/v1/certificates/")
+                for method, path in calls
             ):
-                raise SystemExit("profile flow created or revoked a certificate")
-            if ("POST", "/v1/profiles") not in methods:
-                raise SystemExit("profile flow did not create the missing watch profile")
-            if methods.count(("POST", "/v1/profiles")) != 1:
-                raise SystemExit("profile flow created more than the missing profile")
-            if ("DELETE", "/v1/profiles/PROF-OLD") not in methods:
-                raise SystemExit("profile flow left the invalid watch profile in place")
-            if ("DELETE", "/v1/profiles/PROF-IOS") in methods:
-                raise SystemExit("profile flow deleted the reusable iOS profile")
-            patched = pbx.read_text()
-            if patched.count("CODE_SIGN_STYLE = Manual;") != 2:
-                raise SystemExit("profile flow did not set manual signing")
-            ios_profile = root / "profiles" / "PROF-IOS.mobileprovision"
-            watch_profile = root / "profiles" / "PROF-WATCH.mobileprovision"
-            if ios_profile.read_bytes() != b"profile-ios" or watch_profile.read_bytes() != b"profile-watch":
-                raise SystemExit("profile flow installed the wrong profile bytes")
+                raise SystemExit("prepare minted or deleted a certificate")
+            if calls.count(("POST", "/v1/profiles")) != 2:
+                raise SystemExit("prepare did not create a profile per bundle id")
+            with export_plist.open("rb") as handle:
+                options = plistlib.load(handle)
+            if set(options["provisioningProfiles"]) != {
+                PRIMARY_BUNDLE_ID,
+                "com.lojo.WatchRemote.widget",
+            }:
+                raise SystemExit("export options missed a target")
+
+            calls.clear()
+            profiles.append({
+                "type": "profiles",
+                "id": "EXISTING",
+                "attributes": {
+                    "name": "WatchRemote App Store",
+                    "profileType": PROFILE_TYPE,
+                    "profileState": "ACTIVE",
+                    "expirationDate": "2099-01-01T00:00:00.000+00:00",
+                    "profileContent": base64.b64encode(
+                        sign_profile(PRIMARY_BUNDLE_ID, cert_der, "WatchRemote App Store")
+                    ).decode(),
+                },
+                "relationships": {
+                    "bundleId": {"data": {"type": "bundleIds", "id": "BID-APP"}},
+                    "certificates": {
+                        "data": [{"type": "certificates", "id": SHARED_CERTIFICATE_ID}]
+                    },
+                },
+            })
+            single = PROJECT_FIXTURE.replace(
+                'productType = "com.apple.product-type.app-extension";',
+                'productType = "com.apple.product-type.framework";',
+            )
+            project.write_text(single)
+            prepare({
+                "installed_pem": str(pem),
+                "manifest": str(manifest),
+                "profiles_dir": str(tmp / "profiles"),
+                "team": "EXAMPLETEAM",
+                "keychain": "/tmp/watchremote-signing.keychain-db",
+                "pbxproj": str(project),
+                "export_plist": str(export_plist),
+            })
+            if ("POST", "/v1/profiles") in calls:
+                raise SystemExit("prepare created a profile that already existed")
+            if any(method == "POST" and path == "/v1/certificates" for method, path in calls):
+                raise SystemExit("reuse path created a certificate")
+
+            pem.write_text(
+                "-----BEGIN CERTIFICATE-----\n"
+                + base64.b64encode(b"\x30\x03other").decode()
+                + "\n-----END CERTIFICATE-----\n"
+            )
             calls.clear()
             try:
-                assert_same_certificate(b"other", fetch_certificate_der("token", CERTIFICATE_ID))
-            except SystemExit as error:
-                if "does not match" not in str(error):
-                    raise
+                prepare({
+                    "installed_pem": str(pem),
+                    "manifest": str(manifest),
+                    "profiles_dir": str(tmp / "profiles"),
+                    "team": "EXAMPLETEAM",
+                    "keychain": "/tmp/watchremote-signing.keychain-db",
+                    "pbxproj": str(project),
+                    "export_plist": str(export_plist),
+                })
+            except SystemExit:
+                pass
             else:
-                raise SystemExit("a mismatched certificate was accepted")
-            if any(method == "POST" for method, _path, _payload in calls):
-                raise SystemExit("a mismatched certificate still created a profile")
+                raise SystemExit("prepare accepted a p12 that is not the shared certificate")
+            if any(method == "POST" for method, _path in calls):
+                raise SystemExit("a certificate mismatch still created signing assets")
     finally:
-        globals()["api"] = real_api
-        globals()["jwt_from_env"] = real_jwt
-        os.environ.pop("KEY_PATH", None)
-
-
-def no_certificate_minting():
-    root = Path(__file__).resolve().parents[1]
-    files = [
-        root / "scripts/asc_signing.py",
-        root / "scripts/archive-upload.sh",
-        root / "scripts/import-dist-cert.sh",
-        root / ".github/workflows/ios.yml",
-        root / ".github/workflows/testflight-beta.yml",
-    ]
-    banned = (
-        "allow" + "ProvisioningUpdates",
-        "openssl " + "genrsa",
-        "Watch Remote " + "Distribution",
-        "fast" + "lane",
-        "csr" + "Content",
-        "CERTIFICATE " + "REQUEST",
-    )
-    for path in files:
-        text = path.read_text()
-        for phrase in banned:
-            if phrase in text:
-                raise SystemExit(f"{path.name} still contains {phrase}")
-    signing = (root / "scripts/asc_signing.py").read_text()
-    if re.search(r'api\(\s*token,\s*"POST",\s*"/v1/certificates"', signing):
-        raise SystemExit("signing still posts certificates")
-    if re.search(r'api\(\s*token,\s*"DELETE",\s*"/v1/certificates', signing):
-        raise SystemExit("signing still deletes certificates")
-    workflow = (root / ".github/workflows/ios.yml").read_text()
-    if "DIST_CERT_P12" not in workflow or "DIST_CERT_PASSWORD" not in workflow:
-        raise SystemExit("workflow does not import the shared certificate")
-    if "import-dist-cert.sh --cleanup" not in workflow or "if: always()" not in workflow:
-        raise SystemExit("workflow does not delete the keychain with if: always()")
-    archive = (root / "scripts/archive-upload.sh").read_text()
-    if "authenticationKeyPath" not in archive:
-        raise SystemExit("upload no longer authenticates to App Store Connect")
-
-
-def self_test():
-    der_roundtrip()
-    jwt_roundtrip()
-    pbxproj_roundtrip()
-    export_roundtrip()
-    targets_roundtrip()
-    forbidden_roundtrip()
-    cleanup_roundtrip()
-    profile_flow_roundtrip()
-    no_certificate_minting()
-    print("asc signing ok")
+        globals()["api"], globals()["jwt_from_env"] = real_api, real_jwt
 
 
 def main():
@@ -1036,15 +1280,13 @@ def main():
         return
     if len(sys.argv) > 1 and sys.argv[1] == "prepare":
         required = (
-            "certificate_der",
+            "installed_pem",
             "manifest",
             "profiles_dir",
-            "project_yml",
             "team",
             "keychain",
             "pbxproj",
             "export_plist",
-            "identity",
         )
         values = {}
         args = sys.argv[2:]
