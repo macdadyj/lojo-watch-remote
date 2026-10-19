@@ -1324,6 +1324,15 @@ def next_counter(previous: int, now_ms: int | None = None) -> int:
 
 
 AGENT_RETRY = 5.0
+# The relay pings every 25s. Two missed pings means this socket is gone and the
+# Watch is being told the computer is offline. A quiet Grok turn still receives
+# those pings, so this is not a chat idle timeout.
+RELAY_SILENCE_SECONDS = 70.0
+
+
+def relay_link_expired(last_heard: float, now: float, limit: float | None = None) -> bool:
+    span = RELAY_SILENCE_SECONDS if limit is None else limit
+    return now - last_heard >= span
 
 
 class AgentSlot:
@@ -1381,10 +1390,13 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
         if opcode != 1 or b'"ok":true' not in payload:
             raise miniws.SocketError("The relay did not accept this pairing.")
         conn.sock.settimeout(1)
+        last_heard = time.monotonic()
         caught_up = getattr(slot.agent, "request_push", None)
         if caught_up is not None:
             caught_up()
         while True:
+            if relay_link_expired(last_heard, time.monotonic()):
+                raise miniws.SocketError("The relay stopped sending.")
             agent = slot.ensure()
             agent_conn = getattr(agent, "conn", None)
             agent_sock = getattr(agent_conn, "sock", None)
@@ -1408,6 +1420,10 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
                 readable = [*readable, conn.sock]
             if agent_conn is not None and agent_conn.pending() and agent_sock not in readable:
                 readable = [*readable, agent_sock]
+            # A ping is consumed inside recv and never returned. Hearing the socket
+            # at all means the relay still has this computer in the room.
+            if conn.sock in readable:
+                last_heard = time.monotonic()
             if agent_sock is not None and agent_sock in readable:
                 try:
                     agent.pump()

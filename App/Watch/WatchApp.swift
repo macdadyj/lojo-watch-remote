@@ -68,7 +68,7 @@ private struct WatchTurn {
 
 @MainActor
 final class WatchModel: ObservableObject {
-    static let stillWaitingStatus = "Still waiting for Grok"
+    static let stillWaitingStatus = RelayUserNotice.stillWaitingText
 
     @Published var snapshot = DemoCatalog.snapshot()
     @Published var forcedScreen: String?
@@ -545,9 +545,11 @@ final class WatchModel: ObservableObject {
            snapshot.sessions.first(where: { $0.id == id })?.permission != nil {
             return
         }
-        if ["", "Sent", "Sending"].contains(voiceStatus) {
-            voiceStatus = Self.stillWaitingStatus
-        }
+        voiceStatus = WatchRouting.turnStatus(
+            current: voiceStatus,
+            computerOffline: connectionNotice == RelayUserNotice.computerOfflineText,
+            slow: true
+        )
     }
 
     private func noteStarted(requestID: String, sessionID: String) {
@@ -564,7 +566,7 @@ final class WatchModel: ObservableObject {
     private func noteFailed(requestID: String) {
         guard let open = turn, open.requestID == requestID else { return }
         turn = nil
-        if ["", "Sent", "Sending", Self.stillWaitingStatus].contains(voiceStatus) {
+        if ["", "Sent", "Sending", Self.stillWaitingStatus, RelayUserNotice.queuedOfflineText].contains(voiceStatus) {
             voiceStatus = "Couldn't send"
         }
     }
@@ -584,7 +586,7 @@ final class WatchModel: ObservableObject {
               let lines = snapshot.sessions.first(where: { $0.id == id })?.transcript,
               WatchRouting.hasReply(after: open.prompt, in: lines) else { return }
         turn = nil
-        if ["Sent", "Sending", Self.stillWaitingStatus].contains(voiceStatus) {
+        if ["Sent", "Sending", Self.stillWaitingStatus, RelayUserNotice.queuedOfflineText].contains(voiceStatus) {
             voiceStatus = ""
         }
     }
@@ -937,6 +939,13 @@ final class WatchModel: ObservableObject {
             }
         } else if isConnectionNotice(banner) {
             banner = nil
+        }
+        if turn != nil {
+            voiceStatus = WatchRouting.turnStatus(
+                current: voiceStatus,
+                computerOffline: notice == RelayUserNotice.computerOfflineText,
+                slow: false
+            )
         }
     }
 
