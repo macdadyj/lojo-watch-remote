@@ -86,12 +86,14 @@ def connect(url: str, timeout: float = 10, headers: dict[str, str] | None = None
     path = parts.path or "/"
     if scheme == "wss":
         raw = socket.create_connection((host, port), timeout=timeout)
+        _keepalive(raw)
         context = ssl.create_default_context()
         sock: socket.socket = context.wrap_socket(raw, server_hostname=host)
     elif scheme == "ws" and host in {"127.0.0.1", "localhost"}:
         sock = socket.create_connection((host, port), timeout=timeout)
     else:
         raise SocketError("The relay URL has to be wss.")
+    _keepalive(sock)
     key = base64.b64encode(os.urandom(16)).decode("ascii")
     host_header = host if port in {80, 443} else f"{host}:{port}"
     extra = _header_block(headers)
@@ -122,6 +124,22 @@ def connect(url: str, timeout: float = 10, headers: dict[str, str] | None = None
     conn.buffer = leftover
     sock.settimeout(timeout)
     return conn
+
+
+def _keepalive(sock: socket.socket) -> None:
+    """Ask the kernel to notice a path that died without a close frame."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except OSError:
+        return
+    for name, value in (("TCP_KEEPIDLE", 30), ("TCP_KEEPALIVE", 30), ("TCP_KEEPINTVL", 10), ("TCP_KEEPCNT", 3)):
+        option = getattr(socket, name, None)
+        if option is None:
+            continue
+        try:
+            sock.setsockopt(socket.IPPROTO_TCP, option, value)
+        except OSError:
+            continue
 
 
 def _header_block(headers: dict[str, str] | None) -> str:

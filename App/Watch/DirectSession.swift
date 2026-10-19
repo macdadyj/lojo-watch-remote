@@ -352,7 +352,9 @@ final class DirectSession: ObservableObject {
                 quietPause()
                 return
             }
-            let batch = Array(outbox.prefix(RelayPoll.maxFramesPerRequest))
+            // Hold the outbox while the relay says the computer is gone. An empty poll
+            // still learns when it rejoins, and the relay wakes that poll on the join.
+            let batch = WatchRouting.shouldPost(hostOnline: hostOnline) ? Array(outbox.prefix(RelayPoll.maxFramesPerRequest)) : []
             let wait = batch.isEmpty && phase == .up && !networkDown ? RelayPoll.watchWaitMilliseconds : 0
             let result = await post(batch, wait: wait)
             guard generation == current else { return }

@@ -407,7 +407,7 @@ struct VoiceChatView: View {
             }
             Text(WatchRouting.statusLine(notice: model.connectionNotice, pathTitle: model.pathTitle))
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(model.connectionNotice == nil && model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readableSecondary(scheme))
+                .foregroundStyle(chatLinkColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .layoutPriority(1)
@@ -415,6 +415,16 @@ struct VoiceChatView: View {
                 .accessibilityIdentifier("chat.link")
         }
         .padding(.horizontal, 10)
+    }
+
+    private var chatLinkColor: Color {
+        if model.connectionNotice == RelayUserNotice.computerOfflineText || model.connectionNotice == RelayUserNotice.noNetworkText {
+            return LojoTheme.danger
+        }
+        if model.connectionNotice == nil && model.pathTitle == "direct" {
+            return LojoTheme.online
+        }
+        return LojoTheme.readableSecondary(scheme)
     }
 
     private var titleText: some View {

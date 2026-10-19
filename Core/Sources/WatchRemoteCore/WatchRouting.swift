@@ -108,10 +108,35 @@ public enum WatchRouting {
         return transcript.contains { $0.hasPrefix("You:") && fold(ChatTranscript.spokenText($0)) == needle }
     }
 
+    /// Post sealed frames only after the relay has not said the computer is gone.
+    /// Nil is the first poll: those frames may wait in the room. False means this relay
+    /// process has no computer socket, so a posted frame would sit there with no reply.
+    public static func shouldPost(hostOnline: Bool?) -> Bool {
+        hostOnline != false
+    }
+
+    /// What an open turn should say. A computer the relay has marked offline keeps the
+    /// message on the Watch. "Still waiting" is only for a turn that was actually sent.
+    public static func turnStatus(current: String, computerOffline: Bool, slow: Bool) -> String {
+        let pending = ["", "Sent", "Sending", RelayUserNotice.stillWaitingText, RelayUserNotice.queuedOfflineText]
+        guard pending.contains(current) else { return current }
+        if computerOffline {
+            return RelayUserNotice.queuedOfflineText
+        }
+        if current == RelayUserNotice.queuedOfflineText {
+            return "Sending"
+        }
+        if slow && (current.isEmpty || current == "Sent" || current == "Sending") {
+            return RelayUserNotice.stillWaitingText
+        }
+        return current
+    }
+
     /// The sentence the Watch shows about the link, or nil when the turn path is healthy.
     /// "No network" means the Watch's own radio has no path. "Reconnecting…" means the radio is up
-    /// and the relay is not answering. "Computer offline" means the relay answers but the computer
-    /// is not in the room. Any of these is moot while the iPhone carries turns.
+    /// and the relay is not answering. "Computer offline" means this relay process answered and
+    /// the computer's socket is not in the room. The room token does not expire. Any of these
+    /// is moot while the iPhone carries turns.
     public static func notice(hasRelayPairing: Bool, relayUp: Bool, relayTrouble: Bool, relayHostOnline: Bool?, phoneReachable: Bool, noNetwork: Bool = false) -> String? {
         guard hasRelayPairing, !phoneReachable else { return nil }
         if noNetwork {

@@ -10,7 +10,7 @@ function listen(relay) {
   });
 }
 
-function connect(port, headers = {}) {
+function connect(port, headers = {}, autoPong = false) {
   return new Promise((resolve, reject) => {
     const key = crypto.randomBytes(16).toString("base64");
     const socket = new net.Socket();
@@ -68,6 +68,7 @@ function connect(port, headers = {}) {
         if (!frame) break;
         buffer = buffer.subarray(frame.bytes);
         frames.push(frame);
+        if (autoPong && frame.opcode === 9) api.send(0xa, frame.payload);
       }
     });
     socket.on("error", reject);
@@ -432,12 +433,43 @@ test("a peer outside the proxy list cannot choose its address", async () => {
 test("heartbeat ping does not close an idle room", async () => {
   const relay = createRelay({ log: () => {}, heartbeatMs: 40 });
   const port = await listen(relay);
-  const client = await connect(port);
+  const client = await connect(port, {}, true);
   await auth(client, "host", "roomtokenvalue0009");
   await client.waitFor((frames) => frames.some((frame) => frame.opcode === 9), 1000);
   assert.equal(client.socket.destroyed, false);
   relay.server.close();
   client.socket.destroy();
+});
+
+test("a host that stops answering pings is offline", async () => {
+  const relay = createRelay({ log: () => {}, heartbeatMs: 40 });
+  const port = await listen(relay);
+  const token = "roomtokenvalue0011";
+  const dead = await connect(port);
+  await auth(dead, "host", token);
+  let response = await poll(port, token, { wait: 0 });
+  assert.equal((await response.json()).host, true);
+  await dead.waitFor((frames) => frames.some((frame) => frame.opcode === 8), 1000);
+  let offline = false;
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    response = await poll(port, token, { wait: 0 });
+    if ((await response.json()).host === false) {
+      offline = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.equal(offline, true);
+  const live = await connect(port, {}, true);
+  await auth(live, "host", token);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  response = await poll(port, token, { wait: 0 });
+  assert.equal((await response.json()).host, true);
+  assert.equal(live.socket.destroyed, false);
+  relay.server.close();
+  dead.socket.destroy();
+  live.socket.destroy();
 });
 
 test("message rate limit closes the socket", async () => {

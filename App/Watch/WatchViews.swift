@@ -115,7 +115,7 @@ struct WatchListView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
                             Text(headerTitle)
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(LojoTheme.readablePrimary(scheme))
+                                .foregroundStyle(headerTitleColor)
                                 .lineLimit(2)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityLabel(model.pathTitle == headerTitle ? "Path \(model.pathTitle)" : headerTitle)
@@ -226,6 +226,13 @@ struct WatchListView: View {
 
     private var routeColor: Color {
         model.connectionNotice == nil && model.pathTitle == "direct" ? LojoTheme.online : LojoTheme.readablePrimary(scheme)
+    }
+
+    private var headerTitleColor: Color {
+        if model.connectionNotice == RelayUserNotice.computerOfflineText || model.connectionNotice == RelayUserNotice.noNetworkText {
+            return LojoTheme.danger
+        }
+        return LojoTheme.readablePrimary(scheme)
     }
 
     private var phoneAway: Bool {

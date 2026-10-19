@@ -315,6 +315,7 @@ export function createRelay(options = {}) {
     }, 5_000);
     authTimer.unref?.();
 
+    peer.lastPong = Date.now();
     peers.add(peer);
     socket.on("data", (chunk) => {
       peer.buffer = Buffer.concat([peer.buffer, chunk]);
@@ -361,7 +362,10 @@ export function createRelay(options = {}) {
           sendFrame(current.socket, 0xa, parsed.payload);
           continue;
         }
-        if (parsed.opcode === 10) continue;
+        if (parsed.opcode === 10) {
+          current.lastPong = Date.now();
+          continue;
+        }
         if (parsed.opcode === 0) {
           current.fragments = Buffer.concat([current.fragments, parsed.payload]);
           continue;
@@ -388,6 +392,7 @@ export function createRelay(options = {}) {
         return;
       }
       const now = Date.now();
+      current.lastPong = now;
       current.recent = current.recent.filter((stamp) => now - stamp < 10_000);
       current.recent.push(now);
       if (current.recent.length > ratePer10s) {
@@ -466,8 +471,21 @@ export function createRelay(options = {}) {
 
   if (heartbeatMs > 0) {
     const heartbeat = setInterval(() => {
+      const now = Date.now();
       for (const peer of peers) {
-        if (peer.authed && !peer.closed) sendFrame(peer.socket, 0x9, Buffer.alloc(0));
+        if (!peer.authed || peer.closed) continue;
+        // Three missed pongs: the socket is gone. Drop it so a Watch poll
+        // reports the computer offline instead of a connection nobody is on.
+        if (now - (peer.lastPong || 0) > heartbeatMs * 3) {
+          const stale = peer;
+          closePeer(stale, 4000);
+          // end() waits for the other side. A dead path never sends that, so drop the socket now.
+          setTimeout(() => {
+            try { stale.socket.destroy(); } catch { /* already gone */ }
+          }, 50);
+          continue;
+        }
+        sendFrame(peer.socket, 0x9, Buffer.alloc(0));
       }
     }, heartbeatMs);
     heartbeat.unref?.();

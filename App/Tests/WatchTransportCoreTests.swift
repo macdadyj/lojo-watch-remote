@@ -258,6 +258,26 @@ final class WatchTransportCoreTests: XCTestCase {
             WatchRouting.statusLine(notice: RelayUserNotice.computerOfflineText, pathTitle: "direct"),
             RelayUserNotice.computerOfflineText
         )
+        XCTAssertFalse(WatchRouting.shouldPost(hostOnline: false))
+        XCTAssertTrue(WatchRouting.shouldPost(hostOnline: nil))
+        XCTAssertTrue(WatchRouting.shouldPost(hostOnline: true))
+        XCTAssertEqual(
+            WatchRouting.turnStatus(current: "Sent", computerOffline: true, slow: true),
+            RelayUserNotice.queuedOfflineText
+        )
+        XCTAssertEqual(
+            WatchRouting.turnStatus(current: RelayUserNotice.stillWaitingText, computerOffline: true, slow: false),
+            RelayUserNotice.queuedOfflineText
+        )
+        XCTAssertEqual(
+            WatchRouting.turnStatus(current: "Sent", computerOffline: false, slow: true),
+            RelayUserNotice.stillWaitingText
+        )
+        XCTAssertEqual(
+            WatchRouting.turnStatus(current: RelayUserNotice.queuedOfflineText, computerOffline: false, slow: false),
+            "Sending"
+        )
+        XCTAssertEqual(WatchRouting.turnStatus(current: "Speaking", computerOffline: true, slow: true), "Speaking")
     }
 
     func testNoNetworkSendsTurnsThroughThePhoneWhenItIsReachable() {

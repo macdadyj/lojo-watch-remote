@@ -37,10 +37,12 @@ def free_port() -> int:
     return port
 
 
-def start_relay(port: int) -> subprocess.Popen:
+def start_relay(port: int, heartbeat_ms: int | None = None) -> subprocess.Popen:
     env = os.environ.copy()
     env["WATCHREMOTE_OUTBOUND_BIND"] = "127.0.0.1"
     env["WATCHREMOTE_OUTBOUND_PORT"] = str(port)
+    if heartbeat_ms is not None:
+        env["WATCHREMOTE_OUTBOUND_HEARTBEAT_MS"] = str(heartbeat_ms)
     proc = subprocess.Popen(
         ["node", "relay/outbound/server.mjs"],
         cwd=ROOT,
@@ -56,6 +58,17 @@ def start_relay(port: int) -> subprocess.Popen:
             return proc
     proc.kill()
     raise RuntimeError("relay did not start")
+
+
+def _drain(proc: subprocess.Popen, lines: list[str]) -> None:
+    if proc.stdout is None:
+        return
+    for line in proc.stdout:
+        lines.append(line)
+
+
+def _host_joins(lines: list[str]) -> int:
+    return sum(1 for line in lines if '"joined"' in line and '"host"' in line)
 
 
 def stop(proc: subprocess.Popen | None) -> None:
@@ -181,6 +194,33 @@ class WatchPathTests(unittest.TestCase):
         )
         self.watch.send("ping", sessionID=session_id, autoApprove=True)
         self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: I read notes.txt. It says hello."))
+
+    def test_a_silent_socket_rejoins_and_still_answers(self) -> None:
+        previous = outbound.RELAY_SILENCE_SECONDS
+        outbound.RELAY_SILENCE_SECONDS = 0.7
+        lines: list[str] = []
+        try:
+            stop(self.relay)
+            self.relay = start_relay(self.relay_port, heartbeat_ms=120_000)
+            threading.Thread(target=_drain, args=(self.relay, lines), daemon=True).start()
+            deadline = time.time() + 10
+            while time.time() < deadline:
+                self.watch.poll()
+                if self.watch.host_online:
+                    break
+                time.sleep(0.05)
+            self.assertTrue(self.watch.host_online, "the host did not rejoin after the relay restarted")
+            time.sleep(0.3)
+            first = _host_joins(lines)
+            self.assertGreaterEqual(first, 1, lines)
+            time.sleep(3.0)
+            self.assertGreater(_host_joins(lines), first, lines)
+            self.watch.poll()
+            self.assertTrue(self.watch.host_online)
+            session_id = self.started(self.watch.send("start", prompt="Can you hear me", autoApprove=True))
+            self.watch.wait_for(lambda message: reply_in(message, session_id, "Grok: I can hear you."), timeout=10)
+        finally:
+            outbound.RELAY_SILENCE_SECONDS = previous
 
     def test_relay_restart_recovers(self) -> None:
         stop(self.relay)
@@ -358,6 +398,12 @@ class HostUnitTests(unittest.TestCase):
         update = agent.take_update(now=100.01)
         self.assertIsNotNone(update)
         self.assertEqual(update["sessions"][0]["transcript"], ["Grok: hi"])
+
+    def test_a_silent_relay_socket_expires_and_a_live_one_does_not(self) -> None:
+        self.assertFalse(outbound.relay_link_expired(0, 69))
+        self.assertTrue(outbound.relay_link_expired(0, 70))
+        self.assertFalse(outbound.relay_link_expired(0, 1.0, limit=1.5))
+        self.assertTrue(outbound.relay_link_expired(0, 1.5, limit=1.5))
 
     def test_counters_follow_the_clock(self) -> None:
         self.assertEqual(outbound.next_counter(0, now_ms=1_700_000_000_000), 1_700_000_000_000)
