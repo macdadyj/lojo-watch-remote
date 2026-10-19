@@ -16,6 +16,16 @@ final class VoicePreferences: ObservableObject {
         didSet { UserDefaults.standard.set(autoSend, forKey: Keys.autoSend) }
     }
 
+    /// Reads Grok's reply in a voice chat. On until turned off. The chat button uses this too.
+    @Published var speakReplies: Bool {
+        didSet {
+            UserDefaults.standard.set(speakReplies, forKey: Keys.speakReplies)
+            if !speakReplies {
+                VoiceSpeaker.shared.stop()
+            }
+        }
+    }
+
     @Published var readAloud: Bool {
         didSet {
             UserDefaults.standard.set(readAloud, forKey: Keys.readAloud)
@@ -48,6 +58,11 @@ final class VoicePreferences: ObservableObject {
     private init() {
         let defaults = UserDefaults.standard
         autoSend = defaults.bool(forKey: Keys.autoSend)
+        if defaults.object(forKey: Keys.speakReplies) == nil {
+            speakReplies = ReplySpeech.watchDefault
+        } else {
+            speakReplies = defaults.bool(forKey: Keys.speakReplies)
+        }
         readAloud = defaults.bool(forKey: Keys.readAloud)
         if defaults.object(forKey: Keys.pauseSends) == nil {
             pauseSends = false
@@ -60,6 +75,7 @@ final class VoicePreferences: ObservableObject {
 
     private enum Keys {
         static let autoSend = "watch.voice.autoSend"
+        static let speakReplies = "watch.voice.speakReplies"
         static let readAloud = "watch.voice.readAloud"
         static let pauseSends = "watch.voice.pauseSends"
         static let autoApprove = "watch.voice.autoApprove.v2"
@@ -196,11 +212,18 @@ struct VoicePreferenceToggles: View {
             }
             .accessibilityHint("Applies to New task. Off until you turn it on. Speak still waits for I'm done unless Pause sends is on.")
 
+            Toggle(isOn: $preferences.speakReplies) {
+                Text("Read replies aloud")
+                    .font(.caption2)
+            }
+            .accessibilityIdentifier("settings.speakReplies")
+            .accessibilityHint("Speaks Grok's reply in the chat. On until you turn it off. The button in the chat does the same.")
+
             Toggle(isOn: $preferences.readAloud) {
                 Text("Read results aloud")
                     .font(.caption2)
             }
-            .accessibilityHint("Speaks the latest finished result. Off until you turn it on.")
+            .accessibilityHint("Also speaks a finished result outside a conversation. Off until you turn it on.")
 
             Toggle(isOn: Binding(
                 get: { model.approval.value },
@@ -413,6 +436,18 @@ struct VoiceChatView: View {
                 .layoutPriority(1)
                 .accessibilityLabel("Connection. \(WatchRouting.statusLine(notice: model.connectionNotice, pathTitle: model.pathTitle))")
                 .accessibilityIdentifier("chat.link")
+            Button {
+                preferences.speakReplies.toggle()
+            } label: {
+                Image(systemName: preferences.speakReplies ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.caption2)
+                    .frame(minWidth: 28, minHeight: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(preferences.speakReplies ? LojoTheme.accent : LojoTheme.readableSecondary(scheme))
+            .accessibilityLabel(preferences.speakReplies ? "Mute replies" : "Read replies aloud")
+            .accessibilityIdentifier("chat.speak")
         }
         .padding(.horizontal, 10)
     }
@@ -1225,7 +1260,11 @@ extension WatchModel {
 
     func noteVoiceSnapshot(previous: PhoneSnapshot, current: PhoneSnapshot) {
         guard forcedScreen == nil else { return }
-        let speakResults = VoicePreferences.shared.readAloud || voiceModeActive
+        let speakResults = ReplySpeech.watchShouldSpeak(
+            enabled: VoicePreferences.shared.speakReplies,
+            inConversation: voiceModeActive,
+            alsoOutsideConversation: VoicePreferences.shared.readAloud
+        )
         let includeNew = previous.mode == current.mode
         let result = speakResults
             ? VoiceResultPicker.latestResult(previous: previous.sessions, current: current.sessions, includeNew: includeNew)

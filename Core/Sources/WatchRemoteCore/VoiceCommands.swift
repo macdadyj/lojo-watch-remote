@@ -273,3 +273,44 @@ public enum VoiceResultPicker {
         }
     }
 }
+
+/// Whether a finished reply is read aloud.
+///
+/// The Watch already reads a reply during a voice chat, so that switch defaults on.
+/// The iPhone does not read replies, so that switch defaults off. A missing stored
+/// value keeps the current behavior. An explicit false stays off across launches.
+public enum ReplySpeech {
+    public static let watchDefault = true
+    public static let phoneDefault = false
+
+    public static func watchEnabled(stored: Bool?) -> Bool {
+        stored ?? watchDefault
+    }
+
+    public static func phoneEnabled(stored: Bool?) -> Bool {
+        stored ?? phoneDefault
+    }
+
+    /// Voice-chat replies follow the switch. Outside a conversation, only the older
+    /// opt-in ("Read results aloud") speaks, and the switch still silences that.
+    public static func watchShouldSpeak(enabled: Bool, inConversation: Bool, alsoOutsideConversation: Bool) -> Bool {
+        guard enabled else { return false }
+        return inConversation || alsoOutsideConversation
+    }
+
+    public static func phoneShouldSpeak(enabled: Bool) -> Bool {
+        enabled
+    }
+
+    /// The Grok line that was not in `before`. An empty `before` is history being loaded, not a new reply.
+    public static func freshReply(before: [String], after: [String]) -> String? {
+        guard !before.isEmpty else { return nil }
+        var added = Array(after.dropFirst(min(before.count, after.count)))
+        if after.count == before.count, let previous = before.last, let latest = after.last, previous != latest {
+            added.append(latest)
+        }
+        guard let line = added.last(where: { $0.hasPrefix("Grok:") }) else { return nil }
+        let text = line.dropFirst("Grok:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+}
