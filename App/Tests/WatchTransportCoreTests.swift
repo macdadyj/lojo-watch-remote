@@ -223,6 +223,24 @@ final class WatchTransportCoreTests: XCTestCase {
         XCTAssertEqual(echo.sessions.count, 2)
     }
 
+    func testReplySpeechKeepsTheCurrentDefault() {
+        XCTAssertTrue(ReplySpeech.watchEnabled(stored: nil))
+        XCTAssertFalse(ReplySpeech.watchEnabled(stored: false))
+        XCTAssertTrue(ReplySpeech.watchEnabled(stored: true))
+        XCTAssertFalse(ReplySpeech.phoneEnabled(stored: nil))
+        XCTAssertTrue(ReplySpeech.phoneEnabled(stored: true))
+        XCTAssertTrue(ReplySpeech.watchShouldSpeak(enabled: true, inConversation: true, alsoOutsideConversation: false))
+        XCTAssertFalse(ReplySpeech.watchShouldSpeak(enabled: false, inConversation: true, alsoOutsideConversation: true))
+        XCTAssertFalse(ReplySpeech.watchShouldSpeak(enabled: true, inConversation: false, alsoOutsideConversation: false))
+        XCTAssertTrue(ReplySpeech.watchShouldSpeak(enabled: true, inConversation: false, alsoOutsideConversation: true))
+        XCTAssertNil(ReplySpeech.freshReply(before: [], after: ["You: hi", "Grok: Hello there."]))
+        XCTAssertEqual(
+            ReplySpeech.freshReply(before: ["You: hi"], after: ["You: hi", "Grok: Hello there."]),
+            "Hello there."
+        )
+        XCTAssertNil(ReplySpeech.freshReply(before: ["You: hi", "Grok: Hello there."], after: ["You: hi", "Grok: Hello there.", "You: again"]))
+    }
+
     func testConnectionNoticeIsHonest() {
         XCTAssertNil(WatchRouting.notice(hasRelayPairing: false, relayUp: false, relayTrouble: true, relayHostOnline: nil, phoneReachable: false))
         XCTAssertEqual(
