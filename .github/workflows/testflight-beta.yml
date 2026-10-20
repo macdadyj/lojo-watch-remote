@@ -21,4 +21,4 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
           ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
           BUILD_NUMBER: ${{ inputs.build }}
-        run: python3 scripts/asc_testflight.py release --build "${BUILD_NUMBER}" --wait-seconds 1500 --require-ready
+        run: python3 scripts/asc_testflight.py release --build "${BUILD_NUMBER}" --wait-seconds 1800 --require-ready

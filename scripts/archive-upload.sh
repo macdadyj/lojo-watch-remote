@@ -374,4 +374,4 @@ xcodebuild -exportArchive \
 echo "Uploaded to App Store Connect."
 echo "Releasing build ${BUILD_NUMBER} to the internal TestFlight group."
 KEY_PATH="${KEY_PATH}" BUILD_NUMBER="${BUILD_NUMBER}" \
-  python3 "${SCRIPT_DIR}/asc_testflight.py" release --wait-seconds 1200 --require-ready
+  python3 "${SCRIPT_DIR}/asc_testflight.py" release --wait-seconds 1800 --require-ready
