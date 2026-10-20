@@ -44,7 +44,7 @@ This repository does not deploy a relay and does not create any cloud resources.
    systemctl --user enable --now watch-remote-outbound.service
    ```
 
-   The unit file does not contain the relay address. The process reads `outbound.json`. Restart it after you pair again, because a new QR rotates the token. `watch-remote-agent` still has to be running on `127.0.0.1:2419`. That is what the outbound client talks to. SSH is still how the iPhone gets in.
+   The unit file does not contain the relay address. The process reads `outbound.json`. Restart it after you pair again, because a new QR rotates the token. The restarted process joins the new room and keeps the previous room for 15 minutes, so a Watch that still has the old pairing keeps working until the iPhone delivers the new one. The Watch switches as soon as that pairing arrives. `watch-remote-agent` still has to be running on `127.0.0.1:2419`. That is what the outbound client talks to. SSH is still how the iPhone gets in.
 
 5. On the iPhone, open **Computer**, tap **Scan QR code**, confirm the fingerprint, copy the authorize command, run it on the computer, and tap **Test connection**. The iPhone sends the direct pairing to the Watch over WatchConnectivity. The Watch stores it in its own Keychain. It does not stay only on the iPhone.
 

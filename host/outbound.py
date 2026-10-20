@@ -1446,7 +1446,29 @@ def load_config(path: Path) -> dict:
     key = saved_key(e2e)
     if url is None or room is None or key is None:
         raise relaybox.RelayBoxError("The direct pairing file could not be read.")
-    return {"relay": url, "token": room, "key": key}
+    config = {"relay": url, "token": room, "key": key}
+    previous = raw.get("previous")
+    if isinstance(previous, dict):
+        prev_url = saved_relay_url(str(previous.get("relay") or ""))
+        prev_token = saved_token(str(previous.get("token") or ""))
+        prev_key = saved_key(str(previous.get("e2e") or ""))
+        until = previous.get("until")
+        if (
+            prev_url
+            and prev_token
+            and prev_key is not None
+            and prev_token != room
+            and isinstance(until, (int, float))
+            and not isinstance(until, bool)
+            and time.time() < float(until)
+        ):
+            config["previous"] = {
+                "relay": prev_url,
+                "token": prev_token,
+                "key": prev_key,
+                "until": float(until),
+            }
+    return config
 
 
 def saved_relay_url(text: str) -> str | None:
@@ -1593,36 +1615,99 @@ def run(config_path: Path, agent: object | None = None, slot: AgentSlot | None =
     serve_connection(load_config(config_path), agent, counters, slot)
 
 
-def serve_connection(config: dict, agent: object | None, counters: Path, slot: AgentSlot | None = None) -> None:
-    send_n, recv_n = load_counters(counters)
-    replay = relaybox.ReplayWindow.restored(recv_n)
-    receipts = TurnReceipts(counters.with_name("turn-receipts.json"))
-    conn = miniws.connect(config["relay"])
-    local = slot is None
-    if slot is None:
-        slot = AgentSlot(counters, agent)
+class RoomLink:
+    """One relay room. The previous room uses its own key and counters."""
 
-    def seal(message: dict) -> None:
-        nonlocal send_n
+    def __init__(self, conn: miniws.WSConn, token: str, key: bytes, replay: relaybox.ReplayWindow, send_n: int, counter_file: Path, until: float | None = None) -> None:
+        self.conn = conn
+        self.token = token
+        self.key = key
+        self.replay = replay
+        self.send_n = send_n
+        self.counter_file = counter_file
+        self.until = until
+        self.closed = False
+
+    def seal(self, message: dict, receipts: TurnReceipts) -> None:
         sessions = message.get("sessions")
         if isinstance(sessions, list):
             receipts.observe(sessions)
-        send_n = next_counter(send_n)
+        self.send_n = next_counter(self.send_n)
         plain = relaybox.encode_message(fit_for_watch(message))
-        conn.send_binary(relaybox.seal(plain, config["key"], relaybox.HOST_TO_WATCH, send_n))
-        save_counters(counters, send_n, replay.highest)
+        self.conn.send_binary(relaybox.seal(plain, self.key, relaybox.HOST_TO_WATCH, self.send_n))
+        save_counters(self.counter_file, self.send_n, self.replay.highest)
 
+    def expired(self, now: float) -> bool:
+        return self.until is not None and now >= self.until
+
+
+def open_room(spec: dict, counter_file: Path, until: float | None = None) -> RoomLink:
+    send_n, recv_n = load_counters(counter_file)
+    conn = miniws.connect(spec["relay"])
     try:
-        conn.send_text(json.dumps({"role": "host", "token": config["token"]}, separators=(",", ":")))
+        conn.send_text(json.dumps({"role": "host", "token": spec["token"]}, separators=(",", ":")))
         opcode, payload = conn.recv()
         if opcode != 1 or b'"ok":true' not in payload:
             raise miniws.SocketError("The relay did not accept this pairing.")
         conn.sock.settimeout(1)
+    except Exception:
+        conn.close()
+        raise
+    return RoomLink(conn, spec["token"], spec["key"], relaybox.ReplayWindow.restored(recv_n), send_n, counter_file, until)
+
+
+def serve_connection(config: dict, agent: object | None, counters: Path, slot: AgentSlot | None = None) -> None:
+    receipts = TurnReceipts(counters.with_name("turn-receipts.json"))
+    local = slot is None
+    if slot is None:
+        slot = AgentSlot(counters, agent)
+    primary = open_room(config, counters)
+    links = [primary]
+    previous = config.get("previous")
+    if isinstance(previous, dict):
+        try:
+            links.append(open_room(previous, counters.with_name("outbound-previous-counters.json"), float(previous["until"])))
+        except (OSError, miniws.SocketError, relaybox.RelayBoxError, KeyError, TypeError, ValueError):
+            print("The previous room could not be joined.", file=sys.stderr)
+
+    def close_link(link: RoomLink) -> None:
+        if link.closed:
+            return
+        link.closed = True
+        try:
+            link.conn.close()
+        except OSError:
+            pass
+        if link in links:
+            links.remove(link)
+
+    def publish(message: dict, target: RoomLink | None = None) -> None:
+        chosen = links if target is None else [target]
+        primary_failed = False
+        for link in list(chosen):
+            if link.closed:
+                continue
+            try:
+                link.seal(message, receipts)
+            except (OSError, miniws.SocketError):
+                if link is primary:
+                    primary_failed = True
+                else:
+                    close_link(link)
+        if primary_failed:
+            raise miniws.SocketError("The relay stopped sending.")
+
+    try:
         last_heard = time.monotonic()
         caught_up = getattr(slot.agent, "request_push", None)
         if caught_up is not None:
             caught_up()
         while True:
+            for link in list(links):
+                if link is not primary and link.expired(time.time()):
+                    close_link(link)
+            if primary.closed:
+                raise miniws.SocketError("The relay stopped sending.")
             if relay_link_expired(last_heard, time.monotonic()):
                 raise miniws.SocketError("The relay stopped sending.")
             agent = slot.ensure()
@@ -1630,7 +1715,7 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
             agent_sock = getattr(agent_conn, "sock", None)
             if agent_sock is not None:
                 agent_sock.settimeout(1)
-            sockets = [conn.sock]
+            sockets = [link.conn.sock for link in links if not link.closed]
             if agent_sock is not None:
                 sockets.append(agent_sock)
             # A frame can already be in the client buffer from the previous read.
@@ -1641,16 +1726,17 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
                 pending = due()
                 if pending is not None:
                     wait = min(wait, pending)
-            if conn.pending() or (agent_conn is not None and agent_conn.pending()):
+            if any(link.conn.pending() for link in links) or (agent_conn is not None and agent_conn.pending()):
                 wait = 0
             readable, _, _ = select.select(sockets, [], [], wait)
-            if conn.pending() and conn.sock not in readable:
-                readable = [*readable, conn.sock]
+            for link in links:
+                if link.conn.pending() and link.conn.sock not in readable:
+                    readable = [*readable, link.conn.sock]
             if agent_conn is not None and agent_conn.pending() and agent_sock not in readable:
                 readable = [*readable, agent_sock]
             # A ping is consumed inside recv and never returned. Hearing the socket
             # at all means the relay still has this computer in the room.
-            if conn.sock in readable:
+            if primary.conn.sock in readable:
                 last_heard = time.monotonic()
             if agent_sock is not None and agent_sock in readable:
                 try:
@@ -1664,32 +1750,40 @@ def serve_connection(config: dict, agent: object | None, counters: Path, slot: A
                     print(f"Skipped an agent message: {type(error).__name__}", file=sys.stderr)
             update = agent.take_update()
             if update is not None:
-                seal(update)
+                publish(update)
             elif receipts.due_repeat():
                 rows = _session_rows(agent)
                 if rows:
-                    seal({
+                    publish({
                         "op": "update",
                         "id": f"receipt-{int(time.time() * 1000)}",
                         "sessions": watch_rows(rows, getattr(agent, "watch_focus", lambda: None)() or None),
                         "approvalsAvailable": bool(getattr(agent, "available", True)),
                     })
-            if conn.sock not in readable:
-                continue
-            try:
-                opcode, payload = conn.recv()
-            except TimeoutError:
-                continue
-            if opcode != 2:
-                continue
-            try:
-                plain = relaybox.open_frame(payload, config["key"], relaybox.WATCH_TO_HOST, replay)
-                message = relaybox.decode_message(plain)
-            except (relaybox.RelayBoxError, ValueError):
-                continue
-            seal(handle(agent, message, receipts))
+            for link in list(links):
+                if link.conn.sock not in readable:
+                    continue
+                try:
+                    opcode, payload = link.conn.recv()
+                except TimeoutError:
+                    continue
+                except (OSError, miniws.SocketError):
+                    if link is primary:
+                        raise
+                    close_link(link)
+                    continue
+                if opcode != 2:
+                    continue
+                try:
+                    plain = relaybox.open_frame(payload, link.key, relaybox.WATCH_TO_HOST, link.replay)
+                    message = relaybox.decode_message(plain)
+                except (relaybox.RelayBoxError, ValueError):
+                    continue
+                publish(handle(agent, message, receipts), link)
     finally:
-        conn.close()
+        for link in list(links):
+            close_link(link)
+        close_link(primary)
         if local:
             slot.close()
 

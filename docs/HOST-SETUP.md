@@ -77,6 +77,8 @@ Match User user
 sshd -t
 ```
 
+`watch-remote-pair` uses the port sshd is actually listening on. A systemd socket unit (`ssh.socket` or `sshd.socket`, including drop-ins) wins over `sshd -T` and `sshd_config`, and `ss` is the fallback. The QR is printed only after a connection to that address and port succeeds. A `Port 22` line does not count when nothing is listening there.
+
 `watch-remote-pair` authorizes the iPhone key while it is open. `watch-remote-authorize` is the fallback. Confirm the fingerprint the phone displays:
 
 ```bash

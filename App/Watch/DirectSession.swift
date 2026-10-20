@@ -258,6 +258,8 @@ final class DirectSession: ObservableObject {
             hostSeen = nil
             unhostedPolls = 0
             disconnect()
+            // A new QR rotates the room. Follow it as soon as the iPhone delivers the pairing.
+            connectIfNeeded()
         }
     }
 

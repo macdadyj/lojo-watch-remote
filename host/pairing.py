@@ -14,8 +14,10 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -377,12 +379,26 @@ def warning_text(has_secret: bool, has_direct: bool = False, has_ticket: bool = 
     )
 
 
+# How long the computer stays in the room it just left. A Watch that already
+# joined that room keeps working until the iPhone delivers the new pairing.
+PREVIOUS_ROOM_SECONDS = 15 * 60
+
+
 def write_outbound_file(relay: str, token: str, e2e: str, directory: Path | None = None) -> Path:
     root = directory or (Path.home() / ".config" / "watch-remote")
     root.mkdir(parents=True, exist_ok=True)
     root.chmod(0o700)
     path = root / "outbound.json"
-    body = json.dumps({"e2e": e2e, "relay": relay, "token": token}, separators=(",", ":"), sort_keys=True)
+    previous = previous_room(path, token)
+    body_dict: dict = {"e2e": e2e, "relay": relay, "token": token}
+    if previous is not None:
+        body_dict["previous"] = previous
+        counters = root / "outbound-counters.json"
+        kept = root / "outbound-previous-counters.json"
+        if counters.is_file():
+            kept.write_text(counters.read_text(encoding="utf-8"), encoding="utf-8")
+            kept.chmod(0o600)
+    body = json.dumps(body_dict, separators=(",", ":"), sort_keys=True)
     temporary = path.with_name("outbound.json.tmp")
     temporary.write_text(body, encoding="utf-8")
     temporary.chmod(0o600)
@@ -392,6 +408,27 @@ def write_outbound_file(relay: str, token: str, e2e: str, directory: Path | None
     counters.write_text('{"recv":0,"send":0}', encoding="utf-8")
     counters.chmod(0o600)
     return path
+
+
+def previous_room(path: Path, new_token: str, now: float | None = None) -> dict | None:
+    """The room a Watch may still be polling, kept for PREVIOUS_ROOM_SECONDS."""
+    if not path.is_file():
+        return None
+    try:
+        old = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(old, dict):
+        return None
+    token = old.get("token")
+    relay = old.get("relay")
+    e2e = old.get("e2e")
+    if not isinstance(token, str) or not isinstance(relay, str) or not isinstance(e2e, str):
+        return None
+    if token == new_token:
+        return None
+    moment = time.time() if now is None else now
+    return {"e2e": e2e, "relay": relay, "token": token, "until": int(moment) + PREVIOUS_ROOM_SECONDS}
 
 
 def new_direct_material(relay_url: str) -> tuple[str, str, str]:
@@ -605,6 +642,175 @@ def local_overlay_addresses() -> list[str]:
     return addresses_in("\n".join(chunks))
 
 
+def parse_socket_token(token: str) -> tuple[str | None, int] | None:
+    """One `ss` or ListenStream address. None host means every address."""
+    text = token.strip()
+    if not text or text.endswith(":*"):
+        return None
+    if text.startswith("["):
+        end = text.find("]")
+        if end < 0 or not text[end + 1 :].startswith(":"):
+            return None
+        port_text = text[end + 2 :]
+        if not port_text.isdigit():
+            return None
+        host = text[1:end]
+        port = int(port_text)
+        if not 1 <= port <= 65535:
+            return None
+        if host in {"", "::"}:
+            return None, port
+        return host, port
+    if ":" not in text:
+        return None
+    host, _, port_text = text.rpartition(":")
+    if not port_text.isdigit():
+        return None
+    port = int(port_text)
+    if not 1 <= port <= 65535:
+        return None
+    if host in {"", "*", "0.0.0.0"}:
+        return None, port
+    return host, port
+
+
+def listen_streams(text: str) -> list[tuple[str | None, int]]:
+    """ListenStream lines from a systemd socket unit, including drop-ins.
+
+    An empty `ListenStream=` clears every listener collected so far. That is
+    how a drop-in replaces the port from the packaged unit.
+    """
+    found: list[tuple[str | None, int]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("["):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() != "ListenStream":
+            continue
+        value = value.strip()
+        if not value:
+            found.clear()
+            continue
+        if value.isdigit() and 1 <= int(value) <= 65535:
+            found.append((None, int(value)))
+            continue
+        parsed = parse_socket_token(value)
+        if parsed is not None:
+            found.append(parsed)
+    return found
+
+
+def listeners_from_ss(text: str) -> list[tuple[str | None, int]]:
+    """Local addresses from `ss -ltn` or `ss -ltnp`."""
+    rows: list[tuple[str | None, int]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith("state ") or lowered.startswith("netid "):
+            continue
+        for token in line.split():
+            if token.startswith("users:") or token.startswith("process"):
+                continue
+            parsed = parse_socket_token(token)
+            if parsed is not None:
+                rows.append(parsed)
+                break
+    return rows
+
+
+def port_for_address(listeners: list[tuple[str | None, int]], address: str) -> int | None:
+    exact = [port for host, port in listeners if host == address]
+    if exact:
+        return exact[0]
+    wild = [port for host, port in listeners if host is None]
+    if wild:
+        return wild[0]
+    return None
+
+
+def listening_on(listeners: list[tuple[str | None, int]], address: str, port: int) -> bool:
+    return any((host is None or host == address) and found == port for host, found in listeners)
+
+
+def choose_ssh_port(address: str, socket_unit: str, ss_text: str, config_port: int | None) -> int | None:
+    """The port sshd is actually accepting on `address`.
+
+    A socket unit wins, because `sshd -T` and sshd_config still say 22 when
+    systemd owns the listening socket. `ss` is next. The config port is used
+    only when that port is listening, or when there is no `ss` output at all.
+    """
+    from_unit = port_for_address(listen_streams(socket_unit), address)
+    if from_unit is not None:
+        return from_unit
+    sockets = listeners_from_ss(ss_text)
+    if ss_text.strip():
+        overlay = [port for host, port in sockets if host == address and port != 2419]
+        if len(overlay) == 1:
+            return overlay[0]
+        if config_port is not None and listening_on(sockets, address, config_port):
+            return config_port
+        return port_for_address(sockets, address)
+    if config_port is not None and 1 <= config_port <= 65535:
+        return config_port
+    return None
+
+
+def read_ssh_socket_unit() -> str:
+    for unit in ("ssh.socket", "sshd.socket"):
+        try:
+            output = subprocess.check_output(["systemctl", "cat", unit], text=True, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        if "ListenStream=" in output:
+            return output
+    return ""
+
+
+def read_listening_sockets() -> str:
+    for command in (["ss", "-H", "-ltn"], ["ss", "-ltn"]):
+        try:
+            return subprocess.check_output(command, text=True, stderr=subprocess.DEVNULL)
+        except (OSError, subprocess.CalledProcessError):
+            continue
+    return ""
+
+
+def port_is_reachable(address: str, port: int, timeout: float = 2.0) -> bool:
+    try:
+        sock = socket.create_connection((address, port), timeout)
+    except OSError:
+        return False
+    sock.close()
+    return True
+
+
+def detected_ssh_port(address: str) -> int | None:
+    override = os.environ.get("WATCHREMOTE_PORT", "").strip()
+    if override.isdigit() and 1 <= int(override) <= 65535:
+        return int(override)
+    return choose_ssh_port(
+        address,
+        socket_unit=read_ssh_socket_unit(),
+        ss_text=read_listening_sockets(),
+        config_port=sshd_port(),
+    )
+
+
+def ssh_port_for(address: str, explicit: int | None = None) -> int:
+    """Port to put in the QR. Raises before a QR exists when nothing accepts it."""
+    port = explicit if explicit is not None else detected_ssh_port(address)
+    if port is None or not 1 <= port <= 65535:
+        raise PairingError(f"Nothing is listening for SSH on {address}. The QR was not printed.")
+    if not port_is_reachable(address, port):
+        raise PairingError(f"Nothing is listening on {address}:{port}. The QR was not printed.")
+    return port
+
+
 def sshd_port() -> int:
     override = os.environ.get("WATCHREMOTE_PORT", "").strip()
     if override.isdigit() and 1 <= int(override) <= 65535:
@@ -703,7 +909,7 @@ def sanitized_label(explicit: str | None) -> str:
 def command_pair(args: argparse.Namespace) -> int:
     address = resolve_address(args.address)
     user = (args.user or os.environ.get("WATCHREMOTE_USER") or os.environ.get("USER") or "user").strip()
-    port = args.port if args.port is not None else sshd_port()
+    port = ssh_port_for(address, args.port)
     secret_path = Path(args.secret_file).expanduser() if args.secret_file else Path.home() / ".config" / "watch-remote" / "agent-secret"
     secret, secret_warning = read_secret_file(secret_path)
     if secret_warning and secret is None and secret_path.is_file():
