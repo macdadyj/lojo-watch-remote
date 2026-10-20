@@ -3,8 +3,10 @@
 
 Sets usesNonExemptEncryption to false when App Store Connect has no answer,
 adds the build to each internal beta group, and waits until processing is
-VALID and the internal state is ready for testers. Does not print API keys,
-tokens, team ids, or tester addresses.
+VALID and the internal state is ready for testers. One --wait-seconds budget
+covers the gap before Apple lists the upload and processing after that. The
+upload scripts pass 30 minutes. Does not print API keys, tokens, team ids,
+or tester addresses.
 """
 
 import importlib.util
@@ -18,6 +20,7 @@ from pathlib import Path
 
 BUNDLE_ID = "com.lojo.WatchRemote"
 READY_INTERNAL = ("IN_BETA_TESTING", "READY_FOR_BETA_TESTING")
+DEFAULT_WAIT_SECONDS = 30 * 60
 HERE = Path(__file__).resolve().parent
 
 
@@ -299,7 +302,9 @@ def release(version, wait_seconds, require_ready):
     token = signing.jwt_from_env()
     app_id = find_app(token)
     found = None
-    deadline = time.time() + min(180, wait_seconds)
+    # Apple often lists a new upload several minutes after the transporter
+    # reports success. This used to stop at three minutes.
+    deadline = time.time() + wait_seconds
     while found is None and time.time() < deadline:
         found = find_build(token, app_id, version)
         if found is None:
@@ -317,7 +322,7 @@ def release(version, wait_seconds, require_ready):
     if created:
         show("created internal group Internal")
 
-    end = time.time() + wait_seconds
+    end = deadline
     changes = []
     while True:
         token = signing.jwt_from_env()
@@ -563,6 +568,100 @@ def self_test():
             raise SystemExit("self-test missing after unreadable groups: " + line)
     if "owner@example.com" in hidden:
         raise SystemExit("self-test printed a tester address")
+
+    clock = {"now": 1_000_000.0, "slept": 0.0}
+
+    def late_api(token, method, path, payload=None):
+        if path.startswith("/v1/apps?"):
+            return 200, json.dumps({
+                "data": [{"type": "apps", "id": "APP", "attributes": {"bundleId": BUNDLE_ID}}]
+            })
+        if path.startswith("/v1/builds?"):
+            if clock["slept"] < 240:
+                return 200, json.dumps({"data": []})
+            return 200, json.dumps({
+                "data": [{
+                    "type": "builds",
+                    "id": "BUILD",
+                    "attributes": {
+                        "version": "260",
+                        "processingState": "VALID",
+                        "usesNonExemptEncryption": False,
+                        "uploadedDate": "2026-10-20T18:30:00Z",
+                        "expired": False,
+                    },
+                }],
+                "included": [{
+                    "type": "buildBetaDetails",
+                    "id": "BUILD",
+                    "attributes": {"internalBuildState": "IN_BETA_TESTING"},
+                }],
+            })
+        if path == "/v1/apps/APP/betaGroups?limit=50":
+            return 200, json.dumps({"data": [{
+                "type": "betaGroups",
+                "id": "JON",
+                "attributes": {"name": "Jon", "isInternalGroup": True},
+            }]})
+        if path.startswith("/v1/betaGroups/JON/builds"):
+            return 200, json.dumps({"data": [{
+                "type": "builds",
+                "id": "BUILD",
+                "attributes": {"version": "260"},
+            }]})
+        if path.startswith("/v1/betaGroups/JON/betaTesters"):
+            return 200, json.dumps({"data": [{"id": "T", "attributes": {"state": "ACTIVE"}}]})
+        if path == "/v1/builds/BUILD/buildBetaDetail":
+            return 200, json.dumps({
+                "data": {
+                    "type": "buildBetaDetails",
+                    "id": "BUILD",
+                    "attributes": {"internalBuildState": "IN_BETA_TESTING"},
+                }
+            })
+        return 404, "{}"
+
+    def fake_time():
+        return clock["now"]
+
+    def fake_sleep(seconds):
+        clock["now"] += seconds
+        clock["slept"] += seconds
+
+    real_time = time.time
+    signing.api = late_api
+    signing.jwt_from_env = lambda: "token"
+    time.time = fake_time
+    time.sleep = fake_sleep
+    held = sys.stdout
+    sys.stdout = captured = __import__("io").StringIO()
+    late_error = None
+    try:
+        try:
+            release("260", wait_seconds=DEFAULT_WAIT_SECONDS, require_ready=True)
+        except SystemExit as exc:
+            late_error = exc
+        late = captured.getvalue()
+    finally:
+        sys.stdout = held
+        signing.api = real_api
+        signing.jwt_from_env = real_jwt
+        time.time = real_time
+        time.sleep = real_sleep
+    if late_error is not None or clock["slept"] < 240:
+        raise SystemExit("self-test stopped waiting before Apple lists the build")
+    for line in (
+        "found build 260",
+        "internalGroup Jon containsBuild=true",
+        "final processingState=VALID",
+        "final internalBuildState=IN_BETA_TESTING",
+    ):
+        if line not in late:
+            raise SystemExit("self-test missing after a late build: " + line)
+    upload = (HERE / "archive-upload.sh").read_text()
+    beta = (HERE.parent / ".github" / "workflows" / "testflight-beta.yml").read_text()
+    if "--wait-seconds 1800" not in upload or "--wait-seconds 1800" not in beta:
+        raise SystemExit("self-test: release wait is not 30 minutes")
     show("asc testflight: ok")
 
 
@@ -572,7 +671,7 @@ def main():
         return
     if len(sys.argv) > 1 and sys.argv[1] == "release":
         version = os.environ.get("BUILD_NUMBER", "")
-        wait_seconds = 900
+        wait_seconds = DEFAULT_WAIT_SECONDS
         require_ready = False
         args = sys.argv[2:]
         index = 0

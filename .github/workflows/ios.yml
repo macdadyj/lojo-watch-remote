@@ -234,7 +234,8 @@ jobs:
       group: testflight-${{ github.repository }}
       cancel-in-progress: false
     runs-on: macos-26
-    timeout-minutes: 60
+    # Archive is a few minutes. Release then polls App Store Connect for up to 30 minutes.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
 
