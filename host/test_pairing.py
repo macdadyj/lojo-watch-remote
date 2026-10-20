@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import os
@@ -383,6 +384,98 @@ class PairingTests(unittest.TestCase):
             worker.join(timeout=12)
             self.assertFalse(worker.is_alive())
             self.assertEqual(result.get("value"), "expired")
+
+    def test_socket_unit_port_wins_over_sshd_config(self) -> None:
+        unit = "\n".join([
+            "[Socket]",
+            "ListenStream=22",
+            "# /etc/systemd/system/ssh.socket.d/override.conf",
+            "[Socket]",
+            "ListenStream=",
+            "ListenStream=100.64.0.2:2222",
+        ])
+        ss = "\n".join([
+            "State Recv-Q Send-Q Local Address:Port Peer Address:Port",
+            "LISTEN 0 128 100.64.0.2:2222 0.0.0.0:*",
+            "LISTEN 0 128 127.0.0.1:2419 0.0.0.0:*",
+            "LISTEN 0 128 *:22 *:*",
+        ])
+        self.assertEqual(pairing.choose_ssh_port("100.64.0.2", unit, ss, 22), 2222)
+        self.assertEqual(pairing.listen_streams("ListenStream=\nListenStream=2222\n")[0], (None, 2222))
+        only_ss = "LISTEN 0 128 100.64.0.2:2222 0.0.0.0:* users:((\"sshd\",pid=1,fd=3))\n"
+        self.assertEqual(pairing.choose_ssh_port("100.64.0.2", "", only_ss, 22), 2222)
+        both = "LISTEN 0 128 *:22 *:*\nLISTEN 0 128 100.64.0.2:2222 0.0.0.0:*\n"
+        self.assertEqual(pairing.choose_ssh_port("100.64.0.2", "", both, 22), 2222)
+        self.assertEqual(
+            pairing.choose_ssh_port("100.64.0.2", "", "LISTEN 0 128 100.64.0.2:22 0.0.0.0:*\n", 22),
+            22,
+        )
+        self.assertIsNone(
+            pairing.choose_ssh_port("100.64.0.2", "", "LISTEN 0 128 127.0.0.1:2419 0.0.0.0:*\n", 22)
+        )
+        self.assertEqual(pairing.choose_ssh_port("100.64.0.2", "", "", 22), 22)
+
+    def test_unreachable_port_is_rejected_before_a_qr(self) -> None:
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        open_port = server.getsockname()[1]
+        try:
+            self.assertTrue(pairing.port_is_reachable("127.0.0.1", open_port))
+        finally:
+            server.close()
+        self.assertFalse(pairing.port_is_reachable("127.0.0.1", 1, timeout=0.2))
+        printed: list[str] = []
+        written: list[bool] = []
+        original_emit = pairing.emit_qr
+        original_write = pairing.write_outbound_file
+        original_probe = pairing.port_is_reachable
+        original_detect = pairing.detected_ssh_port
+        pairing.emit_qr = lambda text: printed.append(text)
+        pairing.write_outbound_file = lambda *args, **kwargs: written.append(True) or Path(".")
+        pairing.port_is_reachable = lambda *args, **kwargs: False
+        pairing.detected_ssh_port = lambda address: 22
+        try:
+            with self.assertRaises(pairing.PairingError) as caught:
+                pairing.command_pair(argparse.Namespace(
+                    address="100.64.0.2",
+                    user="user",
+                    port=None,
+                    label="example-host",
+                    secret_file=None,
+                    relay_url="wss://relay.example/v1/room",
+                    pair_command=None,
+                    authorized_keys=None,
+                ))
+            self.assertIn("Nothing is listening on 100.64.0.2:22", str(caught.exception))
+            self.assertIn("The QR was not printed", str(caught.exception))
+            self.assertEqual(printed, [])
+            self.assertEqual(written, [])
+        finally:
+            pairing.emit_qr = original_emit
+            pairing.write_outbound_file = original_write
+            pairing.port_is_reachable = original_probe
+            pairing.detected_ssh_port = original_detect
+
+    def test_rotating_a_room_keeps_the_previous_one(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = "a" * 20
+            second = "c" * 20
+            pairing.write_outbound_file("wss://relay.example/v1/room", first, "old-key", root)
+            (root / "outbound-counters.json").write_text('{"send":4,"recv":9}', encoding="utf-8")
+            pairing.write_outbound_file("wss://relay.example/v1/room", second, "new-key", root)
+            saved = json.loads((root / "outbound.json").read_text(encoding="utf-8"))
+            self.assertEqual(saved["token"], second)
+            self.assertEqual(saved["previous"]["token"], first)
+            self.assertEqual(saved["previous"]["e2e"], "old-key")
+            self.assertGreater(saved["previous"]["until"], time.time() + pairing.PREVIOUS_ROOM_SECONDS - 5)
+            self.assertEqual(json.loads((root / "outbound-counters.json").read_text(encoding="utf-8")), {"recv": 0, "send": 0})
+            self.assertEqual(json.loads((root / "outbound-previous-counters.json").read_text(encoding="utf-8"))["recv"], 9)
+            self.assertEqual(stat.S_IMODE((root / "outbound.json").stat().st_mode) & 0o077, 0)
+            pairing.write_outbound_file("wss://relay.example/v1/room", second, "new-key", root)
+            again = json.loads((root / "outbound.json").read_text(encoding="utf-8"))
+            self.assertNotIn("previous", again)
 
 
 if __name__ == "__main__":

@@ -112,6 +112,9 @@ struct ChatListView: View {
     }
 
     private var connectionColor: Color {
+        if store.statusLine == RelayUserNotice.repairNeededText {
+            return LojoTheme.danger
+        }
         switch store.link {
         case .connected, .demo:
             return LojoTheme.online

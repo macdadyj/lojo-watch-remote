@@ -161,7 +161,7 @@ final class WatchModel: ObservableObject {
         )
     }
 
-    /// "No network", "Reconnecting…", or "Computer offline" while the iPhone is not carrying turns.
+    /// "No network", "Reconnecting…", "Computer offline", or "Re-pair needed" while the iPhone is not carrying turns.
     var connectionNotice: String? {
         WatchRouting.notice(
             hasRelayPairing: direct.hasPairing,
@@ -169,7 +169,10 @@ final class WatchModel: ObservableObject {
             relayTrouble: direct.inTrouble,
             relayHostOnline: direct.hostOnline,
             phoneReachable: reachable,
-            noNetwork: direct.networkDown
+            noNetwork: direct.networkDown,
+            phoneCanSSH: phoneSnapshot?.sshReady != false,
+            hostSeen: direct.hostSeen,
+            unhostedPolls: direct.unhostedPolls
         )
     }
 
@@ -548,7 +551,8 @@ final class WatchModel: ObservableObject {
         voiceStatus = WatchRouting.turnStatus(
             current: voiceStatus,
             computerOffline: connectionNotice == RelayUserNotice.computerOfflineText,
-            slow: true
+            slow: true,
+            repair: connectionNotice == RelayUserNotice.repairNeededText
         )
     }
 
@@ -933,9 +937,10 @@ final class WatchModel: ObservableObject {
     private func applyConnectionNotice() {
         guard forcedScreen == nil, !uiTest else { return }
         let notice = connectionNotice
-        if let notice {
+        let shown = WatchRouting.connectionBanner(notice)
+        if let shown {
             if banner == nil || isConnectionNotice(banner) {
-                banner = notice
+                banner = shown
             }
         } else if isConnectionNotice(banner) {
             banner = nil
@@ -944,7 +949,8 @@ final class WatchModel: ObservableObject {
             voiceStatus = WatchRouting.turnStatus(
                 current: voiceStatus,
                 computerOffline: notice == RelayUserNotice.computerOfflineText,
-                slow: false
+                slow: false,
+                repair: notice == RelayUserNotice.repairNeededText
             )
         }
     }

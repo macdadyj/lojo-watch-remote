@@ -453,7 +453,7 @@ struct VoiceChatView: View {
     }
 
     private var chatLinkColor: Color {
-        if model.connectionNotice == RelayUserNotice.computerOfflineText || model.connectionNotice == RelayUserNotice.noNetworkText {
+        if RelayUserNotice.isLinkFailure(model.connectionNotice) {
             return LojoTheme.danger
         }
         if model.connectionNotice == nil && model.pathTitle == "direct" {

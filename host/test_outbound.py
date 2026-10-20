@@ -348,6 +348,127 @@ class HandleTests(unittest.TestCase):
             self.assertEqual(refused["op"], "error")
             self.assertNotIn("not a key", refused["message"])
 
+    def test_expired_previous_room_is_ignored(self) -> None:
+        key = base64.urlsafe_b64encode(KEY).decode("ascii").rstrip("=")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "outbound.json"
+            path.write_text(json.dumps({
+                "e2e": key,
+                "relay": "wss://relay.example/v1/room",
+                "token": "c" * 20,
+                "previous": {
+                    "e2e": key,
+                    "relay": "wss://relay.example/v1/room",
+                    "token": "a" * 20,
+                    "until": int(time.time()) - 5,
+                },
+            }), encoding="utf-8")
+            loaded = outbound.load_config(path)
+            self.assertNotIn("previous", loaded)
+            path.write_text(json.dumps({
+                "e2e": key,
+                "relay": "wss://relay.example/v1/room",
+                "token": "c" * 20,
+                "previous": {
+                    "e2e": key,
+                    "relay": "wss://relay.example/v1/room",
+                    "token": "a" * 20,
+                    "until": int(time.time()) + 60,
+                },
+            }), encoding="utf-8")
+            kept = outbound.load_config(path)
+            self.assertEqual(kept["previous"]["token"], "a" * 20)
+            self.assertEqual(kept["previous"]["key"], KEY)
+
+    def test_previous_room_still_answers_after_rotation(self) -> None:
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        env = os.environ.copy()
+        env["WATCHREMOTE_OUTBOUND_BIND"] = "127.0.0.1"
+        env["WATCHREMOTE_OUTBOUND_PORT"] = str(port)
+        proc = subprocess.Popen(
+            ["node", "relay/outbound/server.mjs"],
+            cwd=ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        try:
+            assert proc.stdout is not None
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                line = proc.stdout.readline()
+                if '"listening"' in line:
+                    break
+            else:
+                self.fail("relay did not start")
+            new_key = bytes([0x22]) * 32
+            new_token = "roomtokenvalue0002"
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+                counters = Path(directory) / "outbound-counters.json"
+                agent = outbound.MemoryAgent()
+                config = {
+                    "relay": f"ws://127.0.0.1:{port}/v1/room",
+                    "token": new_token,
+                    "key": new_key,
+                    "previous": {
+                        "relay": f"ws://127.0.0.1:{port}/v1/room",
+                        "token": TOKEN,
+                        "key": KEY,
+                        "until": time.time() + 60,
+                    },
+                }
+
+                def serve() -> None:
+                    try:
+                        outbound.serve_connection(config, agent, counters)
+                    except (OSError, miniws.SocketError, relaybox.RelayBoxError):
+                        return
+
+                thread = threading.Thread(target=serve, daemon=True)
+                thread.start()
+                try:
+                    self._expect_start(port, TOKEN, KEY, "Still on the previous room", 1)
+                    self._expect_start(port, new_token, new_key, "On the new room", 2)
+                finally:
+                    thread.join(timeout=2)
+                self.assertIn("Still on the previous room", agent.started)
+                self.assertIn("On the new room", agent.started)
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            if proc.stdout is not None:
+                proc.stdout.close()
+
+    def _expect_start(self, port: int, token: str, key: bytes, prompt: str, counter: int) -> None:
+        watch = miniws.connect(f"ws://127.0.0.1:{port}/v1/room", timeout=3)
+        try:
+            watch.send_text(json.dumps({"role": "watch", "token": token}))
+            opcode, payload = watch.recv()
+            self.assertEqual(opcode, 1)
+            self.assertIn(b'"ok":true', payload)
+            plain = relaybox.encode_message({"id": f"ask-{counter}", "op": "start", "prompt": prompt})
+            watch.send_binary(relaybox.seal(plain, key, relaybox.WATCH_TO_HOST, counter))
+            replay = relaybox.ReplayWindow()
+            started = False
+            for _ in range(4):
+                opcode, payload = watch.recv()
+                if opcode != 2:
+                    continue
+                reply = json.loads(relaybox.open_frame(payload, key, relaybox.HOST_TO_WATCH, replay))
+                if reply.get("op") == "started":
+                    started = True
+                    break
+            self.assertTrue(started, prompt)
+        finally:
+            watch.close()
+
     def test_live_room_round_trip(self) -> None:
         probe = socket.socket()
         probe.bind(("127.0.0.1", 0))

@@ -69,13 +69,17 @@ public enum RelayPoll {
         public var ok: Bool
         public var epoch: String?
         public var host: Bool?
+        /// False until a computer has joined this room. Stays true after it leaves.
+        /// Nil when an older relay omits the field; that is not a stale pairing.
+        public var hostSeen: Bool?
         public var frames: [Frame]?
         public var error: String?
 
-        public init(ok: Bool, epoch: String? = nil, host: Bool? = nil, frames: [Frame]? = nil, error: String? = nil) {
+        public init(ok: Bool, epoch: String? = nil, host: Bool? = nil, hostSeen: Bool? = nil, frames: [Frame]? = nil, error: String? = nil) {
             self.ok = ok
             self.epoch = epoch
             self.host = host
+            self.hostSeen = hostSeen
             self.frames = frames
             self.error = error
         }

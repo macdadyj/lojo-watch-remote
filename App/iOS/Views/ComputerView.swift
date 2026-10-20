@@ -332,6 +332,7 @@ struct ComputerView: View {
         if store.keys.key == nil {
             do {
                 try store.keys.generateEd25519()
+                store.noteSSHKeyReplaced()
             } catch {
                 copyNote = error.localizedDescription
                 return
@@ -406,6 +407,7 @@ struct KeyView: View {
                     keyError = nil
                     do {
                         try store.keys.generateEd25519()
+                        store.noteSSHKeyReplaced()
                     } catch {
                         keyError = error.localizedDescription
                     }
@@ -416,6 +418,7 @@ struct KeyView: View {
                         keyError = nil
                         do {
                             try store.keys.generateSecureEnclave()
+                            store.noteSSHKeyReplaced()
                         } catch {
                             keyError = error.localizedDescription
                         }

@@ -76,9 +76,19 @@ public enum RelayUserNotice: Equatable, Sendable {
     public static let queuedOfflineText = "Queued. Computer offline"
     public static let stillWaitingText = "Still waiting for Grok"
     public static let repairText = "Pair again on iPhone."
+    /// The pairing itself is stale: this room has never had a computer, or the iPhone's SSH key was refused.
+    public static let repairNeededText = "Re-pair needed"
+    /// Steps that fit a banner. The header keeps `repairNeededText`.
+    public static let repairNeededSteps = "Open Computer on the iPhone and scan a new QR. On the computer, run the pair command, then the authorize command."
 
     public static func isConnectionNotice(_ text: String?) -> Bool {
         text == reconnectingText || text == computerOfflineText || text == noNetworkText
+            || text == repairNeededText || text == repairNeededSteps
+    }
+
+    /// Red on the header. Reconnecting stays the quieter color.
+    public static func isLinkFailure(_ text: String?) -> Bool {
+        text == computerOfflineText || text == noNetworkText || text == repairNeededText
     }
 
     public static func classify(_ fault: RelaySocketFault) -> RelayUserNotice {
@@ -122,6 +132,15 @@ public enum RelayUserNotice: Equatable, Sendable {
             return (word == "true" || word == "1") ? .accepted : .pairingRejected
         }
         return .pairingRejected
+    }
+}
+
+/// An SSH login the computer refused. Host-key distrust is a different sentence.
+public enum PairingRepair {
+    public static func sshKeyRejected(_ description: String) -> Bool {
+        let folded = description.lowercased()
+        if folded.contains("host key not trusted") { return false }
+        return folded.contains("was denied") || folded.contains("authorize it on the computer")
     }
 }
 
